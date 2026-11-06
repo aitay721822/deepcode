@@ -70,6 +70,34 @@ func (c *Catalog) files(ctx context.Context, snapshot int64) ([]File, error) {
 	return files, rows.Err()
 }
 
+// Changed lists the files added, edited or removed between snapshots from and
+// to, and counts the files of to.
+func (c *Catalog) Changed(ctx context.Context, from, to int64) (map[string]bool, int, error) {
+	var files int
+	if err := c.DB.QueryRowContext(ctx, `SELECT count(*) FROM source_files WHERE snapshot_id = ?`, to).Scan(&files); err != nil {
+		return nil, 0, err
+	}
+	rows, err := c.DB.QueryContext(ctx, `
+		SELECT path FROM source_files n WHERE snapshot_id = ?2 AND NOT EXISTS (
+			SELECT 1 FROM source_files o WHERE o.snapshot_id = ?1 AND o.path = n.path AND o.content_hash = n.content_hash)
+		UNION
+		SELECT path FROM source_files o WHERE snapshot_id = ?1 AND NOT EXISTS (
+			SELECT 1 FROM source_files n WHERE n.snapshot_id = ?2 AND n.path = o.path)`, from, to)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	changed := map[string]bool{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, 0, err
+		}
+		changed[p] = true
+	}
+	return changed, files, rows.Err()
+}
+
 // Content is one file as of a snapshot.
 type Content struct {
 	Path       string `json:"path"`

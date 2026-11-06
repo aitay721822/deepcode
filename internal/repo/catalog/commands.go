@@ -138,6 +138,40 @@ func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
 	return &job, nil
 }
 
+// Poll is the poller's Sync: it queues the index job of repository id when
+// the remote HEAD is not the published commit, unless that commit's index
+// job is queued, running or failed. One that succeeded runs again: the branch
+// went back to its commit. A job that failed is left to a Sync, so a
+// repository too large to index is not downloaded every round; a changed
+// embedding model and a failed wiki are left to a Sync too. Its errors go to
+// the server log only, so git's own words are kept, unlike Sync's.
+func (c *Catalog) Poll(ctx context.Context, id int64) (*jobs.Job, error) {
+	remote, err := c.Servers.Remote(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	head, err := c.Git.LsRemote(ctx, remote)
+	if err != nil {
+		return nil, err
+	}
+	r, err := c.Get(ctx, id) // after the slow ls-remote, so an index that finished meanwhile counts
+	if err != nil || (r.Snapshot != nil && r.Snapshot.CommitSHA == head) {
+		return nil, err
+	}
+	switch j, err := c.Queue.IndexJob(ctx, id, head, c.EmbedModel); {
+	case errors.Is(err, jobs.ErrNotFound):
+	case err != nil:
+		return nil, err
+	case j.Status != jobs.StatusSucceeded:
+		return nil, nil
+	}
+	job, err := c.Queue.EnqueueIndex(ctx, id, head, c.EmbedModel)
+	if err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
 // lsRemoteFailed tells the user why the repository's HEAD could not be
 // read: an empty repository as such; otherwise only that git failed, since
 // git's own words may quote paths or hosts, and those go to the log.

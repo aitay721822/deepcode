@@ -46,39 +46,44 @@ func (r Reader) Load(ctx context.Context, repoID int64) (Wiki, error) {
 	if err != nil {
 		return Wiki{}, err
 	}
+	cites, err := citations(ctx, db, w.SnapshotID)
+	if err != nil {
+		return Wiki{}, err
+	}
 	rows, err := db.QueryContext(ctx, `SELECT id, slug, title, content FROM wiki_pages WHERE snapshot_id = ? ORDER BY position`, w.SnapshotID)
 	if err != nil {
 		return Wiki{}, err
 	}
 	defer rows.Close()
-	index := map[int64]int{}
 	for rows.Next() {
 		var id int64
-		p := Page{Citations: []evidence.Citation{}}
+		var p Page
 		if err := rows.Scan(&id, &p.Slug, &p.Title, &p.Content); err != nil {
 			return Wiki{}, err
 		}
-		index[id] = len(w.Pages)
+		p.Citations = append([]evidence.Citation{}, cites[id]...) // [] rather than null in JSON
 		w.Pages = append(w.Pages, p)
 	}
-	if err := rows.Err(); err != nil {
-		return Wiki{}, err
-	}
-	crows, err := db.QueryContext(ctx, `
+	return w, rows.Err()
+}
+
+// citations reads the citations of snapshot snap's wiki, by page id.
+func citations(ctx context.Context, db *sql.DB, snap int64) (map[int64][]evidence.Citation, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT c.page_id, c.path, c.start_line, c.end_line FROM wiki_citations c JOIN wiki_pages p ON p.id = c.page_id
-		WHERE p.snapshot_id = ? ORDER BY c.path, c.start_line`, w.SnapshotID)
+		WHERE p.snapshot_id = ? ORDER BY c.path, c.start_line`, snap)
 	if err != nil {
-		return Wiki{}, err
+		return nil, err
 	}
-	defer crows.Close()
-	for crows.Next() {
+	defer rows.Close()
+	out := map[int64][]evidence.Citation{}
+	for rows.Next() {
 		var id int64
 		var c evidence.Citation
-		if err := crows.Scan(&id, &c.Path, &c.StartLine, &c.EndLine); err != nil {
-			return Wiki{}, err
+		if err := rows.Scan(&id, &c.Path, &c.StartLine, &c.EndLine); err != nil {
+			return nil, err
 		}
-		p := &w.Pages[index[id]]
-		p.Citations = append(p.Citations, c)
+		out[id] = append(out[id], c)
 	}
-	return w, crows.Err()
+	return out, rows.Err()
 }

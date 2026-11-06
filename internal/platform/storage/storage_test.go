@@ -5,8 +5,38 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
+	"testing/fstest"
 )
+
+// TestMigrationsInSubfolders: a migration in a subfolder runs in the order of
+// its file name and is recorded as migrations/<file name>, as the first ones
+// are; two files of one name are refused.
+func TestMigrationsInSubfolders(t *testing.T) {
+	db, err := Open(context.Background(), filepath.Join(t.TempDir(), "deepcode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var recorded int
+	db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE name = 'migrations/006_wiki_language.sql'`).Scan(&recorded)
+	if recorded != 1 {
+		t.Fatal("migration 006, in a subfolder, is not recorded under its file name")
+	}
+	if _, err := db.Exec(`UPDATE snapshots SET wiki_language = 'English'`); err != nil {
+		t.Fatalf("migration 006 did not run: %v", err)
+	}
+	files, err := migrationFiles(fstest.MapFS{
+		"migrations/002_b.sql": {}, "migrations/x/001_a.sql": {}, "migrations/y/003_c.sql": {}, "migrations/notes.txt": {},
+	})
+	if want := []string{"migrations/x/001_a.sql", "migrations/002_b.sql", "migrations/y/003_c.sql"}; err != nil || !slices.Equal(files, want) {
+		t.Fatalf("migration files %v (%v), want %v", files, err, want)
+	}
+	if _, err := migrationFiles(fstest.MapFS{"migrations/001_a.sql": {}, "migrations/x/001_a.sql": {}}); err == nil {
+		t.Fatal("two migrations of one file name were accepted")
+	}
+}
 
 func TestFTSTriggersAndBackupRestore(t *testing.T) {
 	ctx := context.Background()

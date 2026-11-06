@@ -72,7 +72,7 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	roles := &role.Store{DB: db}
 	sessions := session.New(db, accounts, roles, cfg.SessionTTL)
 
-	p := pipeline{queue: queue, indexer: &indexer.Indexer{
+	p := pipeline{queue: queue, catalog: cat, syncEvery: cfg.SyncEvery, indexer: &indexer.Indexer{
 		DB: db, Git: gitc, Servers: servers, Embed: embedP, Vectors: vectors, Events: bus,
 		Limits: indexer.Limits{
 			MaxFiles:      cfg.MaxFiles,
@@ -102,7 +102,8 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 
 // Run works the background pipeline until ctx is cancelled: it settles the
 // jobs a previous process left running, subscribes the workers and the
-// pipeline's reactions, and runs the event bus.
+// pipeline's reactions, polls the remotes when SyncEvery is set, and runs the
+// event bus.
 func (a *App) Run(ctx context.Context) error {
 	if err := a.queue.Recover(ctx); err != nil {
 		return err
@@ -110,6 +111,7 @@ func (a *App) Run(ctx context.Context) error {
 	a.queue.Register(ctx, a.workers, a.pipeline.handlers())
 	a.pipeline.subscribe(a.bus)
 	go a.queue.Sweep(ctx)
+	go a.pipeline.poll(ctx)
 	return a.bus.Run(ctx)
 }
 

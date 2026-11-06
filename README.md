@@ -9,7 +9,7 @@
 | 用途 | 需求 |
 |---|---|
 | 建置 | Go 1.27+ 並啟用 CGO（Tree-sitter 需要 C 編譯器）、Node.js `^20.19` 或 `>=22.12`、Bash |
-| 執行 | 系統 `git`（SHA-256 Repository 需 2.29+）、可寫入的資料目錄；問答與 Wiki 需要 OpenAI 相容的 Chat API，語意檢索另需 Embedding API |
+| 執行 | 系統 `git` 2.31+（Token 標頭以 `GIT_CONFIG_COUNT` 環境變數傳入；`go test` 也需要）、可寫入的資料目錄；問答與 Wiki 需要 OpenAI 相容的 Chat API，語意檢索另需 Embedding API |
 
 ## 建置
 
@@ -55,6 +55,7 @@ Ctrl-C（或 SIGTERM）停止服務：進行中的請求最多再等 10 秒，�
 | `DEEPCODE_WORKERS` | `2` | 同時執行的背景工作數 |
 | `DEEPCODE_JOB_TIMEOUT` | `2h` | 單一工作逾時 |
 | `DEEPCODE_CACHE_MB` | `64` | 記憶體快取上限 |
+| `DEEPCODE_SYNC_EVERY` | 關閉 | 每隔多久自動檢查每個 Repository 的遠端 HEAD（至少 `1m`，例如 `15m`），有新 Commit 就排索引；見「背景工作」 |
 | `DEEPCODE_MAX_REPO_MB` | `1024` | Repository 大小上限：匯入時比對 Git 伺服器回報的大小（GitLab 只對有成員權限的 Token 回報）；每次下載 Commit 時，寫進快取的量超過上限就中止，該工作失敗且不重試 |
 | `DEEPCODE_MAX_FILES` | `20000` | 可索引檔案數，超過則索引失敗 |
 | `DEEPCODE_MAX_FILE_KB` | `512` | 超過的檔案略過 |
@@ -72,7 +73,19 @@ Ctrl-C（或 SIGTERM）停止服務：進行中的請求最多再等 10 秒，�
 3. Repository 頁顯示索引進度（Fetch → Parse → Embed → Publish），接著生成 Wiki（Plan → Write），頁面寫完一頁出現一頁。後台 **Jobs** 可即時看每個工作的輸出，包括模型正在寫的 Wiki 內容。
 4. 左側 **Wiki** 列出頁面，**Files** 是檔案樹與 Symbol 搜尋（只有 Go、JavaScript、TypeScript / TSX 建立 Symbol；其他語言以純文字切塊，仍可全文與向量檢索）。文中的來源標籤會開啟檔案並標出行號範圍；連往 GitHub 或 GitLab 的連結都綁定 Commit SHA。
 5. 在底部輸入問題進入問答頁：左側串流答案與來源，右側顯示被引用的程式碼。可以繼續追問，`/repos/{id}/search/{conversation}` 能重新開啟對話（只有發問者看得到）。問題裡的字詞與名稱都對不上程式碼時（例如全中文的問題），會先請模型把問題轉成英文搜尋詞與可能的識別字再找一次，多一次模型呼叫；仍無證據時回答「無法從目前程式碼確認」。每位使用者同時最多 2 個回答在生成（不論開了幾個分頁），再問會請他等其中一個寫完。
-6. **Sync** 取得最新 Commit：未變更的檔案沿用 Symbol 與 Chunk，未變更的 Chunk 沿用向量，完成後才切換版本。保留最新兩個版本；更舊的版本分批刪除索引資料（不會長時間佔住資料庫的寫入，中斷時下次清理接續），原本綁在上面的對話改用目前版本。
+6. **Sync** 取得最新 Commit（設定 `DEEPCODE_SYNC_EVERY` 後也會定期自動檢查）：未變更的檔案沿用 Symbol 與 Chunk，未變更的 Chunk 沿用向量，完成後才切換版本。保留最新兩個版本；更舊的版本分批刪除索引資料（不會長時間佔住資料庫的寫入，中斷時下次清理接續），原本綁在上面的對話改用目前版本。
+7. 新版本的 Wiki 沿用上一份完成的同語言 Wiki 的頁面：引用的檔案、或以頁面標題與焦點重新檢索到的檔案（概覽頁另含 README）有新增、修改或刪除時才重寫那一頁，其餘頁面連同引用沿用，連結改指向新 Commit。重寫時已檢索不到任何程式碼的頁面（例如引用的檔案都刪了）改為說明無法從目前程式碼確認。變更的檔案（新增、修改、刪除合計）超過新版本檔案數的一半、或 `.devin/wiki.json` 有變更（含新增、刪除）時重新規劃。判斷偏保守：有 Embedding 的小 Repository 幾乎每頁都會檢索到變更的檔案而重寫；改動很小時新增的子系統要等下次重新規劃才有自己的頁面。
+8. Repository 根目錄的 `.devin/wiki.json`（與 DeepWiki 同格式）可以引導 Wiki：`repo_notes` 的 `content` 在規劃與撰寫時提供給模型；列出 `pages`（`title`、`purpose`、`page_notes`）時直接寫這些頁面（最多 30 頁），不再請模型規劃，`purpose` 與 `page_notes` 作為該頁的檢索焦點。頁面是單層清單，依檔案中的順序，`parent` 不使用。JSON 格式錯誤時整份忽略，並在工作輸出說明；檔案超過 `DEEPCODE_MAX_FILE_KB` 時和其他過大的檔案一樣不會被索引，也就不會生效。
+
+   ```json
+   {
+     "repo_notes": [{ "content": "前端在 web/，後端在 internal/；著重 API 與資料流。" }],
+     "pages": [
+       { "title": "Overview", "purpose": "整體架構與進入點" },
+       { "title": "HTTP API", "purpose": "router 與 handler", "page_notes": [{ "content": "列出所有路由" }] }
+     ]
+   }
+   ```
 
 ## 帳號與權限
 
@@ -113,6 +126,7 @@ Ctrl-C（或 SIGTERM）停止服務：進行中的請求最多再等 10 秒，�
 
 ```text
 POST /api/repos、Sync ──► jobs 表新增工作 ──► job.queued
+每 DEEPCODE_SYNC_EVERY 輪詢 ──► 遠端 HEAD 有新 Commit ──► jobs 表新增工作 ──► job.queued
 job.queued ──► worker 原子領取 ──► 索引 ──► snapshot.published
 snapshot.published ──► jobs 表新增 Wiki 工作 ──► job.queued ──► worker 生成 Wiki
 worker 寫進度到 jobs、輸出到 job_logs ──► job.updated / job.output ──► 後台 SSE 從 SQLite 讀取後推送
@@ -122,9 +136,10 @@ worker 寫進度到 jobs、輸出到 job_logs ──► job.updated / job.output
 - 掃描器每 5 秒檢查一次：重試退避到期、等待同 Repository 的工作、名額全滿時被忽略的通知，以及程序啟動前就送出而遺失的通知，都會再發一次 `job.queued`。
 - 已完成的工作再次被要求時（例如 force-push 回舊 Commit、Embedding 模型換回原本的）會重新排入並清除舊輸出；Wiki 已完成的版本不會重寫。
 - 每個工作最多嘗試 3 次，失敗後分別等 30 秒、60 秒再重試；重試也不會好轉的錯誤（例如 Token 無法解密）直接失敗。
-- 重啟時把 `running` 的工作改回 `queued`，已用完重試次數的改為 `failed`；中斷的索引從已寫入的檔案與向量接續，Wiki 從未完成的頁面接續。
+- 重啟時把 `running` 的工作改回 `queued`，已用完重試次數的改為 `failed`；中斷的索引從已寫入的檔案與向量接續，Wiki 從未完成的頁面接續（撰寫語言已改變時捨棄已存的頁面、重新規劃，不會混用兩種語言）。
 - 工作輸出逐行寫入 `job_logs`（模型串流的 Wiki 內容每完成一行寫一行，每頁最多 1000 行，其餘只記一行說明已省略）。`job.updated`、`job.output` 只是提示（聽眾還沒取走的提示，同一個工作只留一筆，慢的聽眾不會拖住發送端），後台的 SSE 每次都從 SQLite 讀取上次之後的行，所以不會漏行或重複；斷線重連以 `Last-Event-ID` 接續，工作結束後送出 `end` 並關閉。後台的 SSE 每 20 秒送出 ping 並重新驗證 session，session 結束、帳號停用或失去權限時隨即關閉串流。
 - `snapshot.published` 在程序重啟前遺失時，按 **Sync** 會補排 Wiki。
+- 輪詢（`DEEPCODE_SYNC_EVERY`）依序對每個 Repository 讀取遠端 HEAD（`git ls-remote`）：HEAD 不是目前版本，且該 Commit 的索引工作不在排隊、執行中，也沒有失敗時，排入索引（曾經成功的會重排，例如 force-push 回舊 Commit）。所以失敗的工作不會被輪詢重排，超過大小上限的 Repository 不會每輪重新下載；重試、換 Embedding 模型後重算向量、補寫失敗的 Wiki 仍按 **Sync**。失敗的工作若不是該 Repository 最新的一筆，30 天後會隨工作清理刪除，之後輪詢會再試一次那個 Commit。讀不到遠端時下一輪再試，同一個錯誤（含 Git 的原始訊息）只記一次 log；某一輪發生 panic 時只記 log，不會停止服務。
 - 完成超過 30 天的工作連同輸出會刪除，每個 Repository 最新的一筆保留（頁面會顯示它）；每完成一個工作刪除最多 20 筆，不會長時間佔住資料庫的寫入。
 
 ## API
@@ -184,7 +199,7 @@ go test ./...
 npm --prefix web run typecheck
 ```
 
-`go test` 需要系統 `git`。`test/e2e` 以真正的組裝（`internal/app`：Gin、Watermill、SQLite）搭配本機 Git remote、假的 GitHub / GitLab API 與假的 LLM，跑完登入、註冊、匯入、索引、Wiki、問答、角色權限、後台工作與即時輸出、增量同步、版本清理，以及帶 Token 的自架 GitLab；`test/layout_test.go` 檢查每個資料夾最多 5 個檔案、5 個子資料夾，每個檔案最多 500 行（npm 產生的 `web/package-lock.json` 除外），以及「目錄」最後一段的依賴方向（後端看 `go list`，前端看 `web/src` 的相對 import）。
+`go test` 需要系統 `git`。`test/e2e` 以真正的組裝（`internal/app`：Gin、Watermill、SQLite）搭配本機 Git remote、假的 GitHub / GitLab API 與假的 LLM，跑完登入、註冊、匯入、索引、Wiki、問答、角色權限、後台工作與即時輸出、增量同步（之後的 Wiki 沿用頁面、不再重新規劃）、版本清理，以及帶 Token 的自架 GitLab；`test/layout_test.go` 檢查每個資料夾最多 5 個檔案、5 個子資料夾，每個檔案最多 500 行（npm 產生的 `web/package-lock.json` 除外），以及「目錄」最後一段的依賴方向（後端看 `go list`，前端看 `web/src` 的相對 import）。
 
 ## 備份與復原
 
@@ -205,7 +220,7 @@ npm --prefix web run typecheck
 - 資料目錄在每次啟動時設為 0700：裡面有密碼雜湊、session、原始碼與 Token 金鑰。
 - `git` 以固定參數執行、不經 Shell，停用 credential helper 與互動提示，只允許 HTTP(S)，環境變數中不含 deepcode 自己的設定（金鑰、密碼）；讀取遠端 HEAD 最多等 1 分鐘，停滯 5 分鐘（或到該指令的期限，取較早者）的傳輸會中止，被終止的 `git` 留下的 remote helper 也會隨之結束。
 - 不執行 Repository 內的任何程式；檔案數、單檔大小、總量、工作時間與輸出 Token 都有上限。
-- 原始碼、README 與註解在提示詞中標為不可信資料。回答只保留指向實際提供給模型的檔案與行號範圍的引用，其餘移除；一個方括號內的多個引用（`[a.go:1-5; b.go:7]`）逐一驗證。
+- 原始碼、README 與註解在提示詞中標為不可信資料。`.devin/wiki.json` 的 `repo_notes` 也標為不可信：只用來決定涵蓋與強調的內容，不能改變引用與格式的規則，每則壓成一行，不能假裝區塊已結束；列出頁面的 `purpose` 與 `page_notes` 只作為該頁的檢索焦點，和模型規劃的焦點一樣使用（單行）。列出的頁數、標題、焦點與 notes 的長度都有上限。回答只保留指向實際提供給模型的檔案與行號範圍的引用，其餘移除；一個方括號內的多個引用（`[a.go:1-5; b.go:7]`）逐一驗證。
 
 ## 目錄
 
@@ -214,7 +229,7 @@ npm --prefix web run typecheck
 ```text
 cmd/deepcode/            main（指令分派）、config（環境變數）、serve、backup、passwd
 internal/
-  app/                   組裝根：Config、元件建構、第一位管理員、事件驅動的背景流程
+  app/                   組裝根：Config、元件建構、第一位管理員、事件驅動的背景流程與定期輪詢
     importer/            匯入：Repository 加入目錄，並在同一個 transaction 加進匯入者的角色
     server/              HTTP 交付層：router 組合以下各組路由
       httpx/             共用：錯誤對應、JSON 綁定、Host / Content-Type 防護、session 與權限檢查、SSE（ping、重新驗證 session）
@@ -227,7 +242,7 @@ internal/
     role/                權限清單、角色與其 Repository 範圍、使用者的權限判斷（Grants，依各角色範圍）
     session/             登入、註冊（開關與次數限制）、變更密碼、session、Principal
   platform/              共用基礎設施
-    storage/             SQLite 開啟、migrations、備份、IN 查詢的佔位符
+    storage/             SQLite 開啟、migrations（之後的依業務放子資料夾，依檔名編號排序）、備份、IN 查詢的佔位符
     cache/               記憶體 LRU Cache（含 singleflight 載入）
     events/              Watermill 事件匯流排、主題，以及給 SSE 用的短期監聽
     jobs/                SQLite 工作表、worker 名額與掃描器、進度與輸出（job_logs）及其追蹤、過期工作清理
@@ -236,7 +251,7 @@ internal/
     gitserver/           Git 伺服器設定、Token 加密與金鑰檔、網址解析、來源連結格式
     provider/            GitHub / GitLab REST API：匯入資訊、連線測試
     git/                 git 指令（帶 Token 標頭的 fetch、ls-tree、cat-file）
-    catalog/             Repository 目錄：匯入、同步判斷、目前版本、檔案清單（快取）與內容
+    catalog/             Repository 目錄：匯入、同步與輪詢判斷、目前版本、檔案清單（快取）、內容與兩個版本間變更的檔案
     index/               索引
       analyzer/          語言判斷、Tree-sitter Symbol（Go、JavaScript、TypeScript / TSX）
       chunker/           Symbol-aware chunking
@@ -246,7 +261,7 @@ internal/
     retrieval/           FTS5、Symbol、向量檢索與 RRF
     evidence/            Evidence Pack 與引用驗證
     chat/                問答與對話
-    wiki/                Wiki 規劃、撰寫與讀取
+    wiki/                Wiki 規劃（含 .devin/wiki.json）、沿用上一版未受影響的頁面、撰寫與讀取
 test/                    e2e、資料夾與檔案長度規則、依賴方向檢查
 web/public/              theme.js：第一次繪製前套用主題（CSP 不執行 inline 腳本）
 web/src/                 React + TypeScript + Vite；Tailwind CSS v4 + shadcn/ui（Radix），動畫用 motion；index.css 放主題 token（紙與墨兩套配色，訊號橘標示連結、引用與進行中）；字型隨程式打包（Fontsource 套件：Newsreader、Schibsted Grotesk、IBM Plex Mono），不向外部請求
@@ -279,6 +294,7 @@ web/src/                 React + TypeScript + Vite；Tailwind CSS v4 + shadcn/ui
 - **取得原始碼**以 shallow bare fetch 抓固定 SHA，再用 `git cat-file --batch` 讀取，不建立工作目錄。快取只保留正在索引的 Commit：換成別的 Commit 時整份重抓（depth 1 本來就會下載整棵樹，增量比對靠資料庫裡的 blob SHA），同步再多次也不會累積舊版本。下載時每 0.25 秒量一次快取大小、結束時再量一次，超過 `DEEPCODE_MAX_REPO_MB` 就中止並刪掉這份快取；抓取時關掉 Git 的自動維護，免得重新打包被算成下載量。每個 Git 指令的輸出最多保留 64 MB：上百萬個空檔案的樹只要下載幾 MB，`ls-tree` 卻要列出上百 MB，超過就讓該次索引失敗。
 - **工作恢復**：資料庫只由一個程序使用，啟動時把 `running` 的工作重新排入（已用完重試次數的改為 `failed`），沒有 lease；多程序共用資料庫時才需要。
 - **向量儲存**（`vectorstore.SQLite`）的 `Upsert` 一次寫多筆；沒有 `Delete`，向量隨 Chunk 以外鍵 cascade 刪除。沒有熱門向量的記憶體快取，量測到掃描成為瓶頸再加。
-- **migrations** 放在 `internal/platform/storage/migrations/` 並編入執行檔；`002_fts_porter.sql` 把 FTS5 改為 porter 詞幹，並在同一個 transaction 內重建既有資料的索引。`003_access.sql`（帳號、角色、session）與 `004_git_servers_job_logs.sql`（Git 伺服器、工作輸出）讓既有資料庫升級：原有 Repository 歸到 GitHub 伺服器，原有對話歸給第一位管理員。`005_signup.sql` 新增註冊開關（預設關閉）。
+- **migrations** 放在 `internal/platform/storage/migrations/` 並編入執行檔；`002_fts_porter.sql` 把 FTS5 改為 porter 詞幹，並在同一個 transaction 內重建既有資料的索引。`003_access.sql`（帳號、角色、session）與 `004_git_servers_job_logs.sql`（Git 伺服器、工作輸出）讓既有資料庫升級：原有 Repository 歸到 GitHub 伺服器，原有對話歸給第一位管理員。`005_signup.sql` 新增註冊開關（預設關閉）。之後的 migration 依業務放進子資料夾（每個資料夾最多 5 個檔案），例如 `knowledge/006_wiki_language.sql`：仍記錄為 `migrations/<檔名>`、依檔名的編號排序，所以檔案搬進子資料夾不會重跑；兩個同名檔案會讓啟動失敗。`006_wiki_language.sql` 記錄每個版本的 Wiki 以哪種語言撰寫：新版本只沿用同語言 Wiki 的頁面，續寫時語言不同就重新規劃（之前的 Wiki 沒有記錄語言，不會被沿用，未完成的會重新規劃）。
+- **Wiki 增量更新**以頁面的引用加上重新檢索的結果判斷受影響的頁面，沒有呼叫圖；寧可多重寫，也不留下與程式碼不符的頁面。
 - **帳號與 Git 伺服器**是計畫之外新增的：計畫只匯入公開 GitHub、沒有登入機制。
 - 沒有 Makefile；DeepWiki 的 Deep Research 模式屬於研究 Agent，不在 V1 範圍。

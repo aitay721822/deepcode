@@ -294,6 +294,9 @@ func TestEndToEnd(t *testing.T) {
 		failIfJobFailed(t, repo.Job)
 		return repo.Snapshot.CommitSHA == sha3 && repo.Snapshot.WikiStatus == "ready" && repo.Job.Finished()
 	})
+	if n := llm.planRequests(); n != 1 {
+		t.Fatalf("the wiki was planned %d times, want once: the later commits change few files, so they keep its pages", n)
+	}
 	var status string
 	var leftovers int
 	db.QueryRow(`SELECT status FROM snapshots WHERE commit_sha = ? AND repository_id = ?`, sha1, repo.ID).Scan(&status)

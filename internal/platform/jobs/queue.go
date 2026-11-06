@@ -30,7 +30,21 @@ func New(db *sql.DB, bus *events.Bus, timeout time.Duration) *Queue {
 }
 
 func (q *Queue) EnqueueIndex(ctx context.Context, repoID int64, sha, embedModel string) (Job, error) {
-	return q.enqueue(ctx, KindIndex, repoID, sha, fmt.Sprintf("index:%d:%s:v%d:%s", repoID, sha, PipelineVersion, embedModel))
+	return q.enqueue(ctx, KindIndex, repoID, sha, indexKey(repoID, sha, embedModel))
+}
+
+// IndexJob returns the index job of repoID at sha for embedModel, the one
+// EnqueueIndex would queue again, or ErrNotFound.
+func (q *Queue) IndexJob(ctx context.Context, repoID int64, sha, embedModel string) (Job, error) {
+	j, err := scanJob(q.DB.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE idempotency_key = ?`, indexKey(repoID, sha, embedModel)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Job{}, ErrNotFound
+	}
+	return j, err
+}
+
+func indexKey(repoID int64, sha, embedModel string) string {
+	return fmt.Sprintf("index:%d:%s:v%d:%s", repoID, sha, PipelineVersion, embedModel)
 }
 
 func (q *Queue) EnqueueWiki(ctx context.Context, repoID int64, sha string) (Job, error) {

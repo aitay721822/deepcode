@@ -34,6 +34,7 @@ func loadConfig() (app.Config, error) {
 		Workers:    envInt(&bad, "DEEPCODE_WORKERS", 2),
 		JobTimeout: envDuration(&bad, "DEEPCODE_JOB_TIMEOUT", 2*time.Hour),
 		CacheMB:    envInt(&bad, "DEEPCODE_CACHE_MB", 64),
+		SyncEvery:  envDuration(&bad, "DEEPCODE_SYNC_EVERY", 0),
 
 		MaxRepoMB:  envInt(&bad, "DEEPCODE_MAX_REPO_MB", 1024),
 		MaxFiles:   envInt(&bad, "DEEPCODE_MAX_FILES", 20000),
@@ -48,6 +49,9 @@ func loadConfig() (app.Config, error) {
 		SessionTTL:    envDuration(&bad, "DEEPCODE_SESSION_TTL", 30*24*time.Hour),
 
 		TrustedProxies: strings.FieldsFunc(os.Getenv("DEEPCODE_TRUSTED_PROXIES"), func(r rune) bool { return r == ',' || unicode.IsSpace(r) }),
+	}
+	if cfg.SyncEvery > 0 && cfg.SyncEvery < time.Minute { // each round asks every repository's git server
+		bad = append(bad, fmt.Errorf("DEEPCODE_SYNC_EVERY=%q: want 1m or more", os.Getenv("DEEPCODE_SYNC_EVERY")))
 	}
 	return cfg, errors.Join(bad...)
 }

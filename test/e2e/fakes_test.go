@@ -54,6 +54,13 @@ type fakeLLM struct {
 	mu     sync.Mutex
 	chunks int // chunk texts embedded so far
 	terms  int // requests for search terms so far
+	plans  int // requests for a wiki plan so far
+}
+
+func (f *fakeLLM) planRequests() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.plans
 }
 
 func (f *fakeLLM) chunkInputs() int {
@@ -95,7 +102,11 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.terms++
 		f.mu.Unlock()
 		reply = "Server Handle"
-	} else if !strings.Contains(body.Messages[0].Content, "plan a concise technical wiki") {
+	} else if strings.Contains(body.Messages[0].Content, "plan a concise technical wiki") {
+		f.mu.Lock()
+		f.plans++
+		f.mu.Unlock()
+	} else {
 		m := sourceRe.FindStringSubmatch(body.Messages[len(body.Messages)-1].Content)
 		if m == nil {
 			http.Error(w, "fakeLLM: the prompt carries no <source>", http.StatusBadRequest)

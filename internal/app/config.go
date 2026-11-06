@@ -17,6 +17,7 @@ type Config struct {
 	Workers    int
 	JobTimeout time.Duration
 	CacheMB    int
+	SyncEvery  time.Duration // how often the remotes are checked for new commits; 0 = never
 
 	MaxRepoMB  int // the size the git server reports, checked on import, and what one download may write
 	MaxFiles   int

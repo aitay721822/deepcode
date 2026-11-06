@@ -20,21 +20,13 @@ const writePrompt = `You write one page of a technical wiki for the repository %
 - Never invent files, APIs or behaviour. Where the sources leave something open, say it cannot be confirmed from the current code.
 - Do not start with a "#" title (the page title is shown separately) and do not end with a summary of the whole wiki.`
 
-// write drafts one page from the evidence retrieved for its title and focus;
-// the overview also gets the README. The model's text streams into the job's
-// output as it is written.
-func (g *Generator) write(ctx context.Context, snap int64, repo string, src source, p page, titles []string, progress jobs.Progress) (string, []evidence.Citation, error) {
-	res, err := g.Retriever.Search(ctx, snap, p.title+"\n"+p.query, pageHits)
+// write drafts one page from its sources, steered by the repository's notes
+// (a block from steer, or ""). The model's text streams into the job's output
+// as it is written.
+func (g *Generator) write(ctx context.Context, snap int64, repo string, src source, p page, titles []string, notes string, progress jobs.Progress) (string, []evidence.Citation, error) {
+	hits, err := g.sources(ctx, snap, p)
 	if err != nil {
 		return "", nil, err
-	}
-	hits := res.Hits
-	if p.position == 0 {
-		readme, err := g.Retriever.Readme(ctx, snap)
-		if err != nil {
-			return "", nil, err
-		}
-		hits = dedupe(append(readme, hits...))
 	}
 	sources, used := evidence.Format(hits, evidenceChars)
 	if len(used) == 0 {
@@ -44,8 +36,8 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 	write, flush := progress.Lines()
 	out, err := g.Chat.Stream(ctx, []ai.Message{
 		{Role: "system", Content: fmt.Sprintf(writePrompt, repo, src.sha[:min(7, len(src.sha))], g.Language)},
-		{Role: "user", Content: fmt.Sprintf("Pages of this wiki: %s\n\nWrite the page %q. Focus: %s\n\nSources:\n\n%s",
-			strings.Join(titles, " | "), p.title, p.query, sources)},
+		{Role: "user", Content: fmt.Sprintf("Pages of this wiki: %s\n\n%sWrite the page %q. Focus: %s\n\nSources:\n\n%s",
+			strings.Join(titles, " | "), notes, p.title, p.query, sources)},
 	}, write)
 	flush()
 	if err != nil {
@@ -55,6 +47,20 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 		return gitserver.SourceURL(src.kind, src.url, src.sha, c.Path, c.StartLine, c.EndLine)
 	})
 	return content, cites, nil
+}
+
+// sources is the evidence for page p: the search hits for its title and
+// focus, after the README for the overview.
+func (g *Generator) sources(ctx context.Context, snap int64, p page) ([]retrieval.Hit, error) {
+	res, err := g.Retriever.Search(ctx, snap, p.title+"\n"+p.query, pageHits)
+	if err != nil || p.position != 0 {
+		return res.Hits, err
+	}
+	readme, err := g.Retriever.Readme(ctx, snap)
+	if err != nil {
+		return nil, err
+	}
+	return dedupe(append(readme, res.Hits...)), nil
 }
 
 // clean drops reasoning blocks, a wrapping code fence and a leading "#" title.
