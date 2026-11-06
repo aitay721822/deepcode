@@ -1,0 +1,228 @@
+/* Global: Tailwind, the shadcn/ui theme tokens and base elements. Markdown prose and code colours live in components/source/source.css. */
+
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* dark: follows the .dark class index.html (before the first paint) and the theme switch put on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * The look: an engineering manual in print. Warm paper (light) or deep ink (dark), hairline rules,
+ * serif headings and prose, mono labels, and one signal orange for what is live, linked or cited.
+ */
+
+/* Light: paper. */
+:root {
+  color-scheme: light;
+  --radius: 0.625rem; /* lg; xs 4px, sm 6px, md 8px, xl 14px */
+  --background: #f4efe4;
+  --foreground: #1c1a16;
+  --card: #faf7f0;
+  --card-foreground: #1c1a16;
+  --popover: #fdfbf6;
+  --popover-foreground: #1c1a16;
+  --primary: #1c1a16; /* ink buttons */
+  --primary-foreground: #f8f4ea;
+  --secondary: #e9e3d6;
+  --secondary-foreground: #1c1a16;
+  --muted: #ebe5d8;
+  --muted-foreground: #5d574b;
+  --accent: #e8e1d2;
+  --accent-foreground: #1c1a16;
+  --destructive: #c0283e;
+  --destructive-foreground: #ffffff;
+  --border: #ddd4c3;
+  --input: #8f8673; /* control borders: 3:1 on paper, card and popover */
+  --ring: #b23c0c;
+  /* deepcode's own */
+  --brand: #b23c0c; /* signal: links, citations, the ask box, the current item */
+  --brand-foreground: #ffffff;
+  --faint: #8f8673; /* quiet marks: line and list numbers, list bullets, repo ids, the header slash */
+  --warning: #dd5a1e; /* work in progress: progress bars */
+  --success: #1a7042;
+  --code: #fcfaf5;
+  --chip: #ece6d9;
+  --band: rgb(178 60 12 / 0.1); /* cited lines */
+  --overlay: rgb(0 0 0 / 0.45); /* behind dialogs */
+  --grid: rgb(28 26 22 / 0.09); /* dot grid */
+  --hatch: rgb(178 60 12 / 0.16);
+  --grain: 0.08;
+  --add-card: repeating-linear-gradient(135deg, var(--hatch) 0 1px, transparent 1px 9px);
+  --syn-keyword: #b8400f;
+  --syn-string: #3d6b1e;
+  --syn-comment: #6b6455;
+  --syn-title: #8a5300;
+  --syn-number: #1d5f99;
+  --syn-type: #0f6d66;
+}
+
+/* Dark: ink, the default look. */
+.dark {
+  color-scheme: dark;
+  --background: #12110f;
+  --foreground: #ece6da;
+  --card: #181714;
+  --card-foreground: #ece6da;
+  --popover: #1c1a17;
+  --popover-foreground: #ece6da;
+  --primary: #ece6da;
+  --primary-foreground: #12110f;
+  --secondary: #211f1b;
+  --secondary-foreground: #ece6da;
+  --muted: #1e1c19;
+  --muted-foreground: #a59e90;
+  --accent: #24221e;
+  --accent-foreground: #ece6da;
+  --destructive: #f4677a;
+  --destructive-foreground: #12110f;
+  --border: #2c2a25;
+  --input: #6e675b;
+  --ring: #ff7a3d;
+  --brand: #ff7a3d;
+  --brand-foreground: #12110f;
+  --faint: #77705f;
+  --warning: #ff7a3d;
+  --success: #5cc58a;
+  --code: #0d0c0b;
+  --chip: #1f1d1a;
+  --band: rgb(255 122 61 / 0.13);
+  --overlay: rgb(0 0 0 / 0.65);
+  --grid: rgb(236 230 218 / 0.08);
+  --hatch: rgb(255 122 61 / 0.18);
+  --grain: 0.06;
+  --syn-keyword: #ff8f61;
+  --syn-string: #a9cf8a;
+  --syn-comment: #968f81;
+  --syn-title: #e9c46a;
+  --syn-number: #7fb8e6;
+  --syn-type: #6cc6bd;
+}
+
+@theme inline {
+  /* Self-hosted (main.tsx); Chinese falls back to the system's own faces. */
+  --font-sans: 'Schibsted Grotesk Variable', 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', ui-sans-serif, sans-serif;
+  --font-serif: 'Newsreader Variable', 'Noto Serif TC', 'Songti TC', 'Microsoft JhengHei', ui-serif, serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Microsoft JhengHei', monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-faint: var(--faint);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+  --color-code: var(--code);
+  --color-chip: var(--chip);
+  --color-overlay: var(--overlay);
+  --radius-xs: calc(var(--radius) - 6px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  /* Elevation: an input lifted off the page; menus and the ask box floating; dialogs above everything. */
+  --shadow-raised: 0 22px 44px -28px rgb(0 0 0 / 0.5);
+  --shadow-floating: 0 24px 60px -24px rgb(0 0 0 / 0.5);
+  --shadow-modal: 0 40px 100px -30px rgb(0 0 0 / 0.6);
+}
+
+/* A small mono label in capitals: section names, metadata, table heads. */
+@utility eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* Graph paper behind a hero. */
+@utility dot-grid {
+  background-image: radial-gradient(var(--grid) 1px, transparent 1.4px);
+  background-size: 22px 22px;
+}
+
+/* A registration cross, as on a drawing's corners. */
+@utility reg-mark {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--brand), var(--brand)) center / 1px 100% no-repeat,
+    linear-gradient(var(--brand), var(--brand)) center / 100% 1px no-repeat;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    scrollbar-color: var(--input) transparent;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    font-size: 15px;
+    line-height: 1.5;
+    font-synthesis-style: none; /* no fake italics for Chinese, whose faces have none */
+  }
+
+  /* Paper grain under everything: the page shows it, cards and code cover it. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: var(--grain);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--brand) 32%, transparent);
+  }
+
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* Components draw their own ring; this covers plain links and the rest. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

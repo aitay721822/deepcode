@@ -1,0 +1,8 @@
+/deepcode
+/deepcode.exe
+/data/
+/web/node_modules/
+/web/dist/
+/internal/app/server/webui/dist/*
+!/internal/app/server/webui/dist/.gitkeep
+/.claude/worktrees/
