@@ -36,12 +36,16 @@ const csp = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self
 
 // Headers adds the browser protections to every response, the guards'
 // refusals included: the policy above, no MIME sniffing, and no referrer for
-// other sites.
+// other sites. An API response holds what one account may see, so no cache,
+// the browser's or a proxy's, keeps it.
 func Headers(c *gin.Context) {
 	h := c.Writer.Header()
 	h.Set("Content-Security-Policy", csp)
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "same-origin")
+	if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+		h.Set("Cache-Control", "no-store")
+	}
 	c.Next()
 }
 

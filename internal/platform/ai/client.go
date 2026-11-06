@@ -102,11 +102,24 @@ func (c *OpenAI) quote(msg []byte) string {
 	return strings.ToValidUTF8(string(bytes.TrimSpace(msg[:min(len(msg), 2048)])), "")
 }
 
+// withTimeout bounds one request by Timeout. Its cause names the model and the
+// setting, which a bare "context deadline exceeded" in the log or in a job's
+// error would not; cause hands it on.
 func (c *OpenAI) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if c.Timeout <= 0 {
 		return context.WithCancel(ctx)
 	}
-	return context.WithTimeout(ctx, c.Timeout)
+	return context.WithTimeoutCause(ctx, c.Timeout,
+		fmt.Errorf("no whole answer from %s within DEEPCODE_LLM_TIMEOUT (%s): %w", c.ModelName, c.Timeout, context.DeadlineExceeded))
+}
+
+// cause is err, or once ctx has ended, why it ended: the request's own
+// timeout, or the caller's reason (a job's timeout, a reader who left).
+func cause(ctx context.Context, err error) error {
+	if err != nil && ctx.Err() != nil {
+		return context.Cause(ctx)
+	}
+	return err
 }
 
 // throttle spaces requests evenly to stay under RPM. A caller takes its turn

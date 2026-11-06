@@ -36,7 +36,7 @@ export function LoginPage({ next }: { next: string | null }) {
         }
       }}>
         <Field label="Username">
-          <Input autoComplete="username" autoFocus required value={username} onChange={(e) => setUsername(e.target.value)} />
+          <Input autoComplete="username" autoCapitalize="none" spellCheck={false} autoFocus required value={username} onChange={(e) => setUsername(e.target.value)} />
         </Field>
         <Field label="Password">
           <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />

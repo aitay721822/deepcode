@@ -27,9 +27,10 @@ func (c *OpenAI) Generate(ctx context.Context, messages []Message) (string, erro
 // Reasoning fragments (reasoning_content) are not part of the answer and are
 // ignored. An answer is whole only once the server says it ended, with [DONE]
 // or a finish reason: a stream that just stops was cut short.
-func (c *OpenAI) Stream(ctx context.Context, messages []Message, onDelta func(string)) (string, error) {
+func (c *OpenAI) Stream(ctx context.Context, messages []Message, onDelta func(string)) (_ string, err error) {
 	ctx, cancel := c.withTimeout(ctx)
 	defer cancel()
+	defer func() { err = cause(ctx, err) }() // before cancel, which would end ctx too
 	body := map[string]any{"model": c.ModelName, "messages": messages, "stream": true}
 	if c.MaxTokens > 0 {
 		body["max_tokens"] = c.MaxTokens

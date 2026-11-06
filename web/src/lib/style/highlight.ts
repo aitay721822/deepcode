@@ -29,9 +29,26 @@ const alias: Record<string, string> = {
 
 const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-/** Returns escaped HTML, highlighted when the language is known. */
+// Characters that reorder or hide text ("Trojan Source"): the bidirectional controls; invisible ones such as the
+// zero-width space and the soft hyphen; the Hangul fillers, letters that can even name a variable; and the tag
+// characters and variation selectors that can smuggle text. Not the joiners nor the emoji presentation selectors
+// (U+FE0E, U+FE0F), which emoji and scripts need. Each stays in the text, so copied text is unchanged, inside a span
+// that shows its code point and isolates it, so a direction control reaches nothing past it (source.css).
+const hidden = /[\u00ad\u034f\u061c\u115f\u1160\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0d\ufeff\uffa0\ufff9-\ufffb\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/gu
+const around = new RegExp(`(${hidden.source})`, 'u')
+
+/** A hidden character's code point, as its marker shows it ("202E"). */
+export const codePoint = (c: string) => (c.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')
+
+/** Splits text around its hidden characters: text at even indexes, a hidden character at each odd one. */
+export const splitHidden = (text: string) => text.split(around)
+
+const reveal = (html: string) => html.replace(hidden, (c) => `<span class="hidden-char" data-cp="${codePoint(c)}">${c}</span>`)
+
+/** Returns escaped HTML, highlighted when the language is known, with hidden characters shown. */
 export function highlight(code: string, language: string) {
+  const text = code.replace(/^\ufeff/, '') // a file's byte order mark: its encoding, not its text
   const lang = Object.hasOwn(alias, language) ? alias[language] : language // not alias['constructor']
-  if (!hljs.getLanguage(lang)) return escape(code)
-  return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value
+  if (!hljs.getLanguage(lang)) return reveal(escape(text))
+  return reveal(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value)
 }

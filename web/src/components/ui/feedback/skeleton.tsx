@@ -2,7 +2,7 @@ import type { ComponentProps } from 'react'
 import { cn } from '../../../lib/style/cn'
 
 function Skeleton({ className, ...props }: ComponentProps<'div'>) {
-  return <div data-slot="skeleton" className={cn('animate-pulse rounded-md bg-accent', className)} {...props} />
+  return <div data-slot="skeleton" className={cn('animate-pulse rounded-md bg-accent forced-colors:border', className)} {...props} />
 }
 
 /** Lines of placeholder text of uneven length, while something loads. */

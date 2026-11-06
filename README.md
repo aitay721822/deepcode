@@ -75,7 +75,7 @@ Ctrl-C（或 SIGTERM）停止服務：進行中的請求最多再等 10 秒，�
 5. 在底部輸入問題進入問答頁：左側串流答案與來源，右側顯示被引用的程式碼。可以繼續追問，`/repos/{id}/search/{conversation}` 能重新開啟對話（只有發問者看得到）。問題裡的字詞與名稱都對不上程式碼時（例如全中文的問題），會先請模型把問題轉成英文搜尋詞與可能的識別字再找一次，多一次模型呼叫；仍無證據時回答「無法從目前程式碼確認」。每位使用者同時最多 2 個回答在生成（不論開了幾個分頁），再問會請他等其中一個寫完。
 6. **Sync** 取得最新 Commit（設定 `DEEPCODE_SYNC_EVERY` 後也會定期自動檢查）：未變更的檔案沿用 Symbol 與 Chunk，未變更的 Chunk 沿用向量，完成後才切換版本。保留最新兩個版本；更舊的版本分批刪除索引資料（不會長時間佔住資料庫的寫入，中斷時下次清理接續），原本綁在上面的對話改用目前版本。
 7. 新版本的 Wiki 沿用上一份完成的同語言 Wiki 的頁面：引用的檔案、或以頁面標題與焦點重新檢索到的檔案（概覽頁另含 README）有新增、修改或刪除時才重寫那一頁，其餘頁面連同引用沿用，連結改指向新 Commit。重寫時已檢索不到任何程式碼的頁面（例如引用的檔案都刪了）改為說明無法從目前程式碼確認。變更的檔案（新增、修改、刪除合計）超過新版本檔案數的一半、或 `.devin/wiki.json` 有變更（含新增、刪除）時重新規劃。判斷偏保守：有 Embedding 的小 Repository 幾乎每頁都會檢索到變更的檔案而重寫；改動很小時新增的子系統要等下次重新規劃才有自己的頁面。
-8. Repository 根目錄的 `.devin/wiki.json`（與 DeepWiki 同格式）可以引導 Wiki：`repo_notes` 的 `content` 在規劃與撰寫時提供給模型；列出 `pages`（`title`、`purpose`、`page_notes`）時直接寫這些頁面（最多 30 頁），不再請模型規劃，`purpose` 與 `page_notes` 作為該頁的檢索焦點。頁面是單層清單，依檔案中的順序，`parent` 不使用。JSON 格式錯誤時整份忽略，並在工作輸出說明；檔案超過 `DEEPCODE_MAX_FILE_KB` 時和其他過大的檔案一樣不會被索引，也就不會生效。
+8. Repository 根目錄的 `.devin/wiki.json`（與 DeepWiki 同格式）可以引導 Wiki：`repo_notes` 的 `content` 在規劃與撰寫時提供給模型；列出 `pages`（`title`、`purpose`、`page_notes`）時直接寫這些頁面（最多 30 頁），不再請模型規劃，`purpose` 與 `page_notes` 作為該頁的檢索焦點。頁面是單層清單，依檔案中的順序，`parent` 不使用。JSON 格式錯誤時整份忽略，並在工作輸出說明；檔案超過 `DEEPCODE_MAX_FILE_KB`、或有一行超過 4000 位元組（例如壓成一行的 JSON）時，和其他這類檔案一樣不會被索引，也就不會生效。
 
    ```json
    {
@@ -179,6 +179,8 @@ worker 寫進度到 jobs、輸出到 job_logs ──► job.updated / job.output
 
 `files`、`symbols`、`search` 可用 `?snapshot=` 指定仍保留的版本，預設為目前版本；`?q=` 最長 1000 bytes。
 
+成功時回 200，除了：新增使用者、角色、Git 伺服器與註冊回 201；刪除、`auth/logout` 與 `auth/password` 回 204，沒有 body；`POST /api/repos` 匯入新的 Repository 並排入工作時回 202（之前匯入過、看得到的回 200）；同步見上表。
+
 ## 開發
 
 ```bash
@@ -217,9 +219,11 @@ npm --prefix web run typecheck
 - 只能從後台設定的 Git 伺服器匯入；網址的每一段路徑都經過驗證，不接受帳密、query 或 `..`。Token 加密存放，只送往該伺服器的 API 與該 Repository 的 Git URL；改伺服器位址必須重新輸入 Token，API 的 redirect 只跟隨同一主機與 scheme。
 - 開著的串流（後台工作、問答）每 20 秒重新驗證 session 與權限，停用帳號或移除角色後最晚 20 秒內中斷；用戶端停止讀取時，寫入在 10 秒後逾時並結束串流。讀取請求（含 body）最多 30 秒，串流不受此限。
 - 500 錯誤只回一般訊息，細節（SQL、路徑、上游回應）只寫進 log；`git` 讀不到 Repository、或連不到 Git 伺服器的 API 時（502），只說明是哪一步失敗；空的 Repository 回 400。工作失敗的原因可能引用 Git 或伺服器上的路徑，完整內容只有 `jobs.view` 看得到，其他能讀該 Repository 的人只看到固定訊息。問答的錯誤只顯示使用者能處理的原因。
-- 資料目錄在每次啟動時設為 0700：裡面有密碼雜湊、session、原始碼與 Token 金鑰。
+- 資料目錄在每次啟動時設為 0700：裡面有密碼雜湊、session、原始碼與 Token 金鑰。Windows 不認這些權限位元（Go 在 Windows 上只切換唯讀屬性，0600 的 `secret.key` 與備份檔也一樣），誰能讀取由上層資料夾繼承的 ACL 決定：資料目錄與備份要放在只有服務帳號能讀的地方，例如使用者設定檔之下；放在 `C:\data` 這類共用位置時，先用 `icacls <目錄> /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F"` 只留給自己。
 - `git` 以固定參數執行、不經 Shell，停用 credential helper 與互動提示，只允許 HTTP(S)，環境變數中不含 deepcode 自己的設定（金鑰、密碼）；讀取遠端 HEAD 最多等 1 分鐘，停滯 5 分鐘（或到該指令的期限，取較早者）的傳輸會中止，被終止的 `git` 留下的 remote helper 也會隨之結束。
 - 不執行 Repository 內的任何程式；檔案數、單檔大小、總量、工作時間與輸出 Token 都有上限。
+- 會讓文字倒序或隱形的字元（雙向控制字元、零寬空格等不可見的格式字元、韓文填充字元、Tag 字元與變體選擇符，即 Trojan Source；emoji 用的 U+FE0E、U+FE0F 與連接符除外）在程式碼檢視、程式碼區塊，以及回答與 wiki 的文字和行內程式碼中，以加框的碼位顯示（例如 `U+202E`），也不影響前後文字的方向；複製出來的文字不變。檔案開頭的 BOM 不顯示。路徑含控制或格式字元、或不是 UTF-8 的檔案不索引。
+- 在 Windows 上，git 因逾時或超過 `DEEPCODE_MAX_REPO_MB` 被中止時，整個行程樹一起結束：Git for Windows 的 `cmd\git.exe` 只是啟動器，只結束它的話，真正的 git 會繼續下載。
 - 原始碼、README 與註解在提示詞中標為不可信資料。`.devin/wiki.json` 的 `repo_notes` 也標為不可信：只用來決定涵蓋與強調的內容，不能改變引用與格式的規則，每則壓成一行，不能假裝區塊已結束；列出頁面的 `purpose` 與 `page_notes` 只作為該頁的檢索焦點，和模型規劃的焦點一樣使用（單行）。列出的頁數、標題、焦點與 notes 的長度都有上限。回答只保留指向實際提供給模型的檔案與行號範圍的引用，其餘移除；一個方括號內的多個引用（`[a.go:1-5; b.go:7]`）逐一驗證。
 
 ## 目錄

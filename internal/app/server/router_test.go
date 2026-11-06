@@ -32,6 +32,16 @@ func TestHeaders(t *testing.T) {
 		if h.Get("Content-Security-Policy") != policy || h.Get("X-Content-Type-Options") != "nosniff" || h.Get("Referrer-Policy") != "same-origin" {
 			t.Errorf("%s: %d %v", host, w.Code, h)
 		}
+		if h.Get("Cache-Control") == "no-store" {
+			t.Errorf("%s: no-store outside the API", host)
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/nope", nil)
+	req.Host = "127.0.0.1:8080"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("an API response may be cached: %v", w.Header())
 	}
 }
 

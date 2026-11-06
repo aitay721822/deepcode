@@ -15,7 +15,7 @@ export function JobConsole({ lines, liveAfter }: { lines: LogLine[]; liveAfter: 
   }, [lines.length])
   return (
     <div ref={box} role="log" aria-label="Job output" tabIndex={0}
-      className="max-h-[60dvh] min-h-40 overflow-auto rounded-lg border bg-code px-4 py-3 font-mono text-[12.5px] leading-relaxed"
+      className="max-h-[60dvh] min-h-40 overflow-auto overscroll-contain rounded-lg border bg-code px-4 py-3 font-mono text-[12.5px] leading-relaxed"
       onScroll={() => {
         const b = box.current!
         follow.current = b.scrollHeight - b.scrollTop - b.clientHeight < 24

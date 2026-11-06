@@ -12,10 +12,23 @@ export async function httpError(res: Response) {
   return Object.assign(new Error(body.error || res.statusText || `HTTP ${res.status}`), { status: res.status })
 }
 
+/**
+ * Puts the browser's own words for a request that failed on the way ("Failed to fetch", "Load failed", "network
+ * error", "signal timed out", …) as a sentence the reader can act on. An abort the caller asked for goes on as it is.
+ */
+export function unreachable(e: unknown): never {
+  if (e instanceof TypeError) throw new Error('Cannot reach the server. Check the connection and try again.')
+  if (e instanceof DOMException && e.name === 'TimeoutError') throw new Error('The server took too long to answer. Try again.')
+  throw e
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init)
+  // A read (no init) that hangs, on a half-open connection or after the computer slept, gives up after 30s, so a poll
+  // behind it goes on. Writes may take longer, such as an import's first look at the remote.
+  const res = await fetch(path, init ?? { signal: AbortSignal.timeout(30_000) }).catch(unreachable)
   if (!res.ok) throw await httpError(res)
-  return res.json().catch(() => ({})) // 204: nothing to read
+  if (res.status === 204) return {} as T // nothing to read
+  return res.json().catch(unreachable)
 }
 
 const json = { 'Content-Type': 'application/json' }

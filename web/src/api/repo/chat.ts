@@ -1,5 +1,5 @@
 import type { ChatEvent, Conversation } from '../../types/repo/chat'
-import { api, httpError } from '../client'
+import { api, httpError, unreachable } from '../client'
 
 export const getConversation = (id: string) => api<Conversation>(`/api/conversations/${id}`)
 
@@ -14,12 +14,12 @@ export async function streamChat(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal,
-  })
+  }).catch(unreachable)
   if (!res.ok || !res.body) throw await httpError(res)
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
   let buf = ''
   for (;;) {
-    const { value, done } = await reader.read()
+    const { value, done } = await reader.read().catch(unreachable)
     if (done) return
     buf += value
     let i: number

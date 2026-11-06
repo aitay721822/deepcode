@@ -10,9 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ErrEmpty is a repository whose default branch has no commit to index.
@@ -41,8 +44,26 @@ type TreeEntry struct {
 	Size int64
 }
 
-func (g *Client) run(ctx context.Context, auth Remote, args ...string) ([]byte, error) {
+// command is git with args, ended with ctx. On Windows the git on PATH is
+// usually Git for Windows' launcher (cmd\git.exe), which runs the real git as
+// its child: killing the launcher alone leaves that git and its remote helper
+// downloading past a deadline or the size limit. So the whole tree goes, or
+// should taskkill fail, the launcher at least.
+func command(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	if runtime.GOOS == "windows" {
+		cmd.Cancel = func() error {
+			if exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run() != nil {
+				return cmd.Process.Kill()
+			}
+			return nil
+		}
+	}
+	return cmd
+}
+
+func (g *Client) run(ctx context.Context, auth Remote, args ...string) ([]byte, error) {
+	cmd := command(ctx, args...)
 	cmd.Dir = g.Dir
 	cmd.Env = g.env(ctx, auth)
 	cmd.WaitDelay = 5 * time.Second // git's remote helpers hold its pipes; once git is killed, stop waiting for them
@@ -56,7 +77,10 @@ func (g *Client) run(ctx context.Context, auth Remote, args ...string) ([]byte, 
 		if stdout.over {
 			return nil, fmt.Errorf("git %s: its output passed %d MB", args[0], maxOutput>>20)
 		}
-		return nil, fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
+		// stderr carries the remote's own "remote:" lines: one line with no
+		// control characters, so it cannot forge lines in the server log.
+		msg := strings.Join(strings.FieldsFunc(stderr.String(), func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
+		return nil, fmt.Errorf("git %s: %w: %s", args[0], err, msg)
 	}
 	return stdout.buf.Bytes(), nil
 }
@@ -82,17 +106,24 @@ func (c *capped) Write(p []byte) (int, error) {
 	return c.buf.Write(p)
 }
 
+// repoLocal are the variables that point git at a repository, as a git hook
+// sets them: deepcode names each repository itself, and a fetch would
+// otherwise land in that one.
+var repoLocal = []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR"}
+
 // env never lets git prompt, allows only the configured protocols, gives up
 // on a transfer stalled for five minutes (a big repository's server may say
 // nothing while it packs), or until ctx's deadline if that comes first, and
-// leaves out deepcode's own settings (keys and passwords). A remote's
-// Authorization header travels as configuration in the environment, not on
-// the command line where other users could read it; it is scoped to the
-// remote's URL, and redirects are refused so it never reaches another host.
+// leaves out deepcode's own settings (keys and passwords) and repoLocal. A
+// remote's Authorization header travels as configuration in the environment,
+// not on the command line where other users could read it; it is scoped to the
+// remote's URL, and redirects from that URL are refused as specifically, so an
+// operator's own followRedirects for its host cannot take git elsewhere.
 func (g *Client) env(ctx context.Context, auth Remote) []string {
 	var env []string
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(strings.ToUpper(kv), "DEEPCODE_") {
+		name, _, _ := strings.Cut(strings.ToUpper(kv), "=")
+		if !strings.HasPrefix(name, "DEEPCODE_") && !slices.Contains(repoLocal, name) {
 			env = append(env, kv)
 		}
 	}
@@ -110,7 +141,7 @@ func (g *Client) env(ctx context.Context, auth Remote) []string {
 	return append(env,
 		fmt.Sprintf("GIT_CONFIG_KEY_%d=http.%s.extraHeader", n, auth.URL),
 		fmt.Sprintf("GIT_CONFIG_VALUE_%d=Authorization: %s", n, auth.Authorization),
-		fmt.Sprintf("GIT_CONFIG_KEY_%d=http.followRedirects", n+1),
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=http.%s.followRedirects", n+1, auth.URL),
 		fmt.Sprintf("GIT_CONFIG_VALUE_%d=false", n+1),
 		fmt.Sprintf("GIT_CONFIG_COUNT=%d", n+2))
 }

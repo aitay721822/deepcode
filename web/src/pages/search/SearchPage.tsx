@@ -52,7 +52,7 @@ export function SearchPage({ id, conversationId }: { id: number; conversationId?
   const side = last?.status === 'searching' ? <SearchSteps sources={last.sources} /> : selected && conv ? <CitedFile repo={repo} conv={conv} citation={selected} /> : null
   return (
     <Frame title={title}>
-      <main className="grid gap-4 px-4 pt-7 pb-44 min-[900px]:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] min-[900px]:px-6">
+      <main tabIndex={-1} className="grid gap-4 px-4 pt-7 pb-44 outline-none min-[900px]:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] min-[900px]:px-6 print:block">
         <section className="min-w-0">
           <Link to={`/repos/${repo.id}`} className="inline-flex items-center gap-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere] text-muted-foreground hover:text-foreground">
             <ArrowLeftIcon className="size-3.5 shrink-0" /> {repo.owner}/{repo.name}
@@ -66,7 +66,7 @@ export function SearchPage({ id, conversationId }: { id: number; conversationId?
         {/* Beside the answers the pane fills the screen under the header, but keeps 16rem: the calc alone leaves a
             short screen (a phone held sideways) a sliver. */}
         {side && (
-          <aside ref={aside} className="h-[70dvh] min-w-0 scroll-mt-20 min-[900px]:sticky min-[900px]:top-[calc(4rem+28px)] min-[900px]:h-[max(16rem,calc(100dvh-4rem-180px))]">{side}</aside>
+          <aside ref={aside} className="h-[70dvh] min-w-0 print:hidden scroll-mt-20 min-[900px]:sticky min-[900px]:top-[calc(4rem+28px)] min-[900px]:h-[max(16rem,calc(100dvh-4rem-180px))]">{side}</aside>
         )}
       </main>
       {repo.permissions.includes('repo.chat') && <AskBox placeholder="Ask a follow-up question" busy={busy} disabled={loading} onAsk={(q) => ask(repo, q)} />}

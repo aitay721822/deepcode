@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -57,9 +58,65 @@ func TestPollRound(t *testing.T) {
 	if n := failures(); n != 1 || strings.Contains(logs.String(), "catalog: ") {
 		t.Fatalf("an unreachable remote logged %d times in two rounds, want once:\n%s", n, &logs)
 	}
-	// A local repository answers for the remote once, then the remote fails as before.
+	// A local repository answers for the remote twice (its return logged once), then the remote fails as before.
+	localRemote(t)
+	round()
+	round()
+	t.Setenv("GIT_CONFIG_COUNT", "0")
+	round()
+	if n := failures(); n != 2 || !strings.Contains(logs.String(), "poll acme/demo: indexing the new commit") ||
+		strings.Count(logs.String(), "poll acme/demo: working again") != 1 {
+		t.Fatalf("a failure after an answer: %d failures logged in all, want 2:\n%s", n, &logs)
+	}
+	pipeline{}.pollRound(ctx, failing) // no catalog: the round panics
+	if !strings.Contains(logs.String(), "poll: panic:") {
+		t.Fatalf("the panic was not logged:\n%s", &logs)
+	}
+}
+
+// TestRunPolls: with SyncEvery set, Run checks the remotes by itself and
+// queues the index job of the commit a remote moved to.
+func TestRunPolls(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	db, err := storage.Open(ctx, filepath.Join(dir, "deepcode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/acme/demo', 'acme', 'demo')`); err != nil {
+		t.Fatal(err)
+	}
+	localRemote(t)
+	log.SetOutput(io.Discard) // the new administrator's one-time password
+	defer log.SetOutput(os.Stderr)
+	a, err := New(ctx, Config{DataDir: dir, SyncEvery: 20 * time.Millisecond, GitProtocols: "file"}, db, http.NotFoundHandler(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	defer func() { cancel(); <-done }() // no worker runs the job, and the database closes after Run
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		var queued int
+		if err := db.QueryRow(`SELECT count(*) FROM jobs WHERE repository_id = 1 AND kind = 'index'`).Scan(&queued); err != nil {
+			t.Fatal(err)
+		}
+		if queued > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the moved commit's index job was not queued without a sync")
+		}
+	}
+}
+
+// localRemote makes a git repository with one commit, and has git read it in
+// place of https://github.com/acme/demo for the rest of the test.
+func localRemote(t *testing.T) {
 	remote := t.TempDir()
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "c"}} {
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "c"}} {
 		if out, err := exec.Command("git", append([]string{"-C", remote}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
@@ -71,16 +128,6 @@ func TestPollRound(t *testing.T) {
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+url+".insteadOf")
 	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/acme/demo.git")
-	round()
-	t.Setenv("GIT_CONFIG_COUNT", "0")
-	round()
-	if n := failures(); n != 2 || !strings.Contains(logs.String(), "poll acme/demo: indexing the new commit") {
-		t.Fatalf("a failure after an answer: %d failures logged in all, want 2:\n%s", n, &logs)
-	}
-	pipeline{}.pollRound(ctx, failing) // no catalog: the round panics
-	if !strings.Contains(logs.String(), "poll: panic:") {
-		t.Fatalf("the panic was not logged:\n%s", &logs)
-	}
 }
 
 // TestBadSettingCreatesNoAdmin: a setting that stops the start is caught

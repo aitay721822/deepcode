@@ -49,6 +49,10 @@ func TestLinkCitations(t *testing.T) {
 		"Bare [3, 4] stays":                     "Bare [3, 4] stays",
 		"Code ```\nx[README.md:1-2]\n``` stays": "Code ```\nx[README.md:1-2]\n``` stays",
 		"Open ```\nx[README.md:1-2]":            "Open ```\nx[README.md:1-2]",
+		// The edges of a shown range, a range written backwards, a path written from the root.
+		"Edges [README.md:20-25; async.ts:5-10]": "Edges " + link("README.md", 20, 20) + " " + link("src/vs/base/async.ts", 10, 10),
+		"Reversed [README.md:4-2]":               "Reversed " + link("README.md", 2, 4),
+		"Rooted [./README.md:3; /README.md:5]":   "Rooted " + link("README.md", 3, 3) + " " + link("README.md", 5, 5),
 	}
 	for in, want := range cases {
 		if got, _ := LinkCitations(in, used, href); got != want {

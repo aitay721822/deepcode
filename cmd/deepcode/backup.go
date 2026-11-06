@@ -5,6 +5,9 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"deepcode/internal/platform/storage"
 )
@@ -22,7 +25,11 @@ func backup(args []string) error {
 		return err
 	}
 	defer db.Close()
-	if err := storage.Backup(context.Background(), db, fs.Arg(0)); err != nil {
+	// Ctrl+C or a stop interrupts VACUUM INTO, and Backup removes the unfinished
+	// file, which would otherwise wait at the backup's name looking like one.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := storage.Backup(ctx, db, fs.Arg(0)); err != nil {
 		return err
 	}
 	log.Printf("backup written to %s", fs.Arg(0))

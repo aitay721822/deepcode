@@ -28,14 +28,14 @@ function TabsTrigger({ className, value, children, ...props }: ComponentProps<ty
       data-slot="tabs-trigger"
       value={value}
       className={cn(
-        'relative rounded-sm px-0.5 pt-1.5 pb-2.5 font-mono text-[11.5px] font-medium tracking-[0.14em] uppercase transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=active]:text-foreground',
+        'relative rounded-sm px-0.5 pt-1.5 pb-2.5 font-mono text-[11.5px] font-medium tracking-[0.14em] uppercase transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:outline-hidden focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 data-[state=active]:text-foreground',
         className,
       )}
       {...props}
     >
       {children}
       {tabs.value === value && (
-        <motion.span layoutId={tabs.layoutId} className="absolute inset-x-0 -bottom-px h-0.5 bg-brand" transition={slide} />
+        <motion.span layoutId={tabs.layoutId} className="absolute inset-x-0 -bottom-px h-0.5 bg-brand forced-colors:bg-[color:Highlight]" transition={slide} />
       )}
     </TabsPrimitive.Trigger>
   )

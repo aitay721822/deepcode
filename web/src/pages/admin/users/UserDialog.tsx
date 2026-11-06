@@ -33,7 +33,7 @@ export function UserDialog({ open, user, self, roles, onClose, onSaved }: {
     <FormDialog open={open} title={user ? `Edit ${user.username}` : 'New user'} submit={user ? 'Save' : 'Create user'} onClose={onClose} onSubmit={save}>
       {!user && (
         <Field label="Username">
-          <Input required autoComplete="off" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <Input required autoComplete="off" autoCapitalize="none" spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)} />
         </Field>
       )}
       <Field label="Display name">

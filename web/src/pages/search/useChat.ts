@@ -103,7 +103,8 @@ export function useChat(repoId: number, conversationId?: string) {
     } catch (e) {
       if (ctl.signal.aborted) return cancelAnimationFrame(frame) // left the page or this conversation
       flush()
-      update((t) => ({ ...t, status: 'error', error: (e as Error).message }))
+      // Failed before the answer began: say why. After: what arrived stays, marked interrupted below.
+      update((t) => (t.status === 'answering' ? t : { ...t, status: 'error', error: (e as Error).message }))
     }
     // Closed early (session ended, access lost, server gone): keep what arrived.
     flush()

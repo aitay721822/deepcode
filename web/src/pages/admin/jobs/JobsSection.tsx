@@ -3,6 +3,7 @@ import { listJobs, watchJobs } from '../../../api/admin/jobs'
 import type { StreamState } from '../../../api/client'
 import { isActive, jobFraction, stageLabel } from '../../../components/repo/jobStage'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/display/table'
+import { LoadError } from '../../../components/ui/feedback/load-error'
 import { Progress } from '../../../components/ui/feedback/progress'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
 import { Label } from '../../../components/ui/form/label'
@@ -14,7 +15,6 @@ import { useApi } from '../../../lib/useApi'
 import type { JobRow } from '../../../types/admin/jobs'
 import type { Job } from '../../../types/repo/repo'
 import { useSession } from '../../session/session'
-import { LoadError } from '../LoadError'
 import { SectionHead } from '../SectionHead'
 import { StatusBadge } from './StatusBadge'
 import { StreamNotice } from './StreamNotice'
@@ -57,7 +57,8 @@ export function JobsSection() {
       },
     )
   }, [attempt])
-  const rows = useMemo(() => merge(data ?? [], live).filter((j) => !status || j.status === status), [data, live, status])
+  // As many as a load lists (the API's 100), however many jobs a tab left open for days has seen.
+  const rows = useMemo(() => merge(data ?? [], live).filter((j) => !status || j.status === status).slice(0, 100), [data, live, status])
 
   return (
     <section>

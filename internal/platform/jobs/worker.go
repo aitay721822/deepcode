@@ -27,12 +27,18 @@ var sweepEvery = 5 * time.Second
 // lease_until + heartbeats if a second process ever shares the file.
 // Call before any worker runs.
 func (q *Queue) Recover(ctx context.Context) error {
-	_, err := q.DB.ExecContext(ctx, `
+	res, err := q.DB.ExecContext(ctx, `
 		UPDATE jobs SET updated_at = CURRENT_TIMESTAMP,
 			status = CASE WHEN attempts >= ?1 THEN 'failed' ELSE 'queued' END,
 			error = CASE WHEN attempts >= ?1 THEN 'the server stopped during the last attempt' ELSE error END
 		WHERE status = 'running'`, maxAttempts)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("jobs: %d were running when the server stopped: queued again, or failed if that was their last attempt", n)
+	}
+	return nil
 }
 
 // Register runs up to n workers. Each job.queued announcement is a wake-up,
@@ -122,18 +128,23 @@ func (q *Queue) claim(ctx context.Context) (Job, bool) {
 // backoff, a permanent failure, or a hand-back when the process shuts down.
 // Then it prunes old jobs.
 func (q *Queue) run(ctx context.Context, job Job, h Handler) {
-	jctx, cancel := context.WithTimeout(ctx, q.Timeout)
+	jctx, cancel := context.WithTimeoutCause(ctx, q.Timeout, fmt.Errorf("the job ran past DEEPCODE_JOB_TIMEOUT (%s): %w", q.Timeout, context.DeadlineExceeded))
 	defer cancel()
+	start := time.Now()
 	progress := Progress{q, job.ID}
 	progress.Logf("%s %.7s: attempt %d of %d", job.Kind, job.CommitSHA, job.Attempts, maxAttempts)
 	err := fmt.Errorf("no handler for job kind %q", job.Kind)
 	if h != nil {
 		err = safely(func() error { return h(jctx, job, progress) })
 	}
+	if err != nil && jctx.Err() != nil && ctx.Err() == nil {
+		err = context.Cause(jctx) // the job's own timeout, named, rather than what the step it cut short made of it
+	}
 	// ctx may already be cancelled (shutdown), so finish the bookkeeping regardless.
 	bg := context.WithoutCancel(ctx)
 	switch {
 	case err == nil:
+		log.Printf("jobs: %s #%d (repository %d) succeeded in %s", job.Kind, job.ID, job.RepoID, time.Since(start).Round(time.Second))
 		progress.Logf("succeeded")
 		_, err = q.DB.ExecContext(bg, `UPDATE jobs SET status = 'succeeded', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, job.ID)
 	case ctx.Err() != nil:
@@ -142,12 +153,12 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 		progress.Logf("interrupted by shutdown; it resumes on the next start")
 		_, err = q.DB.ExecContext(bg, `UPDATE jobs SET status = 'queued', attempts = attempts - 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, job.ID)
 	case errors.As(err, new(permanent)) || job.Attempts >= maxAttempts:
-		log.Printf("jobs: %s #%d failed: %v", job.Kind, job.ID, err)
+		log.Printf("jobs: %s #%d (repository %d) failed: %v", job.Kind, job.ID, job.RepoID, err)
 		progress.Logf("failed: %v", err)
 		_, err = q.DB.ExecContext(bg, `UPDATE jobs SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, err.Error(), job.ID)
 	default:
 		backoff := 30 << (job.Attempts - 1) // 30s, 60s, ...
-		log.Printf("jobs: %s #%d attempt %d failed, retrying in %ds: %v", job.Kind, job.ID, job.Attempts, backoff, err)
+		log.Printf("jobs: %s #%d (repository %d) attempt %d failed, retrying in %ds: %v", job.Kind, job.ID, job.RepoID, job.Attempts, backoff, err)
 		progress.Logf("attempt failed, retrying in %ds: %v", backoff, err)
 		_, err = q.DB.ExecContext(bg, `UPDATE jobs SET status = 'queued', error = ?, run_after = datetime('now', ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 			err.Error(), fmt.Sprintf("+%d seconds", backoff), job.ID)

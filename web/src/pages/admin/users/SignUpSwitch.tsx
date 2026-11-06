@@ -2,9 +2,9 @@ import { useId, useState } from 'react'
 import { setSignUp } from '../../../api/admin/users'
 import { getSignUp } from '../../../api/auth'
 import { Switch } from '../../../components/ui/controls/switch'
+import { LoadError } from '../../../components/ui/feedback/load-error'
 import { Label } from '../../../components/ui/form/label'
 import { useApi } from '../../../lib/useApi'
-import { LoadError } from '../LoadError'
 
 /** Whether visitors may create their own account, and what such an account gets. */
 export function SignUpSwitch() {

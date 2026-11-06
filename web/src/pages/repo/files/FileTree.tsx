@@ -4,7 +4,7 @@ import { cn } from '../../../lib/style/cn'
 import type { FileEntry } from '../../../types/repo/code'
 import { ancestors, buildTree, type Dir } from './tree'
 
-const row = 'flex w-full items-center gap-1.5 rounded-sm px-1.5 py-[3px] text-left font-mono text-[12.5px] whitespace-nowrap text-muted-foreground hover:bg-accent hover:text-foreground'
+const row = 'flex w-full items-center gap-1.5 rounded-sm px-1.5 py-[3px] text-left font-mono text-[12.5px] whitespace-nowrap text-muted-foreground hover:bg-accent/50 hover:text-foreground'
 
 export function FileTree({ files, active, onOpen }: { files: FileEntry[]; active: string | null; onOpen: (path: string) => void }) {
   const root = useMemo(() => buildTree(files), [files])
@@ -31,7 +31,7 @@ export function FileTree({ files, active, onOpen }: { files: FileEntry[]; active
     }),
     ...[...dir.files].sort().map((f) => ( // copy: the tree is memoized
       <li key={prefix + f}>
-        <button className={cn(row, active === prefix + f && 'bg-accent text-foreground shadow-[inset_2px_0_0_var(--brand)]')} style={{ paddingLeft: 24 + depth * 14 }}
+        <button className={cn(row, active === prefix + f && 'bg-accent font-medium text-foreground hover:bg-accent forced-colors:border [&>svg]:text-brand')} style={{ paddingLeft: 24 + depth * 14 }}
           aria-current={active === prefix + f ? 'page' : undefined} onClick={() => onOpen(prefix + f)}>
           <FileIcon className="size-3.5 shrink-0" />
           {f}

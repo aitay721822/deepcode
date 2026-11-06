@@ -219,6 +219,9 @@ func TestOpenBox(t *testing.T) {
 	if plain, err := second.Open(first.Seal("token")); err != nil || plain != "token" {
 		t.Fatalf("the key changed between starts: %q %v", plain, err)
 	}
+	if first.Seal("token") == first.Seal("token") {
+		t.Fatal("two seals of one token match: the nonce repeats")
+	}
 	a, _ := OpenBox(dir, "pass phrase")
 	b, _ := OpenBox(t.TempDir(), "pass phrase")
 	if plain, err := b.Open(a.Seal("token")); err != nil || plain != "token" {

@@ -74,6 +74,29 @@ func TestEmbedAnswerSize(t *testing.T) {
 	}
 }
 
+// TestEmbedOrder: vectors are placed by their index, whatever order the server
+// lists them in; the key goes as a bearer token; a refused request (4xx) is
+// not tried again.
+func TestEmbedOrder(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Header.Get("Authorization") != "Bearer k" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Write([]byte(`{"data":[{"index":1,"embedding":[2]},{"index":0,"embedding":[1]}]}`))
+	}))
+	defer srv.Close()
+	vecs, err := (&OpenAI{BaseURL: srv.URL, APIKey: "k", ModelName: "m"}).Embed(context.Background(), []string{"a", "b"})
+	if err != nil || len(vecs) != 2 || vecs[0][0] != 1 || vecs[1][0] != 2 {
+		t.Fatalf("got %v %v", vecs, err)
+	}
+	if _, err := (&OpenAI{BaseURL: srv.URL, APIKey: "wrong", ModelName: "m"}).Embed(context.Background(), []string{"a"}); err == nil || calls.Load() != 2 {
+		t.Fatalf("a refused key: %v, after %d requests in all", err, calls.Load())
+	}
+}
+
 // TestThrottleForgetsAbandoned: callers that give up waiting for their turn
 // leave no gap behind, so the next caller is not pushed past its timeout; turns
 // stay spaced, and a caller that gave up before it came takes none.
@@ -117,6 +140,24 @@ func TestStreamErrorMasked(t *testing.T) {
 	_, err := (&OpenAI{BaseURL: srv.URL, APIKey: key, ModelName: "m"}).Generate(context.Background(), nil)
 	if err == nil || strings.Contains(err.Error(), key[:8]) || len(err.Error()) > 2048 {
 		t.Fatalf("stream error: %.80v", err)
+	}
+}
+
+// TestTimeoutNamed: a request that outlasts Timeout fails naming the model and
+// DEEPCODE_LLM_TIMEOUT, not with a bare "context deadline exceeded", and still
+// counts as a deadline.
+func TestTimeoutNamed(t *testing.T) {
+	answer := make(chan struct{}) // never, until the test ends (a handler that reads no body hears no disconnect)
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-answer }))
+	defer srv.Close()
+	defer close(answer)
+	c := &OpenAI{BaseURL: srv.URL, ModelName: "m", Timeout: 50 * time.Millisecond}
+	_, chat := c.Generate(context.Background(), nil)
+	_, embed := c.Embed(context.Background(), []string{"x"})
+	for _, err := range []error{chat, embed} {
+		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "from m within DEEPCODE_LLM_TIMEOUT") {
+			t.Fatalf("past the timeout: %v", err)
+		}
 	}
 }
 

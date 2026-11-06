@@ -9,9 +9,10 @@ import (
 )
 
 // Embed returns one vector per text, in input order.
-func (c *OpenAI) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+func (c *OpenAI) Embed(ctx context.Context, texts []string) (_ [][]float32, err error) {
 	ctx, cancel := c.withTimeout(ctx)
 	defer cancel()
+	defer func() { err = cause(ctx, err) }() // before cancel, which would end ctx too
 	resp, err := c.post(ctx, "/embeddings", map[string]any{"model": c.ModelName, "input": texts})
 	if err != nil {
 		return nil, err

@@ -5,7 +5,7 @@ import { ThemeToggle } from './ThemeToggle'
 
 export function Header({ repo, children }: { repo?: Pick<Repo, 'id' | 'owner' | 'name'>; children?: ReactNode }) {
   return (
-    <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b bg-background/85 px-4 backdrop-blur-md min-[900px]:px-6">
+    <header className="sticky top-0 z-20 print:hidden flex h-16 items-center justify-between gap-3 border-b bg-background/85 px-4 backdrop-blur-md min-[900px]:px-6">
       {/* Registration crosses where the rule meets the frame's sides, once the frame stands clear of the window's edges. */}
       <span aria-hidden="true" className="reg-mark -bottom-[5px] -left-[5px] hidden min-[1580px]:block" />
       <span aria-hidden="true" className="reg-mark -right-[5px] -bottom-[5px] hidden min-[1580px]:block" />

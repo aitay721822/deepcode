@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/storage"
@@ -102,6 +103,9 @@ func TestRunRecordsOutcomes(t *testing.T) {
 	if w := wait(j.ID); j.Status != "queued" || j.Attempts != 1 || j.Error != "timeout" || j.Stage != "embed" || j.Progress != 3 || w < 20 || w > 30 {
 		t.Fatalf("transient failure: %+v (runs again in %ds)", j, w)
 	}
+	if _, ok := q.claim(ctx); ok {
+		t.Fatal("claimed a job before its backoff ended")
+	}
 	db.Exec(`UPDATE jobs SET run_after = CURRENT_TIMESTAMP WHERE id = ?`, j.ID)
 	j = runOne(flaky)
 	if w := wait(j.ID); j.Status != "queued" || j.Attempts != 2 || w < 50 || w > 60 {
@@ -121,10 +125,22 @@ func TestRunRecordsOutcomes(t *testing.T) {
 	if j := runOne(func(context.Context, Job, Progress) error { panic("bad file") }); j.Error != "panic: bad file" {
 		t.Fatalf("panic: %+v", j)
 	}
+
+	// One past the job timeout says so, whatever the step it cut short made of it.
+	q.Timeout = 10 * time.Millisecond
+	q.EnqueueIndex(ctx, 1, "slow", "")
+	slow := func(ctx context.Context, _ Job, _ Progress) error {
+		<-ctx.Done()
+		return fmt.Errorf("parse: %w", ctx.Err())
+	}
+	if j := runOne(slow); !strings.HasPrefix(j.Error, "the job ran past DEEPCODE_JOB_TIMEOUT") {
+		t.Fatalf("past the job timeout: %+v", j)
+	}
 }
 
-// TestPrune: jobs that finished over 30 days ago go, with their output; recent
-// and unfinished jobs stay, and so does each repository's newest job.
+// TestPrune: jobs that finished over 30 days ago go, with their output; ones
+// from 29 days ago and unfinished jobs stay, and so does each repository's
+// newest job.
 func TestPrune(t *testing.T) {
 	q, db := setup(t)
 	ctx := context.Background()
@@ -137,7 +153,7 @@ func TestPrune(t *testing.T) {
 	Progress{q, ids[0]}.Logf("output")
 	db.Exec(`UPDATE jobs SET status = 'succeeded', updated_at = datetime('now', '-31 days') WHERE id IN (?, ?)`, ids[0], only.ID)
 	db.Exec(`UPDATE jobs SET status = 'running', updated_at = datetime('now', '-31 days') WHERE id = ?`, ids[1])
-	db.Exec(`UPDATE jobs SET status = 'succeeded' WHERE id = ?`, ids[2])
+	db.Exec(`UPDATE jobs SET status = 'succeeded', updated_at = datetime('now', '-29 days') WHERE id = ?`, ids[2])
 	db.Exec(`UPDATE jobs SET status = 'failed', updated_at = datetime('now', '-40 days') WHERE id = ?`, ids[3])
 	q.prune(ctx)
 	var left []string
@@ -334,6 +350,11 @@ func TestOutputCapped(t *testing.T) {
 	lines, _ := q.Logs(ctx, j.ID, 0, maxLines+10)
 	if n := len(lines); n != maxLines+1 || lines[n-2].Line != "line" || !strings.Contains(lines[n-1].Line, "left out") {
 		t.Fatalf("%d lines, ending %+v", n, lines[max(0, n-2):])
+	}
+	// A line past maxLine bytes is cut, on a character's boundary.
+	Progress{q, j.ID}.Logf("%s", strings.Repeat("長", maxLine))
+	if long, _ := q.Logs(ctx, j.ID, lines[len(lines)-1].ID, 1); len(long) != 1 || len(long[0].Line) > maxLine+len("…") || !utf8.ValidString(long[0].Line) {
+		t.Fatalf("a long line: %+v", long)
 	}
 }
 

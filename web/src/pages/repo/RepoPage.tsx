@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getHealth } from '../../api/repo/repos'
 import { getWiki } from '../../api/repo/wiki'
 import { AskBox } from '../../components/chat/AskBox'
@@ -7,6 +7,7 @@ import { JobProgress } from '../../components/repo/JobProgress'
 import { isActive } from '../../components/repo/jobStage'
 import { RepoNotice } from '../../components/repo/RepoNotice'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/display/tabs'
+import { LoadError } from '../../components/ui/feedback/load-error'
 import { formatDate, shortSha } from '../../lib/format'
 import { navigate } from '../../lib/router'
 import { rise } from '../../lib/style/motion'
@@ -35,8 +36,11 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
     () => getWiki(repo!.id),
     wikiBusy ? 3000 : undefined,
   )
+  // Pick up the last page once generation stops; on the first render the wiki is being fetched already.
+  const wasBusy = useRef(wikiBusy)
   useEffect(() => {
-    if (!wikiBusy) reloadWiki() // pick up the last page once generation stops
+    if (wasBusy.current && !wikiBusy) reloadWiki()
+    wasBusy.current = wikiBusy
   }, [wikiBusy])
 
   const file = params.get('file')
@@ -77,7 +81,7 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
   return (
     <Frame repo={repo}>
       <div className="grid grid-cols-1 min-[900px]:grid-cols-[260px_minmax(0,1fr)] min-[1240px]:grid-cols-[300px_minmax(0,1fr)_300px]">
-        <aside className="max-h-[45dvh] overflow-y-auto border-b px-4 pt-7 pb-4 min-[900px]:sticky min-[900px]:top-16 min-[900px]:h-[calc(100dvh-4rem)] min-[900px]:max-h-none min-[900px]:border-r min-[900px]:border-b-0 min-[900px]:pr-[18px] min-[900px]:pb-36 min-[900px]:pl-6">
+        <aside aria-label="Wiki pages and files" className="max-h-[45dvh] print:hidden overflow-y-auto overscroll-contain border-b px-4 pt-7 pb-4 min-[900px]:sticky min-[900px]:top-16 min-[900px]:h-[calc(100dvh-4rem)] min-[900px]:max-h-none min-[900px]:border-r min-[900px]:border-b-0 min-[900px]:pr-[18px] min-[900px]:pb-36 min-[900px]:pl-6">
           {ready && <p className="mb-5 font-mono text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Indexed {formatDate(ready.indexedAt)} · <span className="text-foreground normal-case">{shortSha(ready.commitSha)}</span></p>}
           {/* Sync lives in the rail; once the rail is hidden, here. */}
           {syncCard && <div className="mb-4 min-[1240px]:hidden">{syncCard}</div>}
@@ -97,7 +101,9 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
           )}
         </aside>
 
-        <main className="mx-auto w-full max-w-[860px] px-4 pt-6 pb-44 min-[900px]:px-12 min-[900px]:pt-9">
+        <main tabIndex={-1} className="mx-auto w-full max-w-[860px] px-4 pt-6 pb-44 outline-none min-[900px]:px-12 min-[900px]:pt-9">
+          {/* A poll that failed keeps the repository as it was: say so, or a job's card would seem to stand still. */}
+          <LoadError className="mb-6" error={error} onRetry={reload} />
           <AnimatePresence mode="wait" initial={false}>
             <motion.div key={!ready ? 'indexing' : file ? `file:${fileSnapshot}:${file}` : page ? `page:${page.slug}` : 'wiki'} className="space-y-8" {...rise}>
               {!ready ? (
@@ -123,7 +129,7 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
           </AnimatePresence>
         </main>
 
-        <aside className="sticky top-16 hidden h-[calc(100dvh-4rem)] overflow-y-auto px-6 pt-7 pb-36 min-[1240px]:block">
+        <aside aria-label="Sync and outline" className="sticky top-16 hidden print:hidden h-[calc(100dvh-4rem)] overflow-y-auto px-6 pt-7 pb-36 min-[1240px]:block">
           {syncCard && <div className="mb-7">{syncCard}</div>}
           {!file && page?.content && toc.length > 0 && <Toc items={toc} />}
         </aside>

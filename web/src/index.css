@@ -3,8 +3,15 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
-/* dark: follows the .dark class index.html (before the first paint) and the theme switch put on <html>. */
-@custom-variant dark (&:where(.dark, .dark *));
+/* dark: follows the .dark class index.html (before the first paint) and the theme switch put on <html>; on screen
+   only, since a page prints on paper (below). */
+@custom-variant dark {
+  @media screen {
+    &:where(.dark, .dark *) {
+      @slot;
+    }
+  }
+}
 
 /*
  * The look: an engineering manual in print. Warm paper (light) or deep ink (dark), hairline rules,
@@ -27,7 +34,7 @@
   --secondary-foreground: #1c1a16;
   --muted: #ebe5d8;
   --muted-foreground: #5d574b;
-  --accent: #e8e1d2;
+  --accent: #e8e1d2; /* hover, and the grey that marks the current or highlighted item */
   --accent-foreground: #1c1a16;
   --destructive: #c0283e;
   --destructive-foreground: #ffffff;
@@ -56,46 +63,49 @@
   --syn-type: #0f6d66;
 }
 
-/* Dark: ink, the default look. */
-.dark {
-  color-scheme: dark;
-  --background: #12110f;
-  --foreground: #ece6da;
-  --card: #181714;
-  --card-foreground: #ece6da;
-  --popover: #1c1a17;
-  --popover-foreground: #ece6da;
-  --primary: #ece6da;
-  --primary-foreground: #12110f;
-  --secondary: #211f1b;
-  --secondary-foreground: #ece6da;
-  --muted: #1e1c19;
-  --muted-foreground: #a59e90;
-  --accent: #24221e;
-  --accent-foreground: #ece6da;
-  --destructive: #f4677a;
-  --destructive-foreground: #12110f;
-  --border: #2c2a25;
-  --input: #6e675b;
-  --ring: #ff7a3d;
-  --brand: #ff7a3d;
-  --brand-foreground: #12110f;
-  --faint: #77705f;
-  --warning: #ff7a3d;
-  --success: #5cc58a;
-  --code: #0d0c0b;
-  --chip: #1f1d1a;
-  --band: rgb(255 122 61 / 0.13);
-  --overlay: rgb(0 0 0 / 0.65);
-  --grid: rgb(236 230 218 / 0.08);
-  --hatch: rgb(255 122 61 / 0.18);
-  --grain: 0.06;
-  --syn-keyword: #ff8f61;
-  --syn-string: #a9cf8a;
-  --syn-comment: #968f81;
-  --syn-title: #e9c46a;
-  --syn-number: #7fb8e6;
-  --syn-type: #6cc6bd;
+/* Dark: ink, the default look on screen. A page prints with the paper tokens: pale text would print on
+   white paper. */
+@media screen {
+  .dark {
+    color-scheme: dark;
+    --background: #12110f;
+    --foreground: #ece6da;
+    --card: #181714;
+    --card-foreground: #ece6da;
+    --popover: #1c1a17;
+    --popover-foreground: #ece6da;
+    --primary: #ece6da;
+    --primary-foreground: #12110f;
+    --secondary: #211f1b;
+    --secondary-foreground: #ece6da;
+    --muted: #1e1c19;
+    --muted-foreground: #a59e90;
+    --accent: #2b2925;
+    --accent-foreground: #ece6da;
+    --destructive: #f4677a;
+    --destructive-foreground: #12110f;
+    --border: #2c2a25;
+    --input: #6e675b;
+    --ring: #ff7a3d;
+    --brand: #ff7a3d;
+    --brand-foreground: #12110f;
+    --faint: #77705f;
+    --warning: #ff7a3d;
+    --success: #5cc58a;
+    --code: #0d0c0b;
+    --chip: #1f1d1a;
+    --band: rgb(255 122 61 / 0.13);
+    --overlay: rgb(0 0 0 / 0.65);
+    --grid: rgb(236 230 218 / 0.08);
+    --hatch: rgb(255 122 61 / 0.18);
+    --grain: 0.06;
+    --syn-keyword: #ff8f61;
+    --syn-string: #a9cf8a;
+    --syn-comment: #968f81;
+    --syn-title: #e9c46a;
+    --syn-number: #7fb8e6;
+    --syn-type: #6cc6bd;
+  }
 }
 
 @theme inline {

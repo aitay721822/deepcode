@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"deepcode/internal/platform/jobs"
@@ -16,7 +17,8 @@ import (
 
 const (
 	fileBatch  = 100
-	maxLineLen = 4000 // longer lines mean minified or generated code
+	batchBytes = 8 << 20 // a batch's text, symbols and chunks are held at once
+	maxLineLen = 4000    // longer lines mean minified or generated code
 )
 
 type file struct {
@@ -63,8 +65,8 @@ func (ix *Indexer) parse(ctx context.Context, dir, sha string, snap, prev int64,
 
 	progress.Logf("%d of %d files are indexable", len(files), len(entries))
 	var parsedN, copiedN, skippedN int
-	for i := 0; i < len(files); i += fileBatch {
-		batch := files[i:min(i+fileBatch, len(files))]
+	for i := 0; i < len(files); {
+		batch := nextBatch(files, i)
 		var parsed []parsedFile
 		var copies []string
 		for _, f := range batch {
@@ -87,10 +89,22 @@ func (ix *Indexer) parse(ctx context.Context, dir, sha string, snap, prev int64,
 			return err
 		}
 		parsedN, copiedN, skippedN = parsedN+len(parsed), copiedN+len(copies), skippedN+len(batch)-len(parsed)-len(copies)
-		progress.Stage("parse", i+len(batch), len(files))
+		i += len(batch)
+		progress.Stage("parse", i, len(files))
 	}
 	progress.Logf("parsed %d files, copied %d unchanged since the last snapshot, skipped %d (stored before, binary or minified)", parsedN, copiedN, skippedN)
 	return nil
+}
+
+// nextBatch is the batch starting at files[i]: at most fileBatch files, and
+// batchBytes past the first, which it always holds.
+func nextBatch(files []file, i int) []file {
+	n, size := 1, files[i].size
+	for i+n < len(files) && n < fileBatch && size+files[i+n].size <= batchBytes {
+		size += files[i+n].size
+		n++
+	}
+	return files[i : i+n]
 }
 
 // indexable keeps the files worth indexing and enforces the size limits.
@@ -99,7 +113,7 @@ func (ix *Indexer) indexable(entries []git.TreeEntry) ([]file, error) {
 	var total int64
 	for _, e := range entries {
 		lang, ok := analyzer.Detect(e.Path)
-		if !ok || e.Size == 0 || e.Size > ix.Limits.MaxFileBytes {
+		if !ok || e.Size == 0 || e.Size > ix.Limits.MaxFileBytes || strings.ContainsFunc(e.Path, hidden) {
 			continue
 		}
 		files = append(files, file{path: e.Path, sha: e.SHA, lang: lang, size: e.Size})
@@ -113,6 +127,14 @@ func (ix *Indexer) indexable(entries []git.TreeEntry) ([]file, error) {
 	}
 	return files, nil
 }
+
+// hidden reports a rune that keeps a path from reading as it is: a control or
+// format character, such as the bidirectional controls that make
+// "evil\u202egnp.go" read as a picture's name ("Trojan Source"), or a byte
+// that is not UTF-8 (read as U+FFFD), which JSON would send as U+FFFD too, so
+// two such paths would look alike and neither would open. A path holding one
+// is not indexed, so no tree, citation or prompt shows it.
+func hidden(r rune) bool { return r == utf8.RuneError || unicode.In(r, unicode.Cc, unicode.Cf) }
 
 // parseFile normalises a blob to UTF-8 text with LF endings and extracts its
 // symbols and chunks; binary and minified files are rejected.

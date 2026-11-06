@@ -297,6 +297,47 @@ func TestParseSteering(t *testing.T) {
 	}
 }
 
+// TestRunOutcomes: a run that fails, or panics, leaves the wiki failed rather
+// than generating, so it can be tried again; a plan that is not JSON is one
+// overview page; a wiki that is ready is left as it is.
+func TestRunOutcomes(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`)
+	run := func(model *ai.OpenAI) (string, error) {
+		g := &Generator{DB: db, Catalog: &catalog.Catalog{DB: db, Queue: &jobs.Queue{DB: db}}, Retriever: &retrieval.Retriever{DB: db}, Chat: model}
+		err := g.Run(ctx, 1, "abc", jobs.Progress{})
+		var status string
+		db.QueryRow(`SELECT wiki_status FROM snapshots WHERE id = 1`).Scan(&status)
+		return status, err
+	}
+	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) }))
+	defer refused.Close()
+	// The plan is refused; then, with no model at all, planning panics.
+	for _, model := range []*ai.OpenAI{{BaseURL: refused.URL, ModelName: "m"}, nil} {
+		if status, err := run(model); err == nil || status != catalog.WikiFailed {
+			t.Fatalf("a failed run: %v, wiki %q", err, status)
+		}
+	}
+	prose := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"I would rather not plan."}}]}`+"\n\ndata: [DONE]\n\n")
+	}))
+	defer prose.Close()
+	if status, err := run(&ai.OpenAI{BaseURL: prose.URL, ModelName: "m"}); err != nil || status != catalog.WikiReady {
+		t.Fatalf("a plan that is not JSON: %v, wiki %q", err, status)
+	}
+	if pages, err := (&Generator{DB: db}).pages(ctx, 1); err != nil || len(pages) != 1 || pages[0].title != "Overview" {
+		t.Fatalf("pages: %+v %v", pages, err)
+	}
+	// Even a page found empty: a run that went on would write it.
+	db.Exec(`UPDATE wiki_pages SET content = ''`)
+	if status, err := run(nil); err != nil || status != catalog.WikiReady {
+		t.Fatalf("a ready wiki: %v, wiki %q", err, status)
+	}
+	if pages, _ := (&Generator{DB: db}).pages(ctx, 1); len(pages) != 1 || pages[0].content != "" {
+		t.Fatalf("a ready wiki was written again: %+v", pages)
+	}
+}
+
 // TestLoadPicksSnapshot: a finished wiki wins over the published snapshot's
 // pages so far, the published snapshot over newer unfinished ones, and a
 // pruned snapshot never shows.
@@ -338,6 +379,10 @@ func TestParsePlan(t *testing.T) {
 	}
 	if parsePlan("no json here") != nil {
 		t.Fatal("prose without JSON produced a plan")
+	}
+	many := `{"pages":[` + strings.Repeat(`{"title":"Page","query":"q"},`, maxPages) + `{"title":"One too many","query":"q"}]}`
+	if got := parsePlan(many); len(got) != maxPages {
+		t.Fatalf("%d pages planned, want at most %d", len(got), maxPages)
 	}
 	long := parsePlan(fmt.Sprintf(`{"pages":[{"title":%q,"query":%q}]}`, strings.Repeat("標", 200), strings.Repeat("q", 600)))
 	if len(long) != 1 || len([]rune(long[0].Title)) != maxTitle || len(long[0].Query) != maxQuery {

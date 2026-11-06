@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { getMe, logout as signOut } from '../../api/auth'
 import { setUnauthorizedHandler } from '../../api/client'
 import { Notice } from '../../components/layout/Notice'
@@ -9,7 +9,7 @@ import type { Me, Permission } from '../../types/auth'
 import { SessionContext } from './session'
 
 /**
- * Loads the signed-in user (GET /api/auth/me) and shares it. Every page but /login and /signup waits for it;
+ * Loads the signed-in user (GET /api/auth/me), again whenever the tab is shown, and shares it. Every page but /login and /signup waits for it;
  * without a session (no cookie, a 401 later, signing out) the reader goes to /login?next=<here>.
  * Only the first load's failure stands in for the app: a later one keeps the user the app shows.
  */
@@ -18,14 +18,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const publicPage = ['/login', '/signup'].includes(path.split('?')[0]) // pages for the signed out
   const [user, setUser] = useState<Me | null>() // undefined while loading
   const [error, setError] = useState('') // the first load failed
+  // Signing out is counted: a refresh that started before it cannot put the user back when its answer comes.
+  const signOuts = useRef(0)
   // A 401 signs out; any other failure rejects and leaves the user as it was.
   const refresh = useCallback(async () => {
+    const before = signOuts.current
+    let me: Me | null = null
     try {
-      setUser(await getMe())
+      me = await getMe()
     } catch (e) {
       if ((e as { status?: number }).status !== 401) throw e
-      setUser(null)
     }
+    if (before === signOuts.current) setUser(me)
   }, [])
   const load = () => {
     setError('')
@@ -34,6 +38,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setUnauthorizedHandler(() => setUser(null))
     load()
+    // Another tab may have signed out, or in as someone else, or this page come back from the back/forward cache:
+    // look again whenever it is shown. A failure keeps the user the app shows.
+    const again = () => document.visibilityState === 'visible' && refresh().catch(() => {})
+    const restored = (e: PageTransitionEvent) => e.persisted && again()
+    document.addEventListener('visibilitychange', again)
+    addEventListener('pageshow', restored)
+    return () => {
+      document.removeEventListener('visibilitychange', again)
+      removeEventListener('pageshow', restored)
+    }
   }, [])
   useEffect(() => {
     if (user === null && !publicPage) navigate(`/login?next=${encodeURIComponent(path)}`, { replace: true })
@@ -44,6 +58,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     refresh,
     logout: async () => {
       await signOut().catch(() => {}) // signed out here either way
+      signOuts.current++
       setUser(null)
       navigate('/login')
     },

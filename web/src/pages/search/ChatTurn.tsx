@@ -29,10 +29,10 @@ export const ChatTurn = memo(function ChatTurn({ turn, first, repo, sha, onCite 
   return (
     <motion.article initial={rise.initial} animate={rise.animate}>
       {first ? <h1 className={`mt-5 text-[clamp(1.75rem,3vw,2.3rem)] tracking-[-0.02em] ${question}`}>{turn.question}</h1> : <h2 className={`mt-11 text-[25px] tracking-[-0.015em] ${question}`}>{turn.question}</h2>}
-      <Card className="gap-0 border-l-2 border-l-brand px-5 py-4">
-        {asked && <Status className="sr-only">{progress[turn.status]}</Status>}
+      <Card className="gap-0 px-5 py-4">
+        {asked && <Status className="sr-only select-none">{progress[turn.status]}</Status>}
         {turn.answer ? (
-          <Markdown text={shown.text} citations={cited} repo={repo} onCite={onCite} />
+          <Markdown text={shown.text} citations={cited} repo={repo} onCite={onCite} top={first ? 'h2' : 'h3'} />
         ) : turn.status === 'searching' || turn.status === 'answering' ? <SkeletonText /> : null}
         {turn.status === 'error' && <p className="text-sm text-destructive" role={asked ? 'alert' : undefined}>{turn.error}</p>}
         {turn.status === 'interrupted' && <Status className="text-[13px] text-muted-foreground">Answer interrupted.</Status>}

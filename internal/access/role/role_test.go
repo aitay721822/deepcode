@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -52,6 +53,9 @@ func TestGrants(t *testing.T) {
 	importers, _ := st.Create(ctx, Input{Name: str("importers"), Permissions: perms(RepoRead, RepoImport), RepositoryIDs: ids(1)})
 	chatters, _ := st.Create(ctx, Input{Name: str("chat on 2"), Permissions: perms(RepoChat), RepositoryIDs: ids(2)})
 	dev := user(t, db, "dev", importers.ID, chatters.ID)
+	if r, _ := st.Get(ctx, importers.ID); r.UserCount != 1 {
+		t.Fatalf("importers counts %d users, want 1", r.UserCount)
+	}
 	g, err := st.GrantsOf(ctx, dev)
 	switch {
 	case err != nil:
@@ -80,6 +84,10 @@ func TestGrants(t *testing.T) {
 	if !admin.AllRepositories() || !admin.CanOn(RepoSync, 2) || len(admin.Permissions()) != len(Permissions) || admin.ImportRoles() != nil {
 		t.Fatalf("admin: %+v", admin)
 	}
+	syncAll, _ := st.Create(ctx, Input{Name: str("sync everything"), Permissions: perms(RepoSync), AllRepositories: new(true)})
+	if g, _ := st.GrantsOf(ctx, user(t, db, "syncer", syncAll.ID)); g.AllRepositories() || !g.CanOn(RepoSync, 2) {
+		t.Fatalf("every repository without repo.read: %+v", g)
+	}
 	if none, _ := st.GrantsOf(ctx, user(t, db, "nobody")); none.Can(RepoRead) || len(none.Permissions()) != 0 {
 		t.Fatalf("a user without roles: %+v", none)
 	}
@@ -92,6 +100,11 @@ func TestRules(t *testing.T) {
 	ctx := context.Background()
 	if _, err := st.Update(ctx, Admin, Input{Permissions: perms(RepoRead)}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("narrowed the admin role: %v", err)
+	}
+	for _, in := range []Input{{AllRepositories: new(false)}, {RepositoryIDs: ids(1)}} {
+		if _, err := st.Update(ctx, Admin, in); !errors.Is(err, ErrConflict) {
+			t.Fatalf("narrowed the admin role to some repositories: %v", err)
+		}
 	}
 	if _, err := st.Update(ctx, 2, Input{Name: str("members")}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("renamed a built-in role: %v", err)
@@ -125,6 +138,10 @@ func TestRules(t *testing.T) {
 	if r, err = st.Update(ctx, r.ID, Input{Description: str("read only"), RepositoryIDs: ids(2, 1)}); err != nil ||
 		r.Description != "read only" || len(r.Permissions) != 1 || len(r.RepositoryIDs) != 2 {
 		t.Fatalf("update kept what it was not given: %+v %v", r, err)
+	}
+	if r, err = st.Update(ctx, r.ID, Input{Permissions: perms(RepoChat), RepositoryIDs: ids(1)}); err != nil ||
+		!slices.Equal(r.Permissions, []Permission{RepoChat}) || !slices.Equal(r.RepositoryIDs, []int64{1}) {
+		t.Fatalf("an update added to the role's grants instead of replacing them: %+v %v", r, err)
 	}
 	if err := st.Delete(ctx, r.ID); err != nil {
 		t.Fatal(err)

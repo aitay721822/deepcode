@@ -35,7 +35,7 @@ type Stream struct {
 func OpenStream(c *gin.Context) *Stream {
 	h := c.Writer.Header()
 	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-cache")
+	h.Set("Cache-Control", "no-store")
 	h.Set("X-Accel-Buffering", "no") // keeps nginx from holding events back
 	c.Status(http.StatusOK)
 	c.Writer.Flush()

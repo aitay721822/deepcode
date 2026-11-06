@@ -5,6 +5,7 @@ import { providerName } from '../../components/repo/provider/providerName'
 import { sourceUrl } from '../../components/repo/sourceLinks'
 import { CodeView } from '../../components/source/CodeView'
 import { Button } from '../../components/ui/controls/button'
+import { LoadError } from '../../components/ui/feedback/load-error'
 import { SkeletonText } from '../../components/ui/feedback/skeleton'
 import { useApi } from '../../lib/useApi'
 import type { ConversationRef } from '../../types/repo/chat'
@@ -16,7 +17,7 @@ import type { Repo } from '../../types/repo/repo'
  * Memoised: an answer streaming beside it does not draw the whole file again on every frame.
  */
 export const CitedFile = memo(function CitedFile({ repo, conv, citation }: { repo: Repo; conv: ConversationRef; citation: Citation }) {
-  const { data, error } = useApi(`${repo.id}:${conv.snapshotId}:${citation.path}`, () => getFile(repo.id, citation.path, conv.snapshotId))
+  const { data, error, reload } = useApi(`${repo.id}:${conv.snapshotId}:${citation.path}`, () => getFile(repo.id, citation.path, conv.snapshotId))
   const [copy, setCopy] = useState<'' | 'Copied' | 'Copy failed'>('')
   useEffect(() => {
     if (!copy) return
@@ -42,12 +43,11 @@ export const CitedFile = memo(function CitedFile({ repo, conv, citation }: { rep
         <span className="sr-only" role="status">{copy}</span>
       </div>
       {error ? (
-        <p className="p-4 text-sm text-destructive" role="alert">
-          {error}.{' '}
-          <a className="text-brand underline-offset-4 hover:underline" href={sourceUrl(repo, conv.commitSha, citation.path, citation.startLine, citation.endLine)} target="_blank" rel="noreferrer">
+        <LoadError className="m-0 p-4" error={error} onRetry={reload}>
+          <a className="text-sm text-brand underline-offset-4 hover:underline" href={sourceUrl(repo, conv.commitSha, citation.path, citation.startLine, citation.endLine)} target="_blank" rel="noreferrer">
             Open on {providerName(repo.provider)}
           </a>
-        </p>
+        </LoadError>
       ) : data ? (
         <CodeView label={citation.path} content={data.content} language={data.language} startLine={citation.startLine} endLine={citation.endLine} />
       ) : (

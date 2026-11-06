@@ -55,6 +55,44 @@ func TestListenKeepsUp(t *testing.T) {
 	}
 }
 
+// TestSubscribeSurvives: a handler that panics, or a payload it cannot read,
+// is logged and its message acknowledged; later messages still come.
+func TestSubscribeSurvives(t *testing.T) {
+	b, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan int64, 3)
+	Subscribe(b, "test", TopicJobOutput, func(_ context.Context, e JobChanged) error {
+		if e.JobID == 1 {
+			panic("a bad job")
+		}
+		got <- e.JobID
+		return nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go b.Run(ctx)
+	<-b.Running()
+	b.Publish(TopicJobOutput, JobChanged{JobID: 1})
+	b.Publish(TopicJobOutput, "not a job")
+	b.Publish(TopicJobOutput, JobChanged{JobID: 2})
+	select {
+	case id := <-got:
+		if id != 2 {
+			t.Fatalf("got job %d", id)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing came after the panic")
+	}
+	// An unacknowledged message is sent again and again, which keeps its delivery goroutine.
+	for deadline := time.Now().Add(5 * time.Second); delivering(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("a message was not acknowledged")
+		}
+	}
+}
+
 // delivering says whether Watermill still has goroutines handing messages over.
 func delivering() bool {
 	buf := make([]byte, 1<<20)

@@ -166,6 +166,46 @@ func TestUndoAfterWindow(t *testing.T) {
 	}
 }
 
+// TestLimiterWindow: a key at its limit is refused until its window ends.
+func TestLimiterWindow(t *testing.T) {
+	l := limiter{max: 1, window: time.Minute}
+	c := l.take("k")
+	if l.take("k") != nil {
+		t.Fatal("a second attempt within the window")
+	}
+	c.since = c.since.Add(-time.Minute) // the window ends
+	if l.take("k") == nil {
+		t.Fatal("refused once the window ended")
+	}
+}
+
+// TestSessionExpiry: a session lasts TTL; past it, it signs no one in, and the
+// next sign-in sweeps it away.
+func TestSessionExpiry(t *testing.T) {
+	s, db := setup(t) // TTL: an hour
+	ctx := context.Background()
+	user(t, s, "dev")
+	token, _, err := s.Login(ctx, "dev", "password-1", "1.1.1.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if db.QueryRow(`SELECT unixepoch(expires_at) - unixepoch('now') FROM sessions`).Scan(&left); left < 3590 || left > 3600 {
+		t.Fatalf("the session ends in %ds, want an hour", left)
+	}
+	db.Exec(`UPDATE sessions SET expires_at = datetime('now', '-1 second')`)
+	if _, err := s.Authenticate(ctx, token); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("an expired session signed in: %v", err)
+	}
+	if _, _, err := s.Login(ctx, "dev", "password-1", "1.1.1.1"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if db.QueryRow(`SELECT count(*) FROM sessions`).Scan(&n); n != 1 {
+		t.Fatalf("%d sessions after signing in again, want the expired one swept", n)
+	}
+}
+
 // TestLoginBurst: parallel guesses are counted as they start, so no more of
 // them try a password than the limit allows.
 func TestLoginBurst(t *testing.T) {

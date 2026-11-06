@@ -46,7 +46,7 @@ export function SignUpPage({ next }: { next: string | null }) {
       }
     }}>
       <Field label="Username" hint="2 to 32 letters, digits, '.', '_' or '-', starting with a letter or digit">
-        <Input autoComplete="username" autoFocus required value={username} onChange={(e) => setUsername(e.target.value)} />
+        <Input autoComplete="username" autoCapitalize="none" spellCheck={false} autoFocus required value={username} onChange={(e) => setUsername(e.target.value)} />
       </Field>
       <Field label="Display name" hint="Optional, up to 64 characters; your username otherwise">
         <Input autoComplete="name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />

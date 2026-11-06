@@ -2,18 +2,27 @@ package retrieval
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/storage"
 )
 
 func TestFuse(t *testing.T) {
 	got := fuse([]int64{1, 2, 3}, []int64{3, 4}, []int64{3, 2})
 	if want := []int64{3, 2, 1, 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	// Two lists agreeing on a chunk outweigh one list's first place; a tie goes to the lower id.
+	if got, want := fuse([]int64{1, 5, 6, 2}, []int64{7, 8, 9, 2}), []int64{2, 1, 7, 5, 8, 6, 9}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
 }
@@ -27,25 +36,34 @@ func TestFTSQuery(t *testing.T) {
 	}
 }
 
-// TestReadme: the first two chunks of the top-level README, in order; a
-// file in a folder named readme is not the repository's README.
-func TestReadme(t *testing.T) {
+// seeded opens a scratch database that holds repository 1 at snapshot 1, then
+// runs the test's own inserts.
+func seeded(t *testing.T, inserts ...string) *sql.DB {
+	t.Helper()
 	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "r.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	for _, q := range []string{
+	t.Cleanup(func() { db.Close() })
+	for _, q := range append([]string{
 		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r')`,
 		`INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, 'sha')`,
-		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
-			(1, 'README.md', 40, 60, 'later', 'h1'), (1, 'README.md', 1, 20, 'intro', 'h2'), (1, 'README.md', 21, 39, 'usage', 'h3'),
-			(1, 'readme/guide.md', 1, 9, 'nested', 'h4'), (1, 'main.go', 1, 9, 'code', 'h5')`,
-	} {
+	}, inserts...) {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return db
+}
+
+// TestReadme: the first two chunks of the top-level README, in order; a
+// file in a folder named readme is not the repository's README.
+func TestReadme(t *testing.T) {
+	db := seeded(t,
+		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
+			(1, 'README.md', 40, 60, 'later', 'h1'), (1, 'README.md', 1, 20, 'intro', 'h2'), (1, 'README.md', 21, 39, 'usage', 'h3'),
+			(1, 'readme/guide.md', 1, 9, 'nested', 'h4'), (1, 'main.go', 1, 9, 'code', 'h5')`,
+	)
 	hits, err := (&Retriever{DB: db}).Readme(context.Background(), 1)
 	var got []string
 	for _, h := range hits {
@@ -59,24 +77,13 @@ func TestReadme(t *testing.T) {
 // TestFTSRanksCodeFirst: stemming lets "subscribers" find subscribe, and the
 // implementation outranks a test that repeats the words more often.
 func TestFTSRanksCodeFirst(t *testing.T) {
-	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "r.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	for _, q := range []string{
-		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r')`,
-		`INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, 'sha')`,
+	db := seeded(t,
 		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash)
 			VALUES (1, 'tests/store.test.ts', 1, 9, 'subscribe(a); subscribe(b); setState(1); expect(a).toHaveBeenCalled()', 'h1')`,
 		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash)
 			VALUES (1, 'src/store.ts', 1, 9, 'const setState = (next) => { state = next; listeners.forEach((l) => l(state)) }
 			const subscribe = (listener) => { listeners.add(listener) }', 'h2')`,
-	} {
-		if _, err := db.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
+	)
 	ids, err := (&Retriever{DB: db}).fts(context.Background(), 1, "How does setState notify subscribers?")
 	if err != nil {
 		t.Fatal(err)
@@ -98,22 +105,11 @@ func TestFTSRanksCodeFirst(t *testing.T) {
 // TestSymbolSearch: % and _ in a query match only themselves, and names that
 // start with the query come before shorter ones that merely contain it.
 func TestSymbolSearch(t *testing.T) {
-	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "r.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	for _, q := range []string{
-		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r')`,
-		`INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, 'sha')`,
+	db := seeded(t,
 		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES
 			(1, 'a.go', 'xa_', 'xa_', 'function', 1, 1), (1, 'a.go', 'a_bc', 'a_bc', 'function', 2, 2),
 			(1, 'a.go', 'a_', 'a_', 'function', 3, 3), (1, 'a.go', 'axb', 'axb', 'function', 4, 4)`,
-	} {
-		if _, err := db.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
+	)
 	hits, err := (&Retriever{DB: db}).Symbols(context.Background(), 1, "a_", 10)
 	var names []string
 	for _, h := range hits {
@@ -122,26 +118,20 @@ func TestSymbolSearch(t *testing.T) {
 	if err != nil || strings.Join(names, " ") != "a_ a_bc xa_" {
 		t.Fatalf("%v %v", names, err)
 	}
+	if hits, _ := (&Retriever{DB: db}).Symbols(context.Background(), 1, "a_", 2); len(hits) != 2 {
+		t.Fatalf("a limit of 2 gave %d", len(hits))
+	}
 }
 
-// TestSymbolNamesBounded: the first 32 names in a query are looked up, and
-// the 33rd is not.
-func TestSymbolNamesBounded(t *testing.T) {
-	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "r.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	for _, q := range []string{
-		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r')`,
-		`INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, 'sha')`,
-		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'main.go', 1, 9, 'func Target() {}', 'h1')`,
-		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'main.go', 'Target', 'Target', 'function', 1, 1)`,
-	} {
-		if _, err := db.Exec(q); err != nil {
-			t.Fatal(err)
-		}
-	}
+// TestSymbolChunks: names in a query find the chunks that define them, in any
+// case and longest name first; only the first 32 names are looked up.
+func TestSymbolChunks(t *testing.T) {
+	db := seeded(t,
+		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
+			(1, 'main.go', 1, 9, 'func Target() {}', 'h1'), (1, 'handler.go', 1, 9, 'func TargetHandler() {}', 'h2')`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES
+			(1, 'main.go', 'Target', 'Target', 'function', 1, 1), (1, 'handler.go', 'TargetHandler', 'TargetHandler', 'function', 1, 1)`,
+	)
 	var others []string
 	for i := range 32 {
 		others = append(others, fmt.Sprintf("Other%d", i))
@@ -152,5 +142,26 @@ func TestSymbolNamesBounded(t *testing.T) {
 	}
 	if late, _ := r.symbolChunks(context.Background(), 1, strings.Join(others, " ")+" Target"); len(late) != 0 {
 		t.Fatalf("the 33rd name was looked up: %v", late)
+	}
+	if ids, err := r.symbolChunks(context.Background(), 1, "target or targethandler"); err != nil || !reflect.DeepEqual(ids, []int64{2, 1}) {
+		t.Fatalf("got chunks %v %v, want TargetHandler's (2) before Target's (1)", ids, err)
+	}
+}
+
+// TestSearchWithoutEmbeddings: a server without /embeddings leaves search to
+// FTS5 and symbols, in fused order and cut to the limit.
+func TestSearchWithoutEmbeddings(t *testing.T) {
+	db := seeded(t,
+		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
+			(1, 'docs/notes.md', 1, 9, 'how subscribe is used', 'h1'), (1, 'src/other.ts', 1, 9, 'subscribe(a); subscribe(b)', 'h2'),
+			(1, 'src/store.ts', 1, 9, 'const subscribe = (listener) => listeners.add(listener)', 'h3')`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'src/store.ts', 'subscribe', 'subscribe', 'function', 1, 1)`,
+	)
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+	r := &Retriever{DB: db, Embed: &ai.OpenAI{BaseURL: srv.URL, ModelName: "embed"}, Cache: cache.New(1 << 20)}
+	res, err := r.Search(context.Background(), 1, "subscribe", 2)
+	if err != nil || res.Vector != 0 || res.FTS != 3 || res.Symbol != 1 || len(res.Hits) != 2 || res.Hits[0].Path != "src/store.ts" {
+		t.Fatalf("got %+v %v; want the defining chunk first of two, from FTS5 and symbols", res, err)
 	}
 }

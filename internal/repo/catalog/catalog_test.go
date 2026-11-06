@@ -26,7 +26,7 @@ func TestPoll(t *testing.T) {
 	remote := t.TempDir()
 	run := func(args ...string) string {
 		t.Helper()
-		out, err := exec.Command("git", append([]string{"-C", remote, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...).CombinedOutput()
+		out, err := exec.Command("git", append([]string{"-C", remote, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}

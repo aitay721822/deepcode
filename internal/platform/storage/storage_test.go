@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -82,6 +83,15 @@ func TestFTSTriggersAndBackupRestore(t *testing.T) {
 	}
 	if err := Backup(ctx, db, backup); err == nil {
 		t.Fatal("backup overwrote an existing file")
+	}
+	stopped, stop := context.WithCancel(ctx) // as Ctrl+C on deepcode backup
+	stop()
+	cut := filepath.Join(dir, "cut.db")
+	if err := Backup(stopped, db, cut); err == nil {
+		t.Fatal("a stopped backup succeeded")
+	}
+	if _, err := os.Stat(cut); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a stopped backup left its file: %v", err)
 	}
 	db.Close()
 

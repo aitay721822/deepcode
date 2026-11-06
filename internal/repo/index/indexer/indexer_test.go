@@ -18,10 +18,13 @@ import (
 )
 
 // TestIndexable: non-empty files of a known language up to the per-file size
-// are indexed; too many files, or too much text, fails the job for good.
+// are indexed, unless their path hides characters or is not UTF-8; too many files, or too much
+// text, fails the job for good.
 func TestIndexable(t *testing.T) {
 	entries := []git.TreeEntry{
 		{Path: "main.go", SHA: "a", Size: 10},
+		{Path: "evil\u202egnp.go", SHA: "f", Size: 10},
+		{Path: "caf\xe9.go", SHA: "g", Size: 10}, // Latin-1
 		{Path: "logo.png", SHA: "b", Size: 10},
 		{Path: "empty.go", SHA: "c", Size: 0},
 		{Path: "huge.ts", SHA: "d", Size: 101},
@@ -45,6 +48,30 @@ func TestIndexable(t *testing.T) {
 		if _, err := ix.indexable(entries); reflect.TypeOf(err) != permanent || !strings.Contains(err.Error(), "exceeds the limit") {
 			t.Errorf("over the %s limit: %v", name, err)
 		}
+	}
+}
+
+// TestNextBatch: a batch ends at fileBatch files or before passing batchBytes,
+// and always takes a file, however large.
+func TestNextBatch(t *testing.T) {
+	batches := func(files []file) []int {
+		var got []int
+		for i := 0; i < len(files); {
+			b := nextBatch(files, i)
+			got = append(got, len(b))
+			i += len(b)
+		}
+		return got
+	}
+	var sized []file
+	for _, s := range []int64{batchBytes + 1, batchBytes/2 + 1, batchBytes/2 + 1, 1} {
+		sized = append(sized, file{size: s})
+	}
+	if got := batches(sized); !reflect.DeepEqual(got, []int{1, 1, 2}) {
+		t.Errorf("by size: %v", got)
+	}
+	if got := batches(make([]file, fileBatch+5)); !reflect.DeepEqual(got, []int{fileBatch, 5}) {
+		t.Errorf("by count: %v", got)
 	}
 }
 
@@ -129,6 +156,38 @@ func TestParseResumes(t *testing.T) {
 	}
 	if f, c := count(); files != 2 || f != files || c != chunks {
 		t.Fatalf("after the resume: %d files and %d chunks, want 2 and %d", f, c, chunks)
+	}
+}
+
+// TestPruneSweepsContents: past the published snapshot and the one before
+// it, snapshots lose their files, and file contents no snapshot uses go too.
+func TestPruneSweepsContents(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "deepcode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range []string{
+		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r')`,
+		`INSERT INTO snapshots(id, repository_id, commit_sha, status, indexed_at) VALUES
+			(1, 1, 'a', 'ready', '2026-01-01'), (2, 1, 'b', 'ready', '2026-01-02'), (3, 1, 'c', 'ready', '2026-01-03')`,
+		`INSERT INTO file_contents(hash, content) VALUES ('old', 'x'), ('kept', 'y')`,
+		`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES
+			(1, 'old.go', 'go', 'old', 1, 1), (1, 'kept.go', 'go', 'kept', 1, 1), (3, 'kept.go', 'go', 'kept', 1, 1)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := (&Indexer{DB: db}).prune(ctx, 1, 3); err != nil {
+		t.Fatal(err)
+	}
+	var status, hashes string
+	db.QueryRow(`SELECT status FROM snapshots WHERE id = 1`).Scan(&status)
+	db.QueryRow(`SELECT group_concat(hash) FROM file_contents`).Scan(&hashes)
+	if status != "pruned" || hashes != "kept" {
+		t.Fatalf("snapshot 1 is %s; contents left: %s", status, hashes)
 	}
 }
 

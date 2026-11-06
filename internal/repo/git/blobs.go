@@ -19,7 +19,7 @@ type Blobs struct {
 
 // OpenBlobs starts git cat-file in the repository at dir; Close ends it.
 func (g *Client) OpenBlobs(ctx context.Context, dir string) (*Blobs, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "cat-file", "--batch")
+	cmd := command(ctx, "-C", dir, "cat-file", "--batch")
 	cmd.Env = g.env(ctx, Remote{})
 	in, err := cmd.StdinPipe()
 	if err != nil {

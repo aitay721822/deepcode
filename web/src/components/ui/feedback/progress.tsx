@@ -18,12 +18,12 @@ function Progress({ className, value, tone = 'primary', ...props }: ComponentPro
   const [bar, track] = tones[tone]
   const still = useReducedMotion() // no sweep, and the bar jumps to its value
   return (
-    <ProgressPrimitive.Root data-slot="progress" value={value} className={cn('relative h-1 w-full overflow-hidden rounded-full', track, className)} {...props}>
+    <ProgressPrimitive.Root data-slot="progress" value={value} className={cn('relative h-1 w-full overflow-hidden rounded-full forced-colors:border', track, className)} {...props}>
       <ProgressPrimitive.Indicator data-slot="progress-indicator" asChild>
         {value == null ? (
-          <motion.div className={cn('h-full w-1/3 rounded-full', bar)} animate={still ? undefined : { x: ['-100%', '300%'] }} transition={{ duration: 1.6, ease: 'easeInOut', repeat: Infinity }} />
+          <motion.div className={cn('h-full w-1/3 rounded-full forced-colors:bg-[color:Highlight]', bar)} animate={still ? undefined : { x: ['-100%', '300%'] }} transition={{ duration: 1.6, ease: 'easeInOut', repeat: Infinity }} />
         ) : (
-          <motion.div className={cn('h-full rounded-full', bar)} initial={{ width: 0 }} animate={{ width: `${value}%` }} transition={still ? { duration: 0 } : { duration: 0.4, ease: 'easeOut' }} />
+          <motion.div className={cn('h-full rounded-full forced-colors:bg-[color:Highlight]', bar)} initial={{ width: 0 }} animate={{ width: `${value}%` }} transition={still ? { duration: 0 } : { duration: 0.4, ease: 'easeOut' }} />
         )}
       </ProgressPrimitive.Indicator>
     </ProgressPrimitive.Root>

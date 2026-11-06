@@ -67,7 +67,7 @@ export function HomePage() {
           }}>
             <div className="relative max-w-[440px] flex-[1_1_280px]">
               <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input ref={input} value={query} autoFocus className="h-12 pl-11 shadow-raised md:text-[15px]"
+              <Input ref={input} value={query} autoFocus autoCapitalize="none" spellCheck={false} className="h-12 pl-11 shadow-raised md:text-[15px]"
                 aria-label={importer ? 'Search repositories, or enter one to add' : 'Search repositories'}
                 placeholder={importer ? 'Search, or paste a repository link' : 'Search repositories'}
                 onChange={(e) => {

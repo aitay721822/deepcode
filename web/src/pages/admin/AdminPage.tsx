@@ -43,9 +43,9 @@ export function AdminPage({ section, id }: { section?: string; id?: string }) {
           className="isolate flex gap-0.5 overflow-x-auto border-b px-4 py-3 min-[900px]:sticky min-[900px]:top-16 min-[900px]:flex-col min-[900px]:self-start min-[900px]:border-b-0 min-[900px]:py-8">
           {allowed.map((s, i) => (
             <Link key={s.path} to={`/admin/${s.path}`} aria-current={s === current ? 'page' : undefined}
-              className={cn('relative flex items-baseline gap-2.5 rounded-sm px-3 py-2 font-mono text-[11.5px] font-medium tracking-[0.12em] whitespace-nowrap text-muted-foreground uppercase transition-colors hover:text-foreground', s === current && 'text-foreground')}>
-              {s === current && <motion.span layoutId="admin-nav" className="absolute inset-0 -z-10 bg-accent" transition={slide}
-                style={{ borderRadius: markerRadius, boxShadow: 'inset 2px 0 0 var(--brand)' }} />}
+              className={cn('relative flex items-baseline gap-2.5 rounded-sm px-3 py-2 font-mono text-[11.5px] font-medium tracking-[0.12em] whitespace-nowrap text-muted-foreground uppercase transition-colors hover:text-foreground', s === current && 'font-semibold text-foreground')}>
+              {s === current && <motion.span layoutId="admin-nav" className="absolute inset-0 -z-10 bg-accent forced-colors:border" transition={slide}
+                style={{ borderRadius: markerRadius }} />}
               <span aria-hidden="true" className={cn('text-[10px]', s === current ? 'text-brand' : 'text-faint')}>{String(i + 1).padStart(2, '0')}</span>
               {s.label}
             </Link>

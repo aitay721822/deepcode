@@ -18,6 +18,21 @@
   font-style: italic;
 }
 
+/* A character that reorders or hides text, shown by its code point (lib/style/highlight.ts, Markdown.tsx). The box
+   tells it, without colour too, from text that merely reads "U+202E". */
+.hidden-char {
+  unicode-bidi: isolate;
+  padding: 0 2px;
+  border: 1px solid color-mix(in oklab, currentColor 45%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--destructive);
+  font-style: normal;
+}
+
+.hidden-char::before {
+  content: 'U+' attr(data-cp);
+}
+
 .hljs-title,
 .hljs-section,
 .hljs-title.function_ {
@@ -73,6 +88,12 @@
   font-size: 25px;
   font-weight: 500;
   letter-spacing: -0.01em;
+}
+
+/* A section rule parts sections; text that opens with one (an answer in its card) needs none above it. */
+.markdown > h2:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .markdown h3 {
@@ -193,6 +214,15 @@
   font-size: 13px;
 }
 
+/* Paper cannot scroll: a code block wraps its long lines there. */
+@media print {
+  .markdown pre {
+    overflow: visible;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+
 .markdown table {
   width: 100%;
   border-collapse: collapse;
@@ -219,12 +249,19 @@
   text-transform: uppercase;
 }
 
+/* A quote is a panel: an edge all round, and a tint that deepens when one quote holds another. */
 .markdown blockquote {
   margin: 0 0 16px;
-  padding: 2px 16px;
-  border-left: 2px solid var(--brand);
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
   color: var(--muted-foreground);
   font-style: italic;
+}
+
+.markdown blockquote > :last-child {
+  margin-bottom: 0;
 }
 
 .markdown hr {

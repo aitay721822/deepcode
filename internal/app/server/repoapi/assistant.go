@@ -39,7 +39,7 @@ func (a *API) chatStream(c *gin.Context) {
 	if err := a.Chat.Ask(ctx, req, emit); err != nil && ctx.Err() == nil {
 		msg, logIt := chat.Explain(err)
 		if logIt {
-			log.Printf("chat: %v", err)
+			log.Printf("chat: repository %d: %v", req.RepoID, err)
 		}
 		emit("error", gin.H{"message": msg})
 	}

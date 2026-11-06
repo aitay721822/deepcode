@@ -120,6 +120,47 @@ func TestStuckClientEndsTheStream(t *testing.T) {
 	}
 }
 
+// TestGuardAndCookie: PATCH bodies must be JSON as POST ones must, names
+// under .localhost are loopback, a body over 64 KB is refused, and the session
+// cookie is HttpOnly and SameSite=Lax, and Secure behind an HTTPS proxy.
+func TestGuardAndCookie(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(Guard(true))
+	r.Any("/x", func(c *gin.Context) {
+		if Bind(c, new(map[string]any)) {
+			SetSession(c, "token", time.Hour)
+		}
+	})
+	send := func(method, host, contentType, proto, body string) *http.Response {
+		req := httptest.NewRequest(method, "/x", strings.NewReader(body))
+		req.Host = host
+		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("X-Forwarded-Proto", proto)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Result()
+	}
+	for _, c := range []struct {
+		method, host, contentType, body string
+		want                            int
+	}{
+		{http.MethodPatch, "localhost", "text/plain", "{}", http.StatusUnsupportedMediaType},
+		{http.MethodPost, "localhost.evil.example", "application/json", "{}", http.StatusForbidden},
+		{http.MethodPost, "127.0.0.1", "application/json", `{"a":"` + strings.Repeat("a", 64<<10) + `"}`, http.StatusRequestEntityTooLarge},
+	} {
+		if res := send(c.method, c.host, c.contentType, "", c.body); res.StatusCode != c.want {
+			t.Errorf("%s to %s as %s: %d, want %d", c.method, c.host, c.contentType, res.StatusCode, c.want)
+		}
+	}
+	for proto, secure := range map[string]bool{"": false, "https": true} {
+		res := send(http.MethodPost, "app.localhost:8080", "application/json", proto, "{}")
+		if cs := res.Cookies(); res.StatusCode != http.StatusOK || len(cs) != 1 || !cs[0].HttpOnly || cs[0].SameSite != http.SameSiteLaxMode || cs[0].Secure != secure {
+			t.Errorf("X-Forwarded-Proto %q: %d %q", proto, res.StatusCode, res.Header["Set-Cookie"])
+		}
+	}
+}
+
 // TestDomainError: each kind of domain failure answers with its status and
 // message; any other error is a 500 that does not repeat it.
 func TestDomainError(t *testing.T) {

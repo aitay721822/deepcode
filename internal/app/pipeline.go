@@ -77,8 +77,8 @@ func (p pipeline) poll(ctx context.Context) {
 
 // pollRound polls every repository once; the next round tries again after a
 // failure. An error is logged unless it is the one last logged for its
-// repository, so a git server that stays down is logged once, and a panic is
-// logged instead of stopping the server.
+// repository, so a git server that stays down is logged once, and so is its
+// return. A panic is logged instead of stopping the server.
 func (p pipeline) pollRound(ctx context.Context, failing map[int64]string) {
 	defer func() {
 		if v := recover(); v != nil {
@@ -101,7 +101,10 @@ func (p pipeline) pollRound(ctx context.Context, failing map[int64]string) {
 			}
 			failing[r.ID] = err.Error()
 		default:
-			delete(failing, r.ID)
+			if _, ok := failing[r.ID]; ok {
+				log.Printf("poll %s/%s: working again", r.Owner, r.Name)
+				delete(failing, r.ID)
+			}
 			if job != nil {
 				log.Printf("poll %s/%s: indexing the new commit %.7s", r.Owner, r.Name, job.CommitSHA)
 			}

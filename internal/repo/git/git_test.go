@@ -5,14 +5,17 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 )
 
 // TestStallFollowsDeadline: git gives up on a stalled transfer after five
@@ -39,36 +42,75 @@ func TestStallFollowsDeadline(t *testing.T) {
 }
 
 // TestTokenStaysScoped: git sees the Authorization header for the remote's
-// URL only, appended after configuration the environment already passes, and
-// none of deepcode's own settings.
+// URL only, appended after configuration the environment already passes, with
+// redirects from that URL refused even where the operator's configuration
+// follows them for its host, and neither deepcode's own settings nor a
+// repository the environment points at.
 func TestTokenStaysScoped(t *testing.T) {
-	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_COUNT", "2")
 	t.Setenv("GIT_CONFIG_KEY_0", "user.name")
 	t.Setenv("GIT_CONFIG_VALUE_0", "kept")
+	t.Setenv("GIT_CONFIG_KEY_1", "http.https://git.example.com/.followRedirects") // the operator's, for the host
+	t.Setenv("GIT_CONFIG_VALUE_1", "true")
 	t.Setenv("DEEPCODE_CHAT_API_KEY", "secret")
 	t.Setenv("Deepcode_Secret_Key", "secret")
+	t.Setenv("GIT_DIR", t.TempDir()) // as inside a git hook
 	env := (&Client{AllowProtocol: "https"}).env(context.Background(), Remote{URL: "https://git.example.com/group/app.git", Authorization: "Basic c2VjcmV0"})
 	for _, kv := range env {
-		if strings.HasPrefix(strings.ToUpper(kv), "DEEPCODE_") {
+		if up := strings.ToUpper(kv); strings.HasPrefix(up, "DEEPCODE_") || strings.HasPrefix(up, "GIT_DIR=") {
 			t.Fatalf("git would see %s", kv)
 		}
 	}
-	header := func(url string) string {
-		cmd := exec.Command("git", "config", "--get-urlmatch", "http.extraheader", url)
+	config := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"config"}, args...)...)
 		cmd.Env = env
 		out, _ := cmd.Output()
 		return strings.TrimSpace(string(out))
 	}
+	header := func(url string) string { return config("--get-urlmatch", "http.extraheader", url) }
 	if got := header("https://git.example.com/group/app.git/info/refs"); got != "Authorization: Basic c2VjcmV0" {
 		t.Fatalf("header for the remote: %q", got)
 	}
 	if got := header("https://git.example.com/other/app.git/info/refs"); got != "" {
 		t.Fatalf("header leaked to another repository: %q", got)
 	}
-	cmd := exec.Command("git", "config", "user.name")
-	cmd.Env = env
-	if out, _ := cmd.Output(); strings.TrimSpace(string(out)) != "kept" {
-		t.Fatalf("existing configuration lost: %q", out)
+	if got := config("user.name"); got != "kept" {
+		t.Fatalf("existing configuration lost: %q", got)
+	}
+	if got := config("--get-urlmatch", "http.followredirects", "https://git.example.com/group/app.git/info/refs"); got != "false" {
+		t.Fatalf("redirects are followed: %q", got)
+	}
+}
+
+// TestProtocolsAllowed: git reaches remotes only over the allowed protocols.
+func TestProtocolsAllowed(t *testing.T) {
+	url, run := bare(t)
+	run("update-ref", "HEAD", run("commit-tree", run("mktree"), "-m", "first"))
+	g := &Client{Dir: t.TempDir(), AllowProtocol: "http:https"}
+	if sha, err := g.LsRemote(context.Background(), Remote{URL: url}); err == nil {
+		t.Fatalf("read a file:// remote with only http and https allowed: %s", sha)
+	}
+}
+
+// TestLsTreeSkipsLinks: a symlink (whose blob is its target's path) and a
+// submodule are not files to index.
+func TestLsTreeSkipsLinks(t *testing.T) {
+	dir := t.TempDir()
+	git := func(stdin string, args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "init", "-q", "--bare")
+	blob := git("hello", "hash-object", "-w", "--stdin")
+	tree := git("100644 blob "+blob+"\tfile.txt\n120000 blob "+blob+"\tlink\n160000 commit "+strings.Repeat("1", 40)+"\tsub\n", "mktree")
+	entries, err := (&Client{}).LsTree(context.Background(), dir, tree)
+	if err != nil || len(entries) != 1 || entries[0].Path != "file.txt" || entries[0].Size != 5 {
+		t.Fatalf("got %+v %v, want file.txt alone", entries, err)
 	}
 }
 
@@ -77,7 +119,7 @@ func TestTokenStaysScoped(t *testing.T) {
 func bare(t *testing.T, initArgs ...string) (string, func(...string) string) {
 	dir := t.TempDir()
 	run := func(args ...string) string {
-		out, err := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...).Output()
+		out, err := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...).Output()
 		if err != nil {
 			t.Fatalf("git %v: %v", args, err)
 		}
@@ -186,6 +228,62 @@ func TestHungServer(t *testing.T) {
 	}
 	if d := time.Since(start); d > 15*time.Second {
 		t.Fatalf("git returned only after %v", d)
+	}
+}
+
+// TestCancelEndsHelper: on Windows, cancelling a command ends git's whole
+// process tree. The git on PATH is usually Git for Windows' launcher, whose
+// child is the real git; killing the launcher alone left that git's remote
+// helper holding (and downloading through) its connection after the size
+// limit stopped a fetch. Elsewhere git itself is killed, and its helper ends
+// at its next write or once the transfer stalls (env).
+func TestCancelEndsHelper(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the launcher is Git for Windows'")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0") // takes the connection, never answers
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			accepted <- c
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background()) // no deadline: no stall limit ends the helper first
+	defer cancel()
+	g := &Client{Dir: t.TempDir(), AllowProtocol: "http"}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		g.run(ctx, Remote{}, "ls-remote", "http://"+ln.Addr().String()+"/r.git")
+	}()
+	var c net.Conn
+	select {
+	case c = <-accepted:
+		defer c.Close()
+	case <-done:
+		t.Fatal("git ended before its helper connected")
+	case <-time.After(30 * time.Second):
+		t.Fatal("git's helper never connected")
+	}
+	cancel()
+	<-done
+	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.Copy(io.Discard, c); errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatal("git's helper still holds its connection after the command was cancelled")
+	}
+}
+
+// TestErrorOneLine: git's stderr ends up in the error as one line with no
+// control characters, whatever the remote or an argument put in it.
+func TestErrorOneLine(t *testing.T) {
+	_, run := bare(t)
+	_, err := (&Client{Dir: run("rev-parse", "--absolute-git-dir")}).run(context.Background(), Remote{}, "cat-file", "-t", "forged\nline\x1b[31m")
+	if err == nil || strings.ContainsFunc(err.Error(), unicode.IsControl) || !strings.Contains(err.Error(), "forged") {
+		t.Fatalf("%q", err)
 	}
 }
 

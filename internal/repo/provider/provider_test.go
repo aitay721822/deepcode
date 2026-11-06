@@ -18,6 +18,9 @@ import (
 // with tokens, as an import does.
 func TestAPIs(t *testing.T) {
 	var seen []string
+	elsewhere := 0
+	other := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { elsewhere++ }))
+	defer other.Close()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.RequestURI+" "+r.Header.Get("PRIVATE-TOKEN")+r.Header.Get("Authorization"))
 		switch r.RequestURI {
@@ -28,6 +31,14 @@ func TestAPIs(t *testing.T) {
 		case "/repos/o/r":
 			w.Header().Set("X-RateLimit-Remaining", "0")
 			w.WriteHeader(http.StatusForbidden)
+		case "/repos/o/renamed":
+			http.Redirect(w, r, "/repos/o/r2", http.StatusMovedPermanently) // GitHub's answer for a renamed repository
+		case "/repos/o/r2":
+			fmt.Fprint(w, `{"full_name":"o/R2","default_branch":"main"}`)
+		case "/repos/o/moved":
+			http.Redirect(w, r, other.URL+"/repos/o/r2", http.StatusFound)
+		case "/repos/o/huge":
+			fmt.Fprintf(w, `{"full_name":"o/huge","description":%q}`, strings.Repeat("a", 5<<20))
 		default:
 			http.NotFound(w, r)
 		}
@@ -61,8 +72,19 @@ func TestAPIs(t *testing.T) {
 	if _, err := Fetch(ctx, gl, "group/missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing project: %v", err)
 	}
-	gh, _ := st.Create(ctx, gitserver.Input{Name: str("GHE"), Kind: str(gitserver.GitHub), BaseURL: str("https://ghe.example.com"), APIURL: str(api.URL)})
-	if _, err := Fetch(ctx, gh, "o/r"); !errors.Is(err, ErrUpstream) || !strings.Contains(err.Error(), "rate limit") {
-		t.Fatalf("rate limit: %v", err)
+	created, _ = st.Create(ctx, gitserver.Input{Name: str("GHE"), Kind: str(gitserver.GitHub), BaseURL: str("https://ghe.example.com"), APIURL: str(api.URL), Token: str("tok2")})
+	gh, _ := st.Get(ctx, created.ID)
+	if _, err := Fetch(ctx, gh, "o/r"); !errors.Is(err, ErrUpstream) || !strings.Contains(err.Error(), "rate limit") || seen[len(seen)-1] != "/repos/o/r Bearer tok2" {
+		t.Fatalf("rate limit: %v (requests %q)", err, seen)
+	}
+	// Redirects are followed on the API's own host only, and an answer over 4 MB is refused.
+	if m, err := Fetch(ctx, gh, "o/renamed"); err != nil || m.Path != "o/R2" {
+		t.Fatalf("renamed repository: %+v %v", m, err)
+	}
+	if _, err := Fetch(ctx, gh, "o/moved"); !errors.Is(err, ErrUpstream) || elsewhere != 0 {
+		t.Fatalf("a redirect to another host: %v, %d requests there", err, elsewhere)
+	}
+	if _, err := Fetch(ctx, gh, "o/huge"); !errors.Is(err, ErrUpstream) {
+		t.Fatalf("an answer over 4 MB: %v", err)
 	}
 }
