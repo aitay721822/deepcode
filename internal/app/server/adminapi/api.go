@@ -85,7 +85,7 @@ func (a *API) repositories(c *gin.Context) {
 	}
 	out := make([]gin.H, len(list))
 	for i, r := range list {
-		out[i] = gin.H{"id": r.ID, "owner": r.Owner, "name": r.Name, "provider": r.Provider, "serverName": r.ServerName}
+		out[i] = gin.H{"id": r.PublicID, "owner": r.Owner, "name": r.Name, "provider": r.Provider, "serverName": r.ServerName}
 	}
 	c.JSON(http.StatusOK, out)
 }

@@ -1,51 +1,20 @@
 package analyzer
 
 import (
-	"bytes"
-	"strings"
-
 	sitter "github.com/tree-sitter/go-tree-sitter"
+
+	"deepcode/internal/repo/index/analyzer/syntax"
 )
 
-// extractor walks a Tree-sitter syntax tree and turns declarations into Symbols.
-type extractor struct{ src []byte }
-
-// block extracts the declarations directly inside a file, class body or
-// namespace body, attaching each one's leading comment run.
-func (x *extractor) block(n *sitter.Node) []Symbol {
-	if n == nil {
-		return nil
-	}
-	var out []Symbol
-	docStart, docEnd := 0, 0
-	for i := range n.NamedChildCount() {
-		c := n.NamedChild(i)
-		start, end := line(c.StartPosition()), line(c.EndPosition())
-		if c.Kind() == "comment" {
-			if docStart == 0 || start > docEnd+1 {
-				docStart = start
-			}
-			docEnd = end
-			continue
-		}
-		syms := x.decl(c)
-		if len(syms) > 0 && docStart > 0 && docEnd >= start-1 {
-			syms[0].StartLine = min(syms[0].StartLine, docStart)
-		}
-		docStart = 0
-		out = append(out, syms...)
-	}
-	return out
-}
-
-func (x *extractor) decl(n *sitter.Node) []Symbol {
+// decl turns a Go, JavaScript or TypeScript declaration into symbols.
+func decl(x *syntax.Extractor, n *sitter.Node) []Symbol {
 	switch n.Kind() {
 	case "function_declaration", "generator_function_declaration", "function_signature":
-		return x.named(n, n, "function", nil)
+		return x.Named(n, n, "function", nil)
 	case "method_declaration": // Go
-		syms := x.named(n, n, "method", nil)
+		syms := x.Named(n, n, "method", nil)
 		if len(syms) == 1 {
-			syms[0].Container = x.firstOfKind(n.ChildByFieldName("receiver"), "type_identifier")
+			syms[0].Container = x.FirstOfKind(n.ChildByFieldName("receiver"), "type_identifier")
 		}
 		return syms
 	case "type_declaration": // Go: type ( A struct{}; B interface{} )
@@ -66,29 +35,29 @@ func (x *extractor) decl(n *sitter.Node) []Symbol {
 			if n.NamedChildCount() == 1 {
 				span = n // include the `type` keyword
 			}
-			out = append(out, x.named(spec, span, kind, nil)...)
+			out = append(out, x.Named(spec, span, kind, nil)...)
 		}
 		return out
 	case "class_declaration", "abstract_class_declaration", "class":
-		return x.named(n, n, "class", x.block(n.ChildByFieldName("body")))
+		return x.Named(n, n, "class", x.Block(n.ChildByFieldName("body")))
 	case "method_definition", "abstract_method_signature":
-		return x.named(n, n, "method", nil)
+		return x.Named(n, n, "method", nil)
 	case "public_field_definition", "field_definition": // handler = () => {...}
 		if isFunction(n.ChildByFieldName("value")) {
 			name := n.ChildByFieldName("name")
 			if name == nil {
 				name = n.ChildByFieldName("property")
 			}
-			return x.symbol(name, n, "method", nil)
+			return x.Symbol(name, n, "method", nil)
 		}
 	case "interface_declaration":
-		return x.named(n, n, "interface", nil)
+		return x.Named(n, n, "interface", nil)
 	case "type_alias_declaration":
-		return x.named(n, n, "type", nil)
+		return x.Named(n, n, "type", nil)
 	case "enum_declaration":
-		return x.named(n, n, "enum", nil)
+		return x.Named(n, n, "enum", nil)
 	case "internal_module", "module": // TS namespace / declare module
-		return x.named(n, n, "namespace", x.block(n.ChildByFieldName("body")))
+		return x.Named(n, n, "namespace", x.Block(n.ChildByFieldName("body")))
 	case "export_statement":
 		inner := n.ChildByFieldName("declaration")
 		if inner == nil {
@@ -97,19 +66,19 @@ func (x *extractor) decl(n *sitter.Node) []Symbol {
 		if inner == nil {
 			return nil
 		}
-		syms := x.decl(inner)
+		syms := decl(x, inner)
 		if len(syms) == 0 && isFunction(inner) {
-			syms = []Symbol{x.make("default", "function", n, nil)}
+			syms = []Symbol{x.Make("default", "function", n, nil)}
 		}
 		for i := range syms {
-			syms[i].StartLine = min(syms[i].StartLine, line(n.StartPosition()))
+			syms[i].StartLine = min(syms[i].StartLine, syntax.Line(n.StartPosition()))
 		}
 		return syms
 	case "ambient_declaration": // declare function / declare namespace
-		return x.block(n)
+		return x.Block(n)
 	case "expression_statement": // the TS grammar wraps `namespace X {}` in one
 		if c := n.NamedChild(0); c != nil && c.Kind() == "internal_module" {
-			return x.decl(c)
+			return decl(x, c)
 		}
 	case "lexical_declaration", "variable_declaration": // const f = () => {}
 		var out []Symbol
@@ -127,51 +96,11 @@ func (x *extractor) decl(n *sitter.Node) []Symbol {
 			if n.NamedChildCount() == 1 {
 				span = n
 			}
-			out = append(out, x.symbol(d.ChildByFieldName("name"), span, kind, nil)...)
+			out = append(out, x.Symbol(d.ChildByFieldName("name"), span, kind, nil)...)
 		}
 		return out
 	}
 	return nil
-}
-
-// named builds a symbol from n's "name" field, spanning span.
-func (x *extractor) named(n, span *sitter.Node, kind string, children []Symbol) []Symbol {
-	return x.symbol(n.ChildByFieldName("name"), span, kind, children)
-}
-
-func (x *extractor) symbol(name, span *sitter.Node, kind string, children []Symbol) []Symbol {
-	if name == nil {
-		return nil
-	}
-	return []Symbol{x.make(name.Utf8Text(x.src), kind, span, children)}
-}
-
-func (x *extractor) make(name, kind string, span *sitter.Node, children []Symbol) Symbol {
-	// Only the first line is copied: deeply nested symbols each span most of the file.
-	first, _, _ := bytes.Cut(x.src[span.StartByte():span.EndByte()], []byte("\n"))
-	sig := strings.TrimSpace(string(first))
-	if len(sig) > 160 {
-		sig = strings.ToValidUTF8(sig[:160], "") // never split a character
-	}
-	return Symbol{
-		Name: name, Kind: kind, Signature: sig, Children: children,
-		StartLine: line(span.StartPosition()), EndLine: line(span.EndPosition()),
-	}
-}
-
-func (x *extractor) firstOfKind(n *sitter.Node, kind string) string {
-	if n == nil {
-		return ""
-	}
-	if n.Kind() == kind {
-		return n.Utf8Text(x.src)
-	}
-	for i := range n.NamedChildCount() {
-		if s := x.firstOfKind(n.NamedChild(i), kind); s != "" {
-			return s
-		}
-	}
-	return ""
 }
 
 // unwrap peels what TypeScript wraps a value in: ((x) => x) as T, f satisfies T, f!.
@@ -187,6 +116,7 @@ func unwrap(n *sitter.Node) *sitter.Node {
 	return nil
 }
 
+// isFunction reports whether JS/TS node n is a function or class value.
 func isFunction(n *sitter.Node) bool {
 	if n == nil {
 		return false
@@ -197,5 +127,3 @@ func isFunction(n *sitter.Node) bool {
 	}
 	return false
 }
-
-func line(p sitter.Point) int { return int(p.Row) + 1 }

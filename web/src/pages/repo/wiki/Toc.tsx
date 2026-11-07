@@ -15,8 +15,12 @@ export function Toc({ items }: { items: TocItem[] }) {
       <ul>
         {numbered.map((i) => (
           <li key={i.id}>
-            <a href={`#${i.id}`}
-              className={cn('flex gap-2.5 py-[5px] text-[13px] leading-snug [overflow-wrap:anywhere] text-muted-foreground transition-colors hover:text-foreground', i.level === 3 && 'pl-[22px]')}
+            <a
+              href={`#${i.id}`}
+              className={cn(
+                'flex gap-2.5 py-[5px] text-[13px] leading-snug [overflow-wrap:anywhere] text-muted-foreground transition-colors hover:text-foreground',
+                i.level === 3 && 'pl-[22px]',
+              )}
               onClick={(e) => {
                 if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return // a new tab or window: the browser's own way
                 e.preventDefault()
@@ -24,8 +28,13 @@ export function Toc({ items }: { items: TocItem[] }) {
                 const heading = document.getElementById(i.id)
                 heading?.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' })
                 heading?.focus({ preventScroll: true }) // as a plain #link does: Tab goes on from the section
-              }}>
-              {i.n > 0 && <span aria-hidden="true" className="w-3 flex-none pt-px font-mono text-[10px] text-faint">{String(i.n).padStart(2, '0')}</span>}
+              }}
+            >
+              {i.n > 0 && (
+                <span aria-hidden="true" className="w-3 flex-none pt-px font-mono text-[10px] text-faint">
+                  {String(i.n).padStart(2, '0')}
+                </span>
+              )}
               {i.text}
             </a>
           </li>

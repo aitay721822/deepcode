@@ -9,7 +9,10 @@ export function useRepos() {
   const res = useApi('repos', listRepos, polls ? 1500 : undefined)
   const repos = res.data
   useEffect(() => {
-    if (repos) setPolls((n) => (repos.some((r) => isActive(r.job)) ? 3 : repos.some(awaitingWiki) ? Math.max(0, (n ?? 3) - 1) : 0))
+    if (repos)
+      setPolls((n) =>
+        repos.some((r) => isActive(r.job)) ? 3 : repos.some(awaitingWiki) ? Math.max(0, (n ?? 3) - 1) : 0,
+      )
   }, [repos])
   return res
 }

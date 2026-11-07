@@ -32,6 +32,10 @@ type OpenAI struct {
 	ReasoningEffort string
 	Timeout         time.Duration // per request, including the whole stream
 	RPM             int           // requests per minute, 0 = unlimited
+	// Measure, when set, is told every answer's Usage, failed ones too, and the
+	// server is asked for its token counts (stream_options.include_usage). The
+	// bench sets it; a server that rejects the option fails the request.
+	Measure func(Usage)
 
 	mu   sync.Mutex
 	next time.Time

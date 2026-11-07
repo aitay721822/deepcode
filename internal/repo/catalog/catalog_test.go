@@ -13,6 +13,7 @@ import (
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
+	"deepcode/internal/repo/index/analyzer"
 )
 
 // TestPoll: the poller queues an index job for a remote HEAD that is not the
@@ -80,7 +81,7 @@ func TestPoll(t *testing.T) {
 	publish := func(j *jobs.Job, snap int) {
 		t.Helper()
 		exec(`UPDATE jobs SET status = 'succeeded' WHERE id = ?`, j.ID)
-		exec(`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (?, 1, ?, 'ready')`, snap, j.CommitSHA)
+		exec(`INSERT INTO snapshots(id, repository_id, commit_sha, status, analyzer) VALUES (?, 1, ?, 'ready', ?)`, snap, j.CommitSHA, analyzer.Version)
 		exec(`UPDATE repositories SET ready_snapshot_id = ?`, snap)
 	}
 
@@ -99,6 +100,12 @@ func TestPoll(t *testing.T) {
 	if again := poll(); again != nil {
 		t.Fatalf("the published commit polled: %+v", again)
 	}
+	exec(`UPDATE snapshots SET analyzer = 0 WHERE id = 1`) // as before this version, which reads more of it
+	if again := poll(); again == nil || again.ID != j1.ID || again.Status != jobs.StatusQueued {
+		t.Fatalf("the published commit an older analyzer read polled: %+v", again)
+	}
+	exec(`UPDATE jobs SET status = 'succeeded' WHERE id = ?`, j1.ID)
+	exec(`UPDATE snapshots SET analyzer = ? WHERE id = 1`, analyzer.Version)
 	second := commit()
 	j2 := poll()
 	if j2 == nil || j2.CommitSHA != second {

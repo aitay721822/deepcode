@@ -5,7 +5,6 @@ export type Provider = 'github' | 'gitlab'
 export type Job = {
   id: number
   kind: 'index' | 'wiki'
-  repoId: number
   commitSha: string
   status: 'queued' | 'running' | 'succeeded' | 'failed'
   attempts: number
@@ -28,7 +27,7 @@ type Snapshot = {
 }
 
 export type Repo = {
-  id: number
+  id: string // a CUID2, never the database's row id
   owner: string // may hold "/" (GitLab subgroups)
   name: string
   url: string // web URL, no .git

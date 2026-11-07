@@ -41,11 +41,11 @@ func Link(ctx context.Context, db *sql.DB, snap int64) (int, error) {
 	if err := readImports(ctx, db, snap); err != nil {
 		return 0, err
 	}
-	files, modules, err := load(ctx, db, snap)
+	files, configs, err := load(ctx, db, snap)
 	if err != nil {
 		return 0, err
 	}
-	return store(ctx, db, snap, resolve(files, modules))
+	return store(ctx, db, snap, resolve(files, configs))
 }
 
 // LinkStale links the ready snapshots that have files with a grammar but no
@@ -78,7 +78,7 @@ func readImports(ctx context.Context, db *sql.DB, snap int64) error {
 	type read struct{ hash, imports string }
 	for last := ""; ; {
 		rows, err := db.QueryContext(ctx, `SELECT c.hash, min(f.language), c.content FROM source_files f JOIN file_contents c ON c.hash = f.content_hash
-			WHERE f.snapshot_id = ? AND c.imports IS NULL AND c.hash > ? AND `+cond+`
+			WHERE f.snapshot_id = ? AND c.imports IS NULL AND c.hash > ? AND NOT f.generated AND `+cond+`
 			GROUP BY c.hash ORDER BY c.hash LIMIT ?`, append(append([]any{snap, last}, langs...), readBatch)...)
 		if err != nil {
 			return err
@@ -113,12 +113,17 @@ func readImports(ctx context.Context, db *sql.DB, snap int64) error {
 	}
 }
 
-// load reads the snapshot's files with a grammar, their imports, and the
-// module path of each of its go.mod files, by directory.
+// configs is the SQL condition that a file is one whose content resolving
+// imports reads: go.mod, .NET project files, Cargo.toml, in any case.
+const configs = `(f.language = 'go.mod' OR lower(f.path) GLOB '*.csproj' OR lower(f.path) GLOB '*.vbproj' OR lower(f.path) GLOB '*.fsproj'
+	OR lower(f.path) GLOB '*directory.build.props' OR lower(f.path) = 'cargo.toml' OR lower(f.path) GLOB '*/cargo.toml')`
+
+// load reads the snapshot's files with a grammar, generated ones aside, with
+// their imports, and the content of its configs by path.
 func load(ctx context.Context, db *sql.DB, snap int64) ([]file, map[string]string, error) {
 	cond, langs := grammars()
 	rows, err := db.QueryContext(ctx, `SELECT f.path, f.language, coalesce(c.imports, '') FROM source_files f
-		JOIN file_contents c ON c.hash = f.content_hash WHERE f.snapshot_id = ? AND `+cond, append([]any{snap}, langs...)...)
+		JOIN file_contents c ON c.hash = f.content_hash WHERE f.snapshot_id = ? AND NOT f.generated AND `+cond, append([]any{snap}, langs...)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -138,23 +143,21 @@ func load(ctx context.Context, db *sql.DB, snap int64) ([]file, map[string]strin
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
 	}
-	mods, err := db.QueryContext(ctx, `SELECT f.path, c.content FROM source_files f JOIN file_contents c ON c.hash = f.content_hash
-		WHERE f.snapshot_id = ? AND f.language = 'go.mod'`, snap)
+	crows, err := db.QueryContext(ctx, `SELECT f.path, c.content FROM source_files f JOIN file_contents c ON c.hash = f.content_hash
+		WHERE f.snapshot_id = ? AND `+configs, snap)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer mods.Close()
-	modules := map[string]string{}
-	for mods.Next() {
+	defer crows.Close()
+	contents := map[string]string{}
+	for crows.Next() {
 		var p, content string
-		if err := mods.Scan(&p, &content); err != nil {
+		if err := crows.Scan(&p, &content); err != nil {
 			return nil, nil, err
 		}
-		if m := moduleOf(content); m != "" {
-			modules[dir(p)] = m
-		}
+		contents[p] = content
 	}
-	return files, modules, mods.Err()
+	return files, contents, crows.Err()
 }
 
 // store replaces the snapshot's edges, storeBatch at a time so no
@@ -164,6 +167,19 @@ func load(ctx context.Context, db *sql.DB, snap int64) ([]file, map[string]strin
 // ponytail: a crash between batches leaves part of the edges, which LinkStale
 // takes for a linked snapshot; the repository's next index replaces them.
 func store(ctx context.Context, db *sql.DB, snap int64, edges []edge) (int, error) {
+	// A served snapshot that has edges, read again after an analyzer upgrade,
+	// swaps them in one transaction, so its readers never see half a graph.
+	// ponytail: that transaction holds the write lock for all of a monorepo's edges.
+	var swap bool
+	if err := db.QueryRowContext(ctx, `SELECT status = 'ready' AND EXISTS (SELECT 1 FROM file_edges WHERE snapshot_id = ?1)
+		FROM snapshots WHERE id = ?1`, snap).Scan(&swap); errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	} else if err != nil {
+		return 0, err
+	}
+	if swap {
+		return replace(ctx, db, snap, edges)
+	}
 	if err := Unlink(ctx, db, snap); err != nil {
 		return 0, err
 	}
@@ -204,19 +220,52 @@ func insert(ctx context.Context, db *sql.DB, snap int64, batch []edge) (bool, er
 	} else if err != nil {
 		return false, err
 	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO file_edges(snapshot_id, src, dst) VALUES (?, ?, ?)`)
-	if err != nil {
+	if err := insertEdges(ctx, tx, snap, batch); err != nil {
 		return false, err
-	}
-	defer stmt.Close()
-	for _, e := range batch {
-		if _, err := stmt.ExecContext(ctx, snap, e.src, e.dst); err != nil {
-			return false, err
-		}
 	}
 	return false, tx.Commit()
 }
 
+// replace swaps the snapshot's edges for edges in one transaction, unless the
+// snapshot was pruned or deleted meanwhile. It returns how many it stored.
+func replace(ctx context.Context, db *sql.DB, snap int64, edges []edge) (int, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM snapshots WHERE id = ?`, snap).Scan(&status); errors.Is(err, sql.ErrNoRows) || status == "pruned" {
+		return 0, nil
+	} else if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM file_edges WHERE snapshot_id = ?`, snap); err != nil {
+		return 0, err
+	}
+	if err := insertEdges(ctx, tx, snap, edges); err != nil {
+		return 0, err
+	}
+	return len(edges), tx.Commit()
+}
+
+// insertEdges adds edges to the snapshot; one there already (a link at start
+// meeting an index job's) is kept.
+func insertEdges(ctx context.Context, tx *sql.Tx, snap int64, edges []edge) error {
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO file_edges(snapshot_id, src, dst) VALUES (?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, e := range edges {
+		if _, err := stmt.ExecContext(ctx, snap, e.src, e.dst); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// scanIDs reads the ids that a query of one integer column returned.
 func scanIDs(rows *sql.Rows, err error) ([]int64, error) {
 	if err != nil {
 		return nil, err

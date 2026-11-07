@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { getConversation, streamChat } from '../../api/repo/chat'
 import { navigate } from '../../lib/router'
 import type { ConversationRef, Message, Source } from '../../types/repo/chat'
@@ -19,16 +19,29 @@ function toTurns(messages: Message[]): Turn[] {
   const turns: Turn[] = []
   for (const m of messages) {
     if (m.role === 'user') {
-      turns.push({ question: m.content, answer: '', citations: [], sources: [], rounds: [], status: 'error', error: 'This question has no stored answer.' })
+      turns.push({
+        question: m.content,
+        answer: '',
+        citations: [],
+        sources: [],
+        rounds: [],
+        status: 'error',
+        error: 'This question has no stored answer.',
+      })
     } else if (turns.length) {
-      Object.assign(turns[turns.length - 1], { answer: m.content, citations: m.citations, status: 'done', error: undefined })
+      Object.assign(turns[turns.length - 1], {
+        answer: m.content,
+        citations: m.citations,
+        status: 'done',
+        error: undefined,
+      })
     }
   }
   return turns
 }
 
 /** A conversation about repository repoId: opens a stored one, streams new answers and picks the citation to show. */
-export function useChat(repoId: number, conversationId?: string) {
+export function useChat(repoId: string, conversationId?: string) {
   const [conv, setConv] = useState<ConversationRef | null>(null)
   const [turns, setTurns] = useState<Turn[]>([])
   const [selected, setSelected] = useState<Citation | null>(null)
@@ -37,25 +50,30 @@ export function useChat(repoId: number, conversationId?: string) {
   const abort = useRef<AbortController | null>(null)
   useEffect(() => () => abort.current?.abort(), [])
 
-  // Open a stored conversation (but not the one this page just created).
+  // Open a stored conversation (but not the one this page just created): the one on screen is read as the address
+  // changes, and its own changes are no reason to load again.
+  const onScreen = useEffectEvent((id: string) => String(conv?.id) === id)
   useEffect(() => {
-    if (!conversationId || String(conv?.id) === conversationId) return
+    if (!conversationId || onScreen(conversationId)) return
     abort.current?.abort() // another conversation: stop the answer streaming into this one
     let live = true // back/forward to another conversation: drop this one's late answer
     setConv(null) // until it loads, a follow-up must not join the one on screen
     setTurns([]) // nor may its turns stand under this one's address
     setLoadError('')
-    getConversation(conversationId).then((c) => {
-      if (!live) return
-      if (c.repoId !== repoId) return setLoadError('conversation not found') // another repository's: as the server says of one the reader cannot open
-      setConv({ id: c.id, snapshotId: c.snapshotId, commitSha: c.commitSha })
-      setTurns(toTurns(c.messages))
-      setSelected(c.messages.find((m) => m.citations?.length)?.citations[0] ?? null)
-    }, (e: Error) => live && setLoadError(e.message))
+    getConversation(conversationId).then(
+      (c) => {
+        if (!live) return
+        if (c.repoId !== repoId) return setLoadError('conversation not found') // another repository's: as the server says of one the reader cannot open
+        setConv({ id: c.id, snapshotId: c.snapshotId, commitSha: c.commitSha })
+        setTurns(toTurns(c.messages))
+        setSelected(c.messages.find((m) => m.citations?.length)?.citations[0] ?? null)
+      },
+      (e: Error) => live && setLoadError(e.message),
+    )
     return () => {
       live = false
     }
-  }, [conversationId])
+  }, [conversationId, repoId])
 
   const update = (fn: (t: Turn) => Turn) => setTurns((ts) => ts.map((t, i) => (i === ts.length - 1 ? fn(t) : t)))
   // Stable: the page hands it to the turns, which are memoised.
@@ -82,27 +100,31 @@ export function useChat(repoId: number, conversationId?: string) {
       if (more) update((t) => ({ ...t, status: 'answering', answer: t.answer + more }))
     }
     try {
-      await streamChat({ repoId: repo.id, conversationId: conv?.id ?? 0, question, deep }, ({ event, data }) => {
-        if (event === 'conversation') {
-          setConv(data)
-          if (String(data.id) !== conversationId) navigate(`/repos/${repo.id}/search/${data.id}`, { replace: true })
-        } else if (event === 'search') {
-          update((t) => ({ ...t, rounds: [...t.rounds, data.terms] }))
-        } else if (event === 'evidence') {
-          update((t) => ({ ...t, sources: data.sources }))
-          select(data.sources[0])
-        } else if (event === 'delta') {
-          text += data
-          frame ||= requestAnimationFrame(flush)
-        } else if (event === 'done') {
-          flush()
-          update((t) => ({ ...t, status: 'done', answer: data.content, citations: data.citations }))
-          select(data.citations[0])
-        } else if (event === 'error') {
-          flush()
-          update((t) => ({ ...t, status: 'error', error: data.message }))
-        }
-      }, ctl.signal)
+      await streamChat(
+        { repoId: repo.id, conversationId: conv?.id ?? 0, question, deep },
+        ({ event, data }) => {
+          if (event === 'conversation') {
+            setConv(data)
+            if (String(data.id) !== conversationId) navigate(`/repos/${repo.id}/search/${data.id}`, { replace: true })
+          } else if (event === 'search') {
+            update((t) => ({ ...t, rounds: [...t.rounds, data.terms] }))
+          } else if (event === 'evidence') {
+            update((t) => ({ ...t, sources: data.sources }))
+            select(data.sources[0])
+          } else if (event === 'delta') {
+            text += data
+            frame ||= requestAnimationFrame(flush)
+          } else if (event === 'done') {
+            flush()
+            update((t) => ({ ...t, status: 'done', answer: data.content, citations: data.citations }))
+            select(data.citations[0])
+          } else if (event === 'error') {
+            flush()
+            update((t) => ({ ...t, status: 'error', error: data.message }))
+          }
+        },
+        ctl.signal,
+      )
     } catch (e) {
       if (ctl.signal.aborted) return cancelAnimationFrame(frame) // left the page or this conversation
       flush()

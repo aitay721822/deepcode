@@ -29,14 +29,28 @@ export function SignUpSwitch() {
   return (
     <div className="mb-6">
       <Label className="items-start leading-snug font-normal">
-        <Switch className="mt-0.5" aria-labelledby={`${id}-name`} aria-describedby={`${id}-note`} checked={!!open} disabled={open === undefined}
-          aria-busy={busy || undefined} onCheckedChange={(next) => busy || change(next)} />
+        <Switch
+          className="mt-0.5"
+          aria-labelledby={`${id}-name`}
+          aria-describedby={`${id}-note`}
+          checked={!!open}
+          disabled={open === undefined}
+          aria-busy={busy || undefined}
+          onCheckedChange={(next) => busy || change(next)}
+        />
         <span>
           <span id={`${id}-name`}>Open sign-up</span>{' '}
-          <span id={`${id}-note`} className="text-muted-foreground">Anyone who can reach this site can create an account. It gets the member role and everything that role grants.</span>
+          <span id={`${id}-note`} className="text-muted-foreground">
+            Anyone who can reach this site can create an account. It gets the member role and everything that role
+            grants.
+          </span>
         </span>
       </Label>
-      {error && <p className="mt-2 text-sm text-destructive" role="alert">{error}</p>}
+      {error && (
+        <p className="mt-2 text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      )}
       {open === undefined && <LoadError className="mt-2 mb-0" error={loadError} onRetry={reload} />}
     </div>
   )

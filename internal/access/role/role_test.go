@@ -21,7 +21,7 @@ func setup(t *testing.T) (*Store, *sql.DB) {
 	}
 	t.Cleanup(func() { db.Close() })
 	for _, id := range []int64{1, 2} {
-		db.Exec(`INSERT INTO repositories(id, url, owner, name) VALUES (?, ?, 'o', 'r')`, id, fmt.Sprintf("https://github.com/o/r%d", id))
+		db.Exec(`INSERT INTO repositories(id, public_id, url, owner, name) VALUES (?, ?, ?, 'o', 'r')`, id, fmt.Sprintf("r%d", id), fmt.Sprintf("https://github.com/o/r%d", id))
 	}
 	return &Store{DB: db}, db
 }
@@ -42,7 +42,7 @@ func user(t *testing.T, db *sql.DB, name string, roles ...int64) int64 {
 }
 
 func str(s string) *string                { return &s }
-func ids(v ...int64) *[]int64             { return &v }
+func ids(v ...string) *[]string           { return &v }
 func perms(v ...Permission) *[]Permission { return &v }
 
 // TestGrants: a role grants its permissions on its own repositories, roles
@@ -50,8 +50,8 @@ func perms(v ...Permission) *[]Permission { return &v }
 func TestGrants(t *testing.T) {
 	st, db := setup(t)
 	ctx := context.Background()
-	importers, _ := st.Create(ctx, Input{Name: str("importers"), Permissions: perms(RepoRead, RepoImport), RepositoryIDs: ids(1)})
-	chatters, _ := st.Create(ctx, Input{Name: str("chat on 2"), Permissions: perms(RepoChat), RepositoryIDs: ids(2)})
+	importers, _ := st.Create(ctx, Input{Name: str("importers"), Permissions: perms(RepoRead, RepoImport), RepositoryIDs: ids("r1")})
+	chatters, _ := st.Create(ctx, Input{Name: str("chat on 2"), Permissions: perms(RepoChat), RepositoryIDs: ids("r2")})
 	dev := user(t, db, "dev", importers.ID, chatters.ID)
 	if r, _ := st.Get(ctx, importers.ID); r.UserCount != 1 {
 		t.Fatalf("importers counts %d users, want 1", r.UserCount)
@@ -101,7 +101,7 @@ func TestRules(t *testing.T) {
 	if _, err := st.Update(ctx, Admin, Input{Permissions: perms(RepoRead)}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("narrowed the admin role: %v", err)
 	}
-	for _, in := range []Input{{AllRepositories: new(false)}, {RepositoryIDs: ids(1)}} {
+	for _, in := range []Input{{AllRepositories: new(false)}, {RepositoryIDs: ids("r1")}} {
 		if _, err := st.Update(ctx, Admin, in); !errors.Is(err, ErrConflict) {
 			t.Fatalf("narrowed the admin role to some repositories: %v", err)
 		}
@@ -126,8 +126,10 @@ func TestRules(t *testing.T) {
 	if _, err := st.Create(ctx, Input{Name: str("Readers")}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate name: %v", err)
 	}
-	if _, err := st.Update(ctx, r.ID, Input{RepositoryIDs: ids(99)}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("granted a missing repository: %v", err)
+	for _, missing := range []string{"r99", "1"} { // a row id names no repository
+		if _, err := st.Update(ctx, r.ID, Input{RepositoryIDs: ids(missing)}); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("granted the missing repository %q: %v", missing, err)
+		}
 	}
 	if _, err := st.Update(ctx, r.ID, Input{Permissions: perms("repo.everything")}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unknown permission: %v", err)
@@ -135,12 +137,12 @@ func TestRules(t *testing.T) {
 	if _, err := st.Update(ctx, 99, Input{Name: str("ghosts")}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("updated a missing role: %v", err)
 	}
-	if r, err = st.Update(ctx, r.ID, Input{Description: str("read only"), RepositoryIDs: ids(2, 1)}); err != nil ||
+	if r, err = st.Update(ctx, r.ID, Input{Description: str("read only"), RepositoryIDs: ids("r2", "r1")}); err != nil ||
 		r.Description != "read only" || len(r.Permissions) != 1 || len(r.RepositoryIDs) != 2 {
 		t.Fatalf("update kept what it was not given: %+v %v", r, err)
 	}
-	if r, err = st.Update(ctx, r.ID, Input{Permissions: perms(RepoChat), RepositoryIDs: ids(1)}); err != nil ||
-		!slices.Equal(r.Permissions, []Permission{RepoChat}) || !slices.Equal(r.RepositoryIDs, []int64{1}) {
+	if r, err = st.Update(ctx, r.ID, Input{Permissions: perms(RepoChat), RepositoryIDs: ids("r1")}); err != nil ||
+		!slices.Equal(r.Permissions, []Permission{RepoChat}) || !slices.Equal(r.RepositoryIDs, []string{"r1"}) {
 		t.Fatalf("an update added to the role's grants instead of replacing them: %+v %v", r, err)
 	}
 	if err := st.Delete(ctx, r.ID); err != nil {

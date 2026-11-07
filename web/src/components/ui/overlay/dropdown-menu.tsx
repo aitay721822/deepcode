@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui'
-import { createContext, useContext, type ComponentProps } from 'react'
+import { type ComponentProps, createContext, useContext } from 'react'
 import { cn } from '../../../lib/style/cn'
 import { pop } from '../../../lib/style/motion'
 
@@ -20,7 +20,12 @@ function DropdownMenuTrigger(props: ComponentProps<typeof DropdownMenuPrimitive.
   return <DropdownMenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} />
 }
 
-function DropdownMenuContent({ className, children, sideOffset = 4, ...props }: ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+function DropdownMenuContent({
+  className,
+  children,
+  sideOffset = 4,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.Content>) {
   const open = useContext(OpenContext)
   return (
     <AnimatePresence>
@@ -58,7 +63,13 @@ function DropdownMenuItem({ className, ...props }: ComponentProps<typeof Dropdow
 }
 
 function DropdownMenuSeparator({ className, ...props }: ComponentProps<typeof DropdownMenuPrimitive.Separator>) {
-  return <DropdownMenuPrimitive.Separator data-slot="dropdown-menu-separator" className={cn('-mx-1 my-1 h-px bg-border', className)} {...props} />
+  return (
+    <DropdownMenuPrimitive.Separator
+      data-slot="dropdown-menu-separator"
+      className={cn('-mx-1 my-1 h-px bg-border', className)}
+      {...props}
+    />
+  )
 }
 
 export { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger }

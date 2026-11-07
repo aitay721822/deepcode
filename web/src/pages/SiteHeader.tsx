@@ -21,7 +21,13 @@ export function SiteHeader({ repo }: { repo?: Repo }) {
         />
       )}
       {user && password.item && (
-        <PasswordDialog key={password.key} open={password.open} username={user.username} onClose={password.hide} onSubmit={changePassword} />
+        <PasswordDialog
+          key={password.key}
+          open={password.open}
+          username={user.username}
+          onClose={password.hide}
+          onSubmit={changePassword}
+        />
       )}
     </Header>
   )

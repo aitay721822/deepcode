@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 
 type State<T> = { key?: string; data?: T; error?: string; status?: number }
 
@@ -15,11 +15,14 @@ export function useApi<T>(key: string | null, load: () => Promise<T>, pollMs?: n
   // 16 times pollMs. Set as each load settles, so the first success puts polling back at pollMs.
   const failures = useRef(0)
   const skip = useRef(0)
+  // The latest load, without re-running the effect: callers pass a new closure every render, and the key alone says
+  // what it fetches.
+  const loadLatest = useEffectEvent(load)
   useEffect(() => {
     if (!key) return
     let live = true
     pending.current = true
-    load()
+    loadLatest()
       .then(
         (data) => {
           failures.current = skip.current = 0
@@ -28,10 +31,13 @@ export function useApi<T>(key: string | null, load: () => Promise<T>, pollMs?: n
         // A failed poll keeps the last data for this key; never another key's.
         (e: Error & { status?: number }) => {
           skip.current = 2 ** Math.min(++failures.current, 4) - 1
-          if (live) setState((s) => ({ key, data: s.key === key ? s.data : undefined, error: e.message, status: e.status }))
+          if (live)
+            setState((s) => ({ key, data: s.key === key ? s.data : undefined, error: e.message, status: e.status }))
         },
       )
-      .finally(() => live && (pending.current = false))
+      .finally(() => {
+        if (live) pending.current = false
+      })
     return () => {
       live = false
     }
@@ -47,14 +53,16 @@ export function useApi<T>(key: string | null, load: () => Promise<T>, pollMs?: n
     }, pollMs)
     return () => clearInterval(id)
   }, [key, pollMs])
+  // Stable, so an effect can list it without re-running.
+  const reload = useCallback(() => {
+    setState((s) => ({ ...s, error: undefined, status: undefined })) // a retry starts without the last error
+    setTick((t) => t + 1)
+  }, [])
   const current = state.key === key
   return {
     data: current ? state.data : undefined,
     error: current ? state.error : undefined,
     status: current ? state.status : undefined,
-    reload: () => {
-      setState((s) => ({ ...s, error: undefined, status: undefined })) // a retry starts without the last error
-      setTick((t) => t + 1)
-    },
+    reload,
   }
 }

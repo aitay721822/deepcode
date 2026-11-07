@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"deepcode/cmd/deepcode/config"
 	"deepcode/internal/app"
 	"deepcode/internal/app/server/webui"
 	"deepcode/internal/platform/storage"
@@ -24,11 +25,10 @@ import (
 
 // serve runs the HTTP server and the background pipeline until SIGINT/SIGTERM.
 func serve(args []string) error {
-	cfg, err := loadConfig()
+	cfg, addr, err := config.Load()
 	if err != nil {
 		return err
 	}
-	addr := env("DEEPCODE_ADDR", "127.0.0.1:8080")
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	fs.StringVar(&addr, "addr", addr, "listen address")
 	fs.StringVar(&cfg.DataDir, "data", cfg.DataDir, "data directory")

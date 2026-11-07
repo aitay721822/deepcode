@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -14,6 +15,7 @@ import (
 const (
 	sessionCookie = "deepcode_session"
 	principalKey  = "principal"
+	repoKey       = "repo"
 )
 
 // Session makes the principal of a valid session cookie available to the
@@ -57,18 +59,25 @@ func Require(perm role.Permission) gin.HandlerFunc {
 	}
 }
 
-// OnRepo guards a route on repository :id. A user who may not read the
-// repository gets 404, so its existence stays hidden; one who may read but
-// lacks perm gets 403.
-func OnRepo(perm role.Permission) gin.HandlerFunc {
+// OnRepo guards a route on repository :id, its public id, which lookup turns
+// into the row id that RepoID hands the handler. An unknown id (a row id
+// among them) and a repository the user may not read both get 404, so its
+// existence stays hidden; one who may read but lacks perm gets 403.
+func OnRepo(lookup func(context.Context, string) (int64, error), perm role.Permission) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		id, ok := PathID(c)
-		if !ok {
+		id, err := lookup(c.Request.Context(), c.Param("id"))
+		if err != nil {
+			DomainError(c, err)
 			return
 		}
-		Visible(c, perm, id)
+		if Visible(c, perm, id) {
+			c.Set(repoKey, id)
+		}
 	}
 }
+
+// RepoID is the row id of the repository OnRepo let through.
+func RepoID(c *gin.Context) int64 { return c.GetInt64(repoKey) }
 
 // Visible answers like OnRepo when the user may not use perm on repository
 // id, and reports whether they may.

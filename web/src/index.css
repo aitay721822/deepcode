@@ -1,7 +1,7 @@
 /* Global: Tailwind, the shadcn/ui theme tokens and base elements. Markdown prose and code colours live in components/source/source.css. */
 
-@import 'tailwindcss';
-@import 'tw-animate-css';
+@import "tailwindcss";
+@import "tw-animate-css";
 
 /* dark: follows the .dark class index.html (before the first paint) and the theme switch put on <html>; on screen
    only, since a page prints on paper (below). */
@@ -110,9 +110,10 @@
 
 @theme inline {
   /* Self-hosted (main.tsx); Chinese falls back to the system's own faces. */
-  --font-sans: 'Schibsted Grotesk Variable', 'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', ui-sans-serif, sans-serif;
-  --font-serif: 'Newsreader Variable', 'Noto Serif TC', 'Songti TC', 'Microsoft JhengHei', ui-serif, serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Microsoft JhengHei', monospace;
+  --font-sans:
+    "Schibsted Grotesk Variable", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", ui-sans-serif, sans-serif;
+  --font-serif: "Newsreader Variable", "Noto Serif TC", "Songti TC", "Microsoft JhengHei", ui-serif, serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, "Microsoft JhengHei", monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -196,7 +197,7 @@
 
   /* Paper grain under everything: the page shows it, cards and code cover it. */
   body::before {
-    content: '';
+    content: "";
     position: fixed;
     inset: 0;
     z-index: -1;
@@ -216,7 +217,7 @@
   }
 
   button:not(:disabled),
-  [role='button']:not(:disabled) {
+  [role="button"]:not(:disabled) {
     cursor: pointer;
   }
 
@@ -232,7 +233,9 @@
   *,
   *::before,
   *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must win over every component's own animation */
     animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: and over every transition */
     transition: none !important;
   }
 }

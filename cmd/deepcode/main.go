@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"deepcode/cmd/deepcode/config"
 	"deepcode/internal/platform/storage"
 )
 
@@ -17,7 +18,9 @@ const usage = `usage:
   deepcode backup [-data ./data] <output.db>
   deepcode passwd [-data ./data] <username>   (reads the new password from stdin)
 
-Configuration comes from DEEPCODE_* environment variables; see README.md.`
+Settings come from deepcode.yaml (or the file DEEPCODE_CONFIG names) and
+DEEPCODE_* environment variables, which override it; flags override both.
+See README.md.`
 
 func main() {
 	if len(os.Args) < 2 {
@@ -41,8 +44,16 @@ func main() {
 	}
 }
 
-// openData opens the database in the data directory dir, which must exist.
+// openData opens the database in the data directory dir, which must exist;
+// dir "" is the configured one. Given -data, the config is not read at all,
+// so a broken one cannot block a backup or a password reset.
 func openData(dir string) (*sql.DB, error) {
+	if dir == "" {
+		var err error
+		if dir, err = config.DataDir(); err != nil {
+			return nil, err
+		}
+	}
 	path := filepath.Join(dir, "deepcode.db")
 	if _, err := os.Stat(path); err != nil {
 		return nil, err

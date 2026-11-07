@@ -12,8 +12,17 @@ const paths: Record<Provider, string> = {
 /** GitHub's or GitLab's mark, sized and stroked like a lucide icon. */
 export function ProviderIcon({ provider, className, ...props }: { provider: Provider } & SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
-      className={cn('size-4 shrink-0', className)} {...props}>
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={cn('size-4 shrink-0', className)}
+      {...props}
+    >
       <path d={paths[provider]} />
     </svg>
   )

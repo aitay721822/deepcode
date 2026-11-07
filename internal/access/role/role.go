@@ -28,7 +28,7 @@ type Role struct {
 	Builtin         bool         `json:"builtin"`
 	Permissions     []Permission `json:"permissions"`
 	AllRepositories bool         `json:"allRepositories"`
-	RepositoryIDs   []int64      `json:"repositoryIds"` // when not AllRepositories
+	RepositoryIDs   []string     `json:"repositoryIds"` // public ids, when not AllRepositories
 	UserCount       int          `json:"userCount"`
 }
 
@@ -59,7 +59,7 @@ func (s *Store) roles(ctx context.Context, tail string, args ...any) ([]Role, er
 	out := []Role{}
 	index := map[int64]int{}
 	for rows.Next() {
-		r := Role{Permissions: []Permission{}, RepositoryIDs: []int64{}}
+		r := Role{Permissions: []Permission{}, RepositoryIDs: []string{}}
 		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Builtin, &r.AllRepositories, &r.UserCount); err != nil {
 			rows.Close()
 			return nil, err
@@ -80,7 +80,8 @@ func (s *Store) roles(ctx context.Context, tail string, args ...any) ([]Role, er
 	if err != nil {
 		return nil, err
 	}
-	err = scanPairs(ctx, s.DB, `SELECT role_id, repository_id FROM role_repositories ORDER BY repository_id`, func(id, repo int64) {
+	err = scanPairs(ctx, s.DB, `SELECT rr.role_id, r.public_id FROM role_repositories rr JOIN repositories r ON r.id = rr.repository_id
+		ORDER BY rr.repository_id`, func(id int64, repo string) {
 		if i, ok := index[id]; ok {
 			out[i].RepositoryIDs = append(out[i].RepositoryIDs, repo)
 		}

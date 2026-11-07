@@ -34,9 +34,10 @@ func TestResolve(t *testing.T) {
 		{path: "index.js", lang: "javascript", imports: []string{"./web/src/util?url"}},
 	}
 	// tools holds a module of its own, which wins over the root's for its paths.
-	modules := map[string]string{"": "example.com/m", "lib": "example.com/other", "tools": "example.com/m/tools/v2"}
+	configs := map[string]string{"go.mod": "module example.com/m\n", "lib/go.mod": "module example.com/other\n",
+		"tools/go.mod": "// tools\nmodule \"example.com/m/tools/v2\"\n\ngo 1.22\n"}
 	var got []string
-	for _, e := range resolve(files, modules) {
+	for _, e := range resolve(files, configs) {
 		got = append(got, e.src+" > "+e.dst)
 	}
 	want := []string{
@@ -232,9 +233,27 @@ func TestDiagram(t *testing.T) {
 	if got := draw(group(edges, 1)); got != "flowchart TD\n  n0[\"a\"]\n  n1[\"z\"]\n  n0 --> n1\n" {
 		t.Errorf("one segment: %q", got)
 	}
-	d := draw(group(edges, 2))
-	if strings.Count(d, "-->") != maxNodes-1 || !strings.Contains(d, `n0["a/b00"]`) {
+	d := draw(group(edges, 2)) // a/b00 only leads on to c: one level
+	if strings.Count(d, "-->") != maxNodes-1 || !strings.Contains(d, `n0["a/b00/c"]`) {
 		t.Errorf("trimmed to %d nodes:\n%s", maxNodes, d)
+	}
+	// Java's folders above its packages are the trunk, no level, and the
+	// labels skip what all share.
+	const pkg = "src/main/java/org/acme/shop/"
+	java := []edge{{pkg + "owner/Owners.java", pkg + "model/Person.java"}, {pkg + "vet/Vets.java", pkg + "model/Entity.java"},
+		{"src/test/java/org/acme/shop/owner/OwnersTests.java", pkg + "owner/Owners.java"}, {pkg + "App.java", pkg + "vet/Vets.java"}}
+	if got := draw(group(java, 1)); got != "flowchart TD\n  n0[\"shop\"]\n  n1[\"shop/vet\"]\n  n2[\"shop/owner\"]\n  n3[\"shop/model\"]\n  n0 --> n1\n  n2 --> n3\n  n1 --> n3\n" {
+		t.Errorf("packages: %q", got)
+	}
+	// So is src/ when all is in it.
+	if got := group([]edge{{"src/a/y.go", "src/b/z.go"}}, 1); !reflect.DeepEqual(got, []DirEdge{{"src/a", "src/b", 1}}) {
+		t.Errorf("under src: %+v", got)
+	}
+	// A label shows a long run of folded folders by its first and last.
+	const g, x = "gson/src/main/java/com/google/gson", "extras/src/main/java/com/google/gson/typeadapters"
+	modules := levels([]edge{{g + "/internal/A.java", g + "/B.java"}, {x + "/C.java", g + "/B.java"}})
+	if a, b := modules.short(g+"/internal"), modules.short(x); a != "gson/…/gson/internal" || b != "extras/…/typeadapters" {
+		t.Errorf("short: %q %q", a, b)
 	}
 	if got := draw([]DirEdge{{From: `x"]`, To: "<y#>`", Count: 1}}); !strings.Contains(got, `n0["x#quot;]"]`) || !strings.Contains(got, `n1["#lt;y#35;#gt;#96;"]`) {
 		t.Errorf("escaped: %q", got)
@@ -244,12 +263,6 @@ func TestDiagram(t *testing.T) {
 		{"tests/test_x.go", "pkg/y.go"}, {"docs/demo/a.ts", "web/lib/x.ts"}, {"middleware/logger.go", "mux.go"}}
 	if got := group(used, 1); !reflect.DeepEqual(got, []DirEdge{{"middleware", ".", 1}}) {
 		t.Errorf("grouped with tests and examples aside: %+v", got)
-	}
-	for p, want := range map[string]bool{"web/src/a.test.ts": true, "x.spec.js": true, "test_x.py": true, "a_test.go": true, "docs/x.ts": true,
-		"src/__tests__/a.ts": true, "src/contest.ts": false, "latest.go": false, "attest/x.go": false} {
-		if secondary(p) != want {
-			t.Errorf("secondary(%q) = %v", p, !want)
-		}
 	}
 	if got := group([]edge{{"a/x.go", "b/y.go"}, {"c/x.go", "b/y.go"}, {"c/z.go", "b/w.go"}}, 1); !reflect.DeepEqual(got, []DirEdge{{"c", "b", 2}, {"a", "b", 1}}) {
 		t.Errorf("busiest first: %+v", got)

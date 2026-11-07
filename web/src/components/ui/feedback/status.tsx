@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentProps } from 'react'
+import { type ComponentProps, useEffect, useState } from 'react'
 
 /**
  * A role=status line for a message that appears with its text: a live region speaks what changes once
@@ -7,7 +7,11 @@ import { useEffect, useState, type ComponentProps } from 'react'
 function Status({ children, ...props }: ComponentProps<'p'>) {
   const [ready, setReady] = useState(false)
   useEffect(() => setReady(true), [])
-  return <p role="status" {...props}>{ready && children}</p>
+  return (
+    <p role="status" {...props}>
+      {ready && children}
+    </p>
+  )
 }
 
 export { Status }

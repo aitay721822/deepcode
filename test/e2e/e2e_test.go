@@ -55,7 +55,7 @@ export const helper = () => 1;
 `
 
 type repoView struct {
-	ID       int64  `json:"id"`
+	ID       string `json:"id"` // a CUID2
 	Owner    string `json:"owner"`
 	Name     string `json:"name"`
 	Provider string `json:"provider"`
@@ -147,7 +147,8 @@ func TestEndToEnd(t *testing.T) {
 	if repo.Owner != "acme" || repo.Provider != "github" || repo.Stars != 42 || repo.Job == nil || repo.Job.Kind != jobs.KindIndex || repo.Job.CommitSHA != sha1 {
 		t.Fatalf("import response: %+v", repo)
 	}
-	repoPath := fmt.Sprintf("/api/repos/%d", repo.ID)
+	repoPath := "/api/repos/" + repo.ID
+	checkPublicID(t, admin, repo.ID)
 	waitFor(t, "index and wiki of the first commit", func() bool {
 		admin.get(repoPath, &repo)
 		failIfJobFailed(t, repo.Job)
@@ -195,7 +196,7 @@ func TestEndToEnd(t *testing.T) {
 
 	// Chat: streamed answer; the grouped citation keeps the real reference
 	// and drops the made-up one.
-	_, events := admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%d,"question":"How does Server.Handle work?"}`, repo.ID))
+	_, events := admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"question":"How does Server.Handle work?"}`, repo.ID))
 	if len(events["error"]) > 0 {
 		t.Fatalf("chat error: %s", events["error"][0])
 	}
@@ -229,7 +230,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	for i, q := range []string{"伺服器怎麼處理請求？",
 		"quokka narwhal zeppelin xylophone kumquat platypus walrus tundra velvet orchid pebble quilt saffron meadow lantern jigsaw?"} {
-		_, events = admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%d,"question":"%s"}`, repo.ID, q))
+		_, events = admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"question":"%s"}`, repo.ID, q))
 		var searched struct {
 			FTS int `json:"fts"`
 		}
@@ -282,7 +283,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	// A follow-up stays on its conversation's commit while that is indexed.
-	_, events = admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%d,"conversationId":%d,"question":"And the server?"}`, repo.ID, conv.ID))
+	_, events = admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"conversationId":%d,"question":"And the server?"}`, repo.ID, conv.ID))
 	if len(events["done"]) != 1 {
 		t.Fatalf("follow-up on the older commit: %v", events)
 	}
@@ -304,8 +305,8 @@ func TestEndToEnd(t *testing.T) {
 	}
 	var status string
 	var leftovers int
-	db.QueryRow(`SELECT status FROM snapshots WHERE commit_sha = ? AND repository_id = ?`, sha1, repo.ID).Scan(&status)
-	db.QueryRow(`SELECT count(*) FROM chunks c JOIN snapshots s ON s.id = c.snapshot_id WHERE s.commit_sha = ? AND s.repository_id = ?`, sha1, repo.ID).Scan(&leftovers)
+	db.QueryRow(`SELECT status FROM snapshots WHERE commit_sha = ? AND repository_id = (SELECT id FROM repositories WHERE public_id = ?)`, sha1, repo.ID).Scan(&status)
+	db.QueryRow(`SELECT count(*) FROM chunks c JOIN snapshots s ON s.id = c.snapshot_id WHERE s.commit_sha = ? AND s.repository_id = (SELECT id FROM repositories WHERE public_id = ?)`, sha1, repo.ID).Scan(&leftovers)
 	if status != "pruned" || leftovers != 0 {
 		t.Fatalf("first snapshot: status %q with %d chunks, want pruned with none", status, leftovers)
 	}
@@ -320,7 +321,7 @@ func TestEndToEnd(t *testing.T) {
 	if code := admin.get(fmt.Sprintf("%s/files/main.go?snapshot=%d", repoPath, stored.SnapshotID), &cited); code != http.StatusOK || cited.Content == "" {
 		t.Fatalf("cited file at the reopened conversation's snapshot %d: %d", stored.SnapshotID, code)
 	}
-	_, events = admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%d,"conversationId":%d,"question":"And main?"}`, repo.ID, conv.ID))
+	_, events = admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"conversationId":%d,"question":"And main?"}`, repo.ID, conv.ID))
 	if len(events["done"]) != 1 {
 		t.Fatalf("follow-up: %v", events)
 	}
@@ -348,7 +349,7 @@ func TestEndToEnd(t *testing.T) {
 	checkJobErrors(t, db, admin, ivy, tools)
 	checkJobEvents(t, srv.URL, admin, repo.ID, tools, func() {
 		checkPrunedCommitReturns(t, db, admin, remote, repoPath, sha1, firstChunks)
-		if code := admin.post(fmt.Sprintf("/api/repos/%d/sync", tools), `{}`, nil); code != http.StatusAccepted {
+		if code := admin.post(fmt.Sprintf("/api/repos/%s/sync", tools), `{}`, nil); code != http.StatusAccepted {
 			t.Fatalf("sync acme/tools: %d", code)
 		}
 	})
@@ -397,7 +398,7 @@ func checkPrunedCommitReturns(t *testing.T, db *sql.DB, admin *client, remote, r
 	admin.get(repoPath, &repo)
 	res, err := db.Exec(`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count)
 		SELECT s.id, f.path, f.language, f.content_hash, f.size, f.line_count FROM source_files f, snapshots s
-		WHERE f.snapshot_id = ? AND f.path = 'main.go' AND s.repository_id = ? AND s.commit_sha = ? AND s.status = 'pruned'`,
+		WHERE f.snapshot_id = ? AND f.path = 'main.go' AND s.repository_id = (SELECT id FROM repositories WHERE public_id = ?) AND s.commit_sha = ? AND s.status = 'pruned'`,
 		repo.Snapshot.ID, repo.ID, sha)
 	if n, _ := res.RowsAffected(); err != nil || n != 1 {
 		t.Fatalf("leave a file row in the pruned snapshot: %d rows, %v", n, err)

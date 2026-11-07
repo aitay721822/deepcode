@@ -109,7 +109,7 @@ func TestFTSRanksCodeFirst(t *testing.T) {
 }
 
 // TestFTSFindsWordsOfIdentifiers: a question's word finds the compound
-// identifiers made of it through their terms, ahead of the same word in
+// identifiers made of it through their terms, as well as the same word in
 // prose, and a compound identifier in a question finds others that share its
 // words.
 func TestFTSFindsWordsOfIdentifiers(t *testing.T) {
@@ -120,8 +120,10 @@ func TestFTSFindsWordsOfIdentifiers(t *testing.T) {
 			(1, 'cart/cart.go', 1, 9, 'func checkout() {}', 'h3', '')`,
 	)
 	for _, q := range []string{"Where is the token renewed?", "Who calls userToken?"} {
-		if ids, err := (&Retriever{DB: db}).fts(context.Background(), 1, q, nil, ftsLimit); err != nil || !reflect.DeepEqual(ids, []int64{1, 2}) {
-			t.Errorf("%q found chunks %v %v, want refreshUserToken's (1), then the prose (2)", q, ids, err)
+		ids, err := (&Retriever{DB: db}).fts(context.Background(), 1, q, nil, ftsLimit)
+		slices.Sort(ids)
+		if err != nil || !reflect.DeepEqual(ids, []int64{1, 2}) {
+			t.Errorf("%q found chunks %v %v, want refreshUserToken's (1) and the prose (2)", q, ids, err)
 		}
 	}
 }

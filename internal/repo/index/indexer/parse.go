@@ -5,6 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -28,17 +31,20 @@ type file struct {
 
 type parsedFile struct {
 	file
-	content string
-	lines   int
-	symbols []analyzer.Symbol
-	imports []string
-	chunks  []chunker.Chunk
+	content   string
+	lines     int
+	generated bool
+	symbols   []analyzer.Symbol
+	imports   []string
+	chunks    []chunker.Chunk
 }
 
 // parse stores the commit's indexable files batch by batch: files already in
 // this snapshot are skipped, files unchanged since prev are copied, the rest
-// are read from git and analyzed.
-func (ix *Indexer) parse(ctx context.Context, dir, sha string, snap, prev int64, progress jobs.Progress) error {
+// are read from git and analyzed. With redo, every file is read and analyzed
+// again in place, file by file, and those the snapshot should no longer hold
+// are dropped: a published snapshot an older analyzer read keeps serving.
+func (ix *Indexer) parse(ctx context.Context, dir, sha string, snap, prev int64, redo bool, progress jobs.Progress) error {
 	progress.Stage("parse", 0, 0)
 	entries, err := ix.Git.LsTree(ctx, dir, sha)
 	if err != nil {
@@ -48,13 +54,19 @@ func (ix *Indexer) parse(ctx context.Context, dir, sha string, snap, prev int64,
 	if err != nil {
 		return err
 	}
-	prevSHA, err := pathMap(ctx, ix.DB, `SELECT path, content_hash FROM source_files WHERE snapshot_id = ?`, prev)
+	// An older analyzer's rows are not copied: it read some files otherwise.
+	prevSHA, err := pathMap(ctx, ix.DB, `SELECT f.path, f.content_hash FROM source_files f JOIN snapshots s ON s.id = f.snapshot_id
+		WHERE f.snapshot_id = ? AND s.analyzer = `+strconv.Itoa(analyzer.Version), prev)
 	if err != nil {
 		return err
 	}
 	done, err := pathMap(ctx, ix.DB, `SELECT path, '' FROM source_files WHERE snapshot_id = ?`, snap)
 	if err != nil {
 		return err
+	}
+	var stale map[string]string // with redo: the paths the snapshot holds that are not read again yet
+	if redo {
+		stale, done, prevSHA = done, map[string]string{}, map[string]string{}
 	}
 	blobs, err := ix.Git.OpenBlobs(ctx, dir)
 	if err != nil {
@@ -89,11 +101,18 @@ func (ix *Indexer) parse(ctx context.Context, dir, sha string, snap, prev int64,
 		if err := ix.write(ctx, snap, prev, parsed, copies); err != nil {
 			return err
 		}
+		for _, p := range parsed {
+			delete(stale, p.path)
+		}
 		parsedN, copiedN, skippedN = parsedN+len(parsed), copiedN+len(copies), skippedN+len(batch)-len(parsed)-len(copies)
 		i += len(batch)
 		progress.Stage("parse", i, len(files))
 	}
 	progress.Logf("parsed %d files, copied %d unchanged since the last snapshot, skipped %d (stored before, binary or minified)", parsedN, copiedN, skippedN)
+	if len(stale) > 0 {
+		progress.Logf("dropped %d files this version does not index", len(stale))
+		return ix.forget(ctx, snap, slices.Collect(maps.Keys(stale)))
+	}
 	return nil
 }
 
@@ -138,7 +157,8 @@ func (ix *Indexer) indexable(entries []git.TreeEntry) ([]file, error) {
 func hidden(r rune) bool { return r == utf8.RuneError || unicode.In(r, unicode.Cc, unicode.Cf) }
 
 // parseFile normalises a blob to UTF-8 text with LF endings and extracts its
-// symbols, imports and chunks; binary and minified files are rejected.
+// symbols, imports and chunks, a generated file's chunks alone; binary and
+// minified files are rejected.
 func parseFile(p *analyzer.Parser, f file, raw []byte) (parsedFile, bool) {
 	if bytes.IndexByte(raw, 0) >= 0 {
 		return parsedFile{}, false // binary, wherever the NUL is: files are at most MaxFileBytes
@@ -153,9 +173,13 @@ func parseFile(p *analyzer.Parser, f file, raw []byte) (parsedFile, bool) {
 			return parsedFile{}, false
 		}
 	}
-	parsed := p.Parse(f.lang, []byte(content))
-	return parsedFile{file: f, content: content, lines: len(lines), symbols: parsed.Symbols, imports: parsed.Imports,
-		chunks: chunker.Chunks(lines, parsed.Symbols)}, true
+	generated := analyzer.Generated(f.path, content)
+	var parsed analyzer.File
+	if !generated {
+		parsed = p.Parse(f.lang, []byte(content))
+	}
+	return parsedFile{file: f, content: content, lines: len(lines), generated: generated, symbols: parsed.Symbols,
+		imports: parsed.Imports, chunks: chunker.Chunks(lines, parsed.Symbols)}, true
 }
 
 // pathMap runs a two-column query (path, value) for one snapshot; snapshot 0

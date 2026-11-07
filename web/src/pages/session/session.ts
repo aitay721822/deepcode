@@ -17,7 +17,8 @@ export const SessionContext = createContext<Session | null>(null)
 export function destination(next: string | null) {
   try {
     const u = new URL(next || '/', location.origin)
-    if (u.origin === location.origin && !['/login', '/signup'].includes(u.pathname) && !u.pathname.startsWith('//')) return u.pathname + u.search + u.hash
+    if (u.origin === location.origin && !['/login', '/signup'].includes(u.pathname) && !u.pathname.startsWith('//'))
+      return u.pathname + u.search + u.hash
   } catch {
     // malformed: go home
   }
@@ -25,7 +26,8 @@ export function destination(next: string | null) {
 }
 
 /** path, keeping where to go once signed in: between the sign-in and sign-up pages. */
-export const withNext = (path: string, next: string | null) => (next ? `${path}?next=${encodeURIComponent(next)}` : path)
+export const withNext = (path: string, next: string | null) =>
+  next ? `${path}?next=${encodeURIComponent(next)}` : path
 
 export function useSession() {
   const s = useContext(SessionContext)

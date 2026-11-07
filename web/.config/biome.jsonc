@@ -1,0 +1,52 @@
+{
+  "$schema": "../node_modules/@biomejs/biome/configuration_schema.json",
+  // Here, not beside package.json: web/ already holds its five files. The npm scripts pass --config-path=.config, and
+  // the scan skips this folder (!!), or Biome would take this file for a second, nested root.
+  "files": {
+    "includes": ["**", "!package-lock.json", "!!.config", "!!dist"]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "lineWidth": 120
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "asNeeded"
+    }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "linter": {
+    "domains": {
+      "react": "recommended"
+    },
+    "rules": {
+      "a11y": {
+        // Radix's Switch is a <button role="switch">, which a <label> around it names and clicks.
+        "noLabelWithoutControl": {
+          "level": "error",
+          "options": { "inputComponents": ["Switch"] }
+        }
+      },
+      "correctness": {
+        // An effect may re-run on a value it does not read (a reload tick, a new attempt, the theme), as React's own
+        // hooks rule allows; a dependency an effect reads but does not list is still an error.
+        "useExhaustiveDependencies": {
+          "level": "error",
+          "options": { "reportUnnecessaryDependencies": false }
+        }
+      }
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  }
+}

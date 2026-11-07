@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { AlertDialog as AlertDialogPrimitive } from 'radix-ui'
-import { createContext, useContext, type ComponentProps } from 'react'
+import { type ComponentProps, createContext, useContext } from 'react'
 import { cn } from '../../../lib/style/cn'
 import { fade, pop } from '../../../lib/style/motion'
 import { Button } from '../controls/button'
@@ -24,7 +24,11 @@ function AlertDialogContent({ className, children, ...props }: ComponentProps<ty
       {open && (
         <AlertDialogPrimitive.Portal forceMount>
           <AlertDialogPrimitive.Overlay forceMount asChild>
-            <motion.div data-slot="alert-dialog-overlay" className="fixed inset-0 z-50 bg-overlay backdrop-blur-[2px]" {...fade} />
+            <motion.div
+              data-slot="alert-dialog-overlay"
+              className="fixed inset-0 z-50 bg-overlay backdrop-blur-[2px]"
+              {...fade}
+            />
           </AlertDialogPrimitive.Overlay>
           <AlertDialogPrimitive.Content forceMount asChild {...props}>
             <motion.div
@@ -46,19 +50,43 @@ function AlertDialogContent({ className, children, ...props }: ComponentProps<ty
 }
 
 function AlertDialogHeader({ className, ...props }: ComponentProps<'div'>) {
-  return <div data-slot="alert-dialog-header" className={cn('flex flex-col gap-2 text-center sm:text-left', className)} {...props} />
+  return (
+    <div
+      data-slot="alert-dialog-header"
+      className={cn('flex flex-col gap-2 text-center sm:text-left', className)}
+      {...props}
+    />
+  )
 }
 
 function AlertDialogFooter({ className, ...props }: ComponentProps<'div'>) {
-  return <div data-slot="alert-dialog-footer" className={cn('flex flex-col-reverse gap-2 sm:flex-row sm:justify-end', className)} {...props} />
+  return (
+    <div
+      data-slot="alert-dialog-footer"
+      className={cn('flex flex-col-reverse gap-2 sm:flex-row sm:justify-end', className)}
+      {...props}
+    />
+  )
 }
 
 function AlertDialogTitle({ className, ...props }: ComponentProps<typeof AlertDialogPrimitive.Title>) {
-  return <AlertDialogPrimitive.Title data-slot="alert-dialog-title" className={cn('font-serif text-[23px] leading-tight font-medium tracking-[-0.01em]', className)} {...props} />
+  return (
+    <AlertDialogPrimitive.Title
+      data-slot="alert-dialog-title"
+      className={cn('font-serif text-[23px] leading-tight font-medium tracking-[-0.01em]', className)}
+      {...props}
+    />
+  )
 }
 
 function AlertDialogDescription({ className, ...props }: ComponentProps<typeof AlertDialogPrimitive.Description>) {
-  return <AlertDialogPrimitive.Description data-slot="alert-dialog-description" className={cn('text-sm text-muted-foreground', className)} {...props} />
+  return (
+    <AlertDialogPrimitive.Description
+      data-slot="alert-dialog-description"
+      className={cn('text-sm text-muted-foreground', className)}
+      {...props}
+    />
+  )
 }
 
 /** Closes the dialog; Radix focuses it when the dialog opens. */
@@ -70,4 +98,12 @@ function AlertDialogCancel({ variant = 'outline', ...props }: ComponentProps<typ
   )
 }
 
-export { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle }
+export {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+}

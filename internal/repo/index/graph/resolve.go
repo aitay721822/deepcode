@@ -5,6 +5,10 @@ import (
 	"path"
 	"slices"
 	"strings"
+
+	"deepcode/internal/repo/index/graph/dotnet"
+	"deepcode/internal/repo/index/graph/jvm"
+	"deepcode/internal/repo/index/graph/rust"
 )
 
 // file is a source file in a language with a grammar, with the modules it
@@ -17,42 +21,78 @@ type file struct {
 // edge is an import of one file by another: src imports dst.
 type edge struct{ src, dst string }
 
+// family names the resolver of each language that a folder of its own
+// resolves, from its files' facts (the analyzer's folder of the same name
+// reads them) and configs; a family's files are resolved together, as one
+// family's languages may use each other's declarations.
+var family = map[string]string{"csharp": "dotnet", "java": "jvm", "rust": "rust"}
+
+var resolvers = map[string]func(files map[string][]string, configs map[string]string) [][2]string{
+	"dotnet": dotnet.Resolve, "jvm": jvm.Resolve, "rust": rust.Resolve,
+}
+
 // jsExts are the extensions a JavaScript or TypeScript specifier may leave
 // out, in the order a file is looked for.
 var jsExts = []string{".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"}
 
-// resolve turns the files' imports into edges between them, sorted. A Go
-// import path names a directory through a go.mod's module path (modules maps
-// each go.mod's directory to its module), and every Go file of that package,
-// tests aside; a JavaScript or TypeScript specifier starting with . names a
-// file relative to the importer, as Node and TypeScript look it up.
+// resolve turns the files' imports into edges between them, sorted; configs
+// holds the content of go.mod and the other files resolving reads, by path. A
+// Go import path names a directory through a go.mod's module path, and every
+// Go file of that package, tests aside; a JavaScript or TypeScript specifier
+// starting with . names a file relative to the importer, as Node and
+// TypeScript look it up.
 // ponytail: package names (react, @/components via tsconfig paths, Go
 // modules of a go.work) stay unresolved; read tsconfig.json's paths if
 // repositories that rely on them lose their graph.
-func resolve(files []file, modules map[string]string) []edge {
+func resolve(files []file, configs map[string]string) []edge {
+	modules := map[string]string{} // each go.mod's directory → its module path
+	for p, content := range configs {
+		if path.Base(p) == "go.mod" {
+			if m := moduleOf(content); m != "" {
+				modules[dir(p)] = m
+			}
+		}
+	}
 	code := map[string]bool{}
 	pkgs := map[string][]string{} // directory → its Go files, tests aside
+	groups := map[string]map[string][]string{}
 	for _, f := range files {
 		code[f.path] = true
 		if f.lang == "go" && !strings.HasSuffix(f.path, "_test.go") {
 			pkgs[dir(f.path)] = append(pkgs[dir(f.path)], f.path)
+		}
+		if fam := family[f.lang]; fam != "" {
+			if groups[fam] == nil {
+				groups[fam] = map[string][]string{}
+			}
+			groups[fam][f.path] = f.imports
 		}
 	}
 	var out []edge
 	for _, f := range files {
 		for _, spec := range f.imports {
 			var dsts []string
-			if f.lang == "go" {
+			switch f.lang {
+			case "go":
 				if d, ok := goPackage(spec, modules); ok {
 					dsts = pkgs[d]
 				}
-			} else if t := jsTarget(f.path, spec, code); t != "" {
-				dsts = []string{t}
+			case "javascript", "typescript", "tsx":
+				if t := jsTarget(f.path, spec, code); t != "" {
+					dsts = []string{t}
+				}
 			}
 			for _, d := range dsts {
 				if d != f.path {
 					out = append(out, edge{f.path, d})
 				}
+			}
+		}
+	}
+	for fam, group := range groups {
+		for _, e := range resolvers[fam](group, configs) {
+			if e[0] != e[1] {
+				out = append(out, edge{e[0], e[1]})
 			}
 		}
 	}

@@ -8,7 +8,7 @@ import { useApi } from '../lib/useApi'
  * and a few times more after indexing while its wiki job may still be on the way.
  * A 404 drops what was loaded and ends the polling: deleted, or no longer visible, it does not come back.
  */
-export function useRepo(id: number) {
+export function useRepo(id: string) {
   const [polls, setPolls] = useState<number | null>(null) // left to make (null: not counted yet); a running job refills them
   const res = useApi(`repo:${id}`, () => getRepo(id), polls ? 1500 : undefined)
   const gone = res.status === 404

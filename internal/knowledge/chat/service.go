@@ -56,7 +56,7 @@ func Explain(err error) (msg string, logIt bool) {
 }
 
 type Request struct {
-	RepoID         int64  `json:"repoId"`
+	RepoID         int64  `json:"-"`              // the row id; the API takes the public id
 	ConversationID int64  `json:"conversationId"` // 0 starts one; else one of UserID's
 	Question       string `json:"question"`
 	Deep           bool   `json:"deep"` // search more rounds and read a wiki page first (deep.go)

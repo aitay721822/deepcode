@@ -24,7 +24,7 @@ func setup(t *testing.T) (*Store, *sql.DB) {
 	}
 	t.Cleanup(func() { db.Close() })
 	for _, id := range []int64{1, 2} {
-		db.Exec(`INSERT INTO repositories(id, url, owner, name) VALUES (?, ?, 'o', 'r')`, id, "https://github.com/o/r"+string(rune('0'+id)))
+		db.Exec(`INSERT INTO repositories(id, public_id, url, owner, name) VALUES (?, ?, ?, 'o', 'r')`, id, "r"+string(rune('0'+id)), "https://github.com/o/r"+string(rune('0'+id)))
 	}
 	accounts := &account.Store{DB: db}
 	if _, _, err := accounts.Bootstrap(context.Background(), "password-0"); err != nil { // an admin, as after any start
@@ -230,13 +230,13 @@ func TestLoginBurst(t *testing.T) {
 func TestGrantsFollowRoles(t *testing.T) {
 	s, _ := setup(t)
 	ctx := context.Background()
-	readers, _ := s.Roles.Create(ctx, role.Input{Name: new("readers"), Permissions: &[]role.Permission{role.RepoRead}, RepositoryIDs: &[]int64{1}})
+	readers, _ := s.Roles.Create(ctx, role.Input{Name: new("readers"), Permissions: &[]role.Permission{role.RepoRead}, RepositoryIDs: &[]string{"r1"}})
 	user(t, s, "dev", readers.ID)
 	token, p, err := s.Login(ctx, "dev", "password-1", "1.1.1.1")
 	if err != nil || !p.CanOn(role.RepoRead, 1) || p.CanOn(role.RepoRead, 2) {
 		t.Fatalf("dev: %+v %v", p, err)
 	}
-	if _, err := s.Roles.Update(ctx, readers.ID, role.Input{RepositoryIDs: &[]int64{1, 2}}); err != nil {
+	if _, err := s.Roles.Update(ctx, readers.ID, role.Input{RepositoryIDs: &[]string{"r1", "r2"}}); err != nil {
 		t.Fatal(err)
 	}
 	if p, _ = s.Authenticate(ctx, token); !p.CanOn(role.RepoRead, 2) {

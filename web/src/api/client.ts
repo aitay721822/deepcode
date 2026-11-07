@@ -18,7 +18,8 @@ export async function httpError(res: Response) {
  */
 export function unreachable(e: unknown): never {
   if (e instanceof TypeError) throw new Error('Cannot reach the server. Check the connection and try again.')
-  if (e instanceof DOMException && e.name === 'TimeoutError') throw new Error('The server took too long to answer. Try again.')
+  if (e instanceof DOMException && e.name === 'TimeoutError')
+    throw new Error('The server took too long to answer. Try again.')
   throw e
 }
 
@@ -33,9 +34,11 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 const json = { 'Content-Type': 'application/json' }
 
-export const post = <T>(path: string, data: unknown) => api<T>(path, { method: 'POST', headers: json, body: JSON.stringify(data) })
+export const post = <T>(path: string, data: unknown) =>
+  api<T>(path, { method: 'POST', headers: json, body: JSON.stringify(data) })
 
-export const patch = <T>(path: string, data: unknown) => api<T>(path, { method: 'PATCH', headers: json, body: JSON.stringify(data) })
+export const patch = <T>(path: string, data: unknown) =>
+  api<T>(path, { method: 'PATCH', headers: json, body: JSON.stringify(data) })
 
 export const del = (path: string) => api<unknown>(path, { method: 'DELETE', headers: json })
 
@@ -45,11 +48,12 @@ export type StreamState = 'open' | 'retrying' | 'closed'
  * Opens a server-sent event stream and hands each named event's JSON to its handler.
  * EventSource reconnects by itself ('retrying', then 'open'); 'closed' means it gave up,
  * e.g. on a 401 it cannot report. Returns the function that closes the stream.
- * The typed wrappers in api/* narrow each handler's data.
+ * The typed wrappers in api/* narrow each handler's data: a handler of never takes any of them.
  */
-export function listen(path: string, on: Record<string, (data: any) => void>, state?: (s: StreamState) => void) {
+export function listen(path: string, on: Record<string, (data: never) => void>, state?: (s: StreamState) => void) {
   const es = new EventSource(path)
-  for (const [name, handle] of Object.entries(on)) es.addEventListener(name, (e) => handle(JSON.parse((e as MessageEvent).data)))
+  for (const [name, handle] of Object.entries(on))
+    es.addEventListener(name, (e) => handle(JSON.parse((e as MessageEvent).data) as never))
   es.onopen = () => state?.('open')
   es.onerror = () => state?.(es.readyState === EventSource.CLOSED ? 'closed' : 'retrying')
   return () => es.close()

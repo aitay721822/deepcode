@@ -16,10 +16,6 @@ import (
 // snapshot resolves ?snapshot= (which must belong to the repository) or the
 // published snapshot.
 func (a *API) snapshot(c *gin.Context) (catalog.Ref, bool) {
-	repoID, ok := httpx.PathID(c)
-	if !ok {
-		return catalog.Ref{}, false
-	}
 	var id int64
 	if v := c.Query("snapshot"); v != "" {
 		var err error
@@ -28,7 +24,7 @@ func (a *API) snapshot(c *gin.Context) (catalog.Ref, bool) {
 			return catalog.Ref{}, false
 		}
 	}
-	ref, err := a.Catalog.Resolve(c.Request.Context(), repoID, id)
+	ref, err := a.Catalog.Resolve(c.Request.Context(), httpx.RepoID(c), id)
 	if err != nil {
 		httpx.DomainError(c, err)
 		return catalog.Ref{}, false

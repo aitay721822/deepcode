@@ -18,7 +18,7 @@ import (
 // while serve runs.
 func passwd(args []string) error {
 	fs := flag.NewFlagSet("passwd", flag.ExitOnError)
-	data := fs.String("data", env("DEEPCODE_DATA", "data"), "data directory")
+	data := fs.String("data", "", "data directory (default: the configured one)")
 	fs.Parse(args)
 	if fs.NArg() != 1 {
 		return errors.New(usage)

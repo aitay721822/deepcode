@@ -32,7 +32,8 @@ function merge(loaded: JobRow[], live: Map<number, JobRow>) {
   return [...rows.values()].sort((a, b) => b.id - a.id)
 }
 
-const stageText = (j: JobRow) => (j.status === 'failed' ? j.error || 'Failed' : j.status === 'succeeded' ? 'Done' : stageLabel(j))
+const stageText = (j: JobRow) =>
+  j.status === 'failed' ? j.error || 'Failed' : j.status === 'succeeded' ? 'Done' : stageLabel(j)
 
 /** Recent jobs, kept live by the job event stream. */
 export function JobsSection() {
@@ -49,38 +50,59 @@ export function JobsSection() {
       (j) => setLive((m) => new Map(m).set(j.id, j)),
       (s) => {
         setStream(s)
-        if (s === 'retrying') dropped = true // EventSource reconnects by itself
+        if (s === 'retrying')
+          dropped = true // EventSource reconnects by itself
         else if (s === 'open' && dropped) {
           dropped = false
           reload() // catch up on what the gap missed
         } else if (s === 'closed') refresh().catch(() => {}) // a lost session sends the reader to sign in; otherwise the notice stays
       },
     )
-  }, [attempt])
+  }, [attempt, reload, refresh])
   // As many as a load lists (the API's 100), however many jobs a tab left open for days has seen.
-  const rows = useMemo(() => merge(data ?? [], live).filter((j) => !status || j.status === status).slice(0, 100), [data, live, status])
+  const rows = useMemo(
+    () =>
+      merge(data ?? [], live)
+        .filter((j) => !status || j.status === status)
+        .slice(0, 100),
+    [data, live, status],
+  )
 
   return (
     <section>
       <SectionHead title="Jobs">
         <div className="flex items-center gap-2">
-          <Label htmlFor={filterId} className="font-normal text-muted-foreground">Status</Label>
+          <Label htmlFor={filterId} className="font-normal text-muted-foreground">
+            Status
+          </Label>
           <Select value={status || ALL} onValueChange={(v) => setStatus(v === ALL ? '' : (v as Job['status']))}>
-            <SelectTrigger id={filterId} className="h-8 w-32"><SelectValue /></SelectTrigger>
+            <SelectTrigger id={filterId} className="h-8 w-32">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL}>All</SelectItem>
-              {statuses.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              {statuses.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
       </SectionHead>
-      <StreamNotice state={stream} what="Live updates" onReconnect={() => {
-        setStream('retrying')
-        setAttempt((a) => a + 1)
-        reload()
-      }} />
+      <StreamNotice
+        state={stream}
+        what="Live updates"
+        onReconnect={() => {
+          setStream('retrying')
+          setAttempt((a) => a + 1)
+          reload()
+        }}
+      />
       <LoadError error={error} onRetry={reload} />
-      {!data ? !error && <SkeletonText /> : (
+      {!data ? (
+        !error && <SkeletonText />
+      ) : (
         <Table>
           <TableHeader>
             <TableRow>
@@ -94,15 +116,36 @@ export function JobsSection() {
           </TableHeader>
           <TableBody>
             {rows.map((j) => (
-              <TableRow key={j.id} className="cursor-pointer" onClick={(e) => (e.target as Element).closest('a') || navigate(`/admin/jobs/${j.id}`)}>
-                <TableCell><StatusBadge status={j.status} /></TableCell>
-                <TableCell className="font-medium"><Link to={`/admin/jobs/${j.id}`} className="hover:underline">{j.repoOwner}/{j.repoName}</Link></TableCell>
+              <TableRow
+                key={j.id}
+                className="cursor-pointer"
+                onClick={(e) => (e.target as Element).closest('a') || navigate(`/admin/jobs/${j.id}`)}
+              >
+                <TableCell>
+                  <StatusBadge status={j.status} />
+                </TableCell>
+                <TableCell className="font-medium">
+                  <Link to={`/admin/jobs/${j.id}`} className="hover:underline">
+                    {j.repoOwner}/{j.repoName}
+                  </Link>
+                </TableCell>
                 <TableCell>{j.kind}</TableCell>
                 <TableCell className="min-w-40">
-                  <span className={cn('block max-w-[200px] truncate text-[12.5px]', j.status === 'failed' ? 'text-destructive' : 'text-muted-foreground')} title={stageText(j)}>
+                  <span
+                    className={cn(
+                      'block max-w-[200px] truncate text-[12.5px]',
+                      j.status === 'failed' ? 'text-destructive' : 'text-muted-foreground',
+                    )}
+                    title={stageText(j)}
+                  >
                     {stageText(j)}
                   </span>
-                  <Progress className="mt-1.5" value={Math.round(jobFraction(j) * 100)} tone={isActive(j) ? 'warning' : 'muted'} aria-label={`${j.repoOwner}/${j.repoName} ${j.kind}`} />
+                  <Progress
+                    className="mt-1.5"
+                    value={Math.round(jobFraction(j) * 100)}
+                    tone={isActive(j) ? 'warning' : 'muted'}
+                    aria-label={`${j.repoOwner}/${j.repoName} ${j.kind}`}
+                  />
                 </TableCell>
                 <TableCell>{j.attempts}</TableCell>
                 <TableCell>{formatTime(j.updatedAt)}</TableCell>
@@ -110,7 +153,9 @@ export function JobsSection() {
             ))}
             {rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-[13px] text-muted-foreground">No jobs{status && ` ${status}`}.</TableCell>
+                <TableCell colSpan={6} className="text-[13px] text-muted-foreground">
+                  No jobs{status && ` ${status}`}.
+                </TableCell>
               </TableRow>
             )}
           </TableBody>

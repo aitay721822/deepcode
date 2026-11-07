@@ -18,7 +18,11 @@ import { RoleDialog } from './RoleDialog'
 export function RolesSection() {
   const { refresh } = useSession()
   const { data: roles, error, reload } = useApi('admin:roles', listRoles)
-  const { data: permissions, error: permissionsError, reload: reloadPermissions } = useApi('admin:permissions', listPermissions)
+  const {
+    data: permissions,
+    error: permissionsError,
+    reload: reloadPermissions,
+  } = useApi('admin:permissions', listPermissions)
   const { data: repos, error: reposError, reload: reloadRepos } = useApi('admin:repositories', listRepositories)
   const failed = error || permissionsError || reposError
   const lists = permissions && repos ? { permissions, repos } : null // the role form is offered only with both
@@ -33,14 +37,21 @@ export function RolesSection() {
   return (
     <section>
       <SectionHead title="Roles">
-        <Button disabled={!lists} onClick={() => edit.show('new')}><PlusIcon /> New role</Button>
+        <Button disabled={!lists} onClick={() => edit.show('new')}>
+          <PlusIcon /> New role
+        </Button>
       </SectionHead>
-      <LoadError error={failed} onRetry={() => {
-        if (error) reload()
-        if (permissionsError) reloadPermissions()
-        if (reposError) reloadRepos()
-      }} />
-      {!roles ? !error && <SkeletonText /> : (
+      <LoadError
+        error={failed}
+        onRetry={() => {
+          if (error) reload()
+          if (permissionsError) reloadPermissions()
+          if (reposError) reloadRepos()
+        }}
+      />
+      {!roles ? (
+        !error && <SkeletonText />
+      ) : (
         <Table>
           <TableHeader>
             <TableRow>
@@ -49,23 +60,50 @@ export function RolesSection() {
               <TableHead>Permissions</TableHead>
               <TableHead>Repositories</TableHead>
               <TableHead>Users</TableHead>
-              <TableHead><span className="sr-only">Actions</span></TableHead>
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {roles.map((r) => (
               <TableRow key={r.id}>
                 <TableCell className="font-medium">
-                  <span className="inline-flex items-center gap-2">{r.name} {r.builtin && <Badge variant="outline">Built-in</Badge>}</span>
+                  <span className="inline-flex items-center gap-2">
+                    {r.name} {r.builtin && <Badge variant="outline">Built-in</Badge>}
+                  </span>
                 </TableCell>
-                <TableCell><span className="block max-w-[200px] truncate text-muted-foreground" title={r.description}>{r.description}</span></TableCell>
+                <TableCell>
+                  <span className="block max-w-[200px] truncate text-muted-foreground" title={r.description}>
+                    {r.description}
+                  </span>
+                </TableCell>
                 <TableCell title={r.permissions.join(', ')}>{plural(r.permissions.length, 'permission')}</TableCell>
-                <TableCell>{r.allRepositories ? 'All repositories' : plural(r.repositoryIds.length, 'repository', 'repositories')}</TableCell>
+                <TableCell>
+                  {r.allRepositories
+                    ? 'All repositories'
+                    : plural(r.repositoryIds.length, 'repository', 'repositories')}
+                </TableCell>
                 <TableCell>{r.userCount}</TableCell>
                 <TableCell className="text-right">
-                  <Button variant="ghost" size="icon-sm" aria-label={`Edit ${r.name}`} disabled={!lists} onClick={() => edit.show(r)}><PencilIcon /></Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Edit ${r.name}`}
+                    disabled={!lists}
+                    onClick={() => edit.show(r)}
+                  >
+                    <PencilIcon />
+                  </Button>
                   {!r.builtin && (
-                    <Button variant="ghost" size="icon-sm" aria-label={`Delete ${r.name}`} onClick={() => remove.show(r)}><Trash2Icon /></Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Delete ${r.name}`}
+                      onClick={() => remove.show(r)}
+                    >
+                      <Trash2Icon />
+                    </Button>
                   )}
                 </TableCell>
               </TableRow>
@@ -74,12 +112,25 @@ export function RolesSection() {
         </Table>
       )}
       {edit.item && lists && (
-        <RoleDialog key={edit.key} open={edit.open} role={edit.item === 'new' ? undefined : edit.item} {...lists} onClose={edit.hide} onSaved={changed} />
+        <RoleDialog
+          key={edit.key}
+          open={edit.open}
+          role={edit.item === 'new' ? undefined : edit.item}
+          {...lists}
+          onClose={edit.hide}
+          onSaved={changed}
+        />
       )}
       {removing && (
-        <ConfirmDialog key={remove.key} open={remove.open} title={`Delete the ${removing.name} role?`} confirm="Delete role"
+        <ConfirmDialog
+          key={remove.key}
+          open={remove.open}
+          title={`Delete the ${removing.name} role?`}
+          confirm="Delete role"
           description={`${removing.userCount ? `${plural(removing.userCount, 'user')} will lose what this role grants. ` : ''}This cannot be undone.`}
-          onClose={remove.hide} onConfirm={() => deleteRole(removing.id).then(changed)} />
+          onClose={remove.hide}
+          onConfirm={() => deleteRole(removing.id).then(changed)}
+        />
       )}
     </section>
   )

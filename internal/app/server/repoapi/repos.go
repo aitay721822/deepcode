@@ -38,8 +38,7 @@ func (a *API) listRepos(c *gin.Context) {
 }
 
 func (a *API) getRepo(c *gin.Context) {
-	id, _ := httpx.PathID(c) // checked by OnRepo
-	repo, err := a.Catalog.Get(c.Request.Context(), id)
+	repo, err := a.Catalog.Get(c.Request.Context(), httpx.RepoID(c))
 	if err != nil {
 		httpx.DomainError(c, err)
 		return
@@ -71,8 +70,7 @@ func (a *API) importRepo(c *gin.Context) {
 }
 
 func (a *API) syncRepo(c *gin.Context) {
-	id, _ := httpx.PathID(c) // checked by OnRepo
-	job, err := a.Catalog.Sync(c.Request.Context(), id)
+	job, err := a.Catalog.Sync(c.Request.Context(), httpx.RepoID(c))
 	switch {
 	case err != nil:
 		httpx.DomainError(c, err)

@@ -13,8 +13,7 @@ import (
 )
 
 func (a *API) wiki(c *gin.Context) {
-	id, _ := httpx.PathID(c) // checked by OnRepo
-	wk, err := a.Wiki.Load(c.Request.Context(), id)
+	wk, err := a.Wiki.Load(c.Request.Context(), httpx.RepoID(c))
 	if err != nil {
 		httpx.InternalError(c, err)
 		return
@@ -23,10 +22,22 @@ func (a *API) wiki(c *gin.Context) {
 }
 
 // chatStream answers a question about a repository the user may ask about,
-// as server-sent events.
+// as server-sent events. The body names the repository by its public id.
 func (a *API) chatStream(c *gin.Context) {
-	var req chat.Request
-	if !httpx.Bind(c, &req) || !httpx.Visible(c, role.RepoChat, req.RepoID) {
+	var body struct {
+		chat.Request
+		Repo string `json:"repoId"`
+	}
+	if !httpx.Bind(c, &body) {
+		return
+	}
+	req := body.Request
+	var err error
+	if req.RepoID, err = a.Catalog.ID(c.Request.Context(), body.Repo); err != nil {
+		httpx.DomainError(c, err)
+		return
+	}
+	if !httpx.Visible(c, role.RepoChat, req.RepoID) {
 		return
 	}
 	req.UserID = httpx.Principal(c).UserID

@@ -13,12 +13,31 @@ import type { Repo } from '../../../types/repo/repo'
 const codeHeight = 'max-h-[max(16rem,calc(100dvh-4rem-270px))] print:max-h-none'
 
 /** A file at a snapshot; sha is the commit the caller knows it at, for the provider link when the file cannot load. */
-export function FileView({ repo, path, lines, snapshot, sha }: { repo: Repo; path: string; lines?: number[]; snapshot: string | null; sha?: string }) {
-  const { data, error, reload } = useApi(`${repo.id}:${snapshot || repo.snapshot?.id}:${path}`, () => getFile(repo.id, path, snapshot))
+export function FileView({
+  repo,
+  path,
+  lines,
+  snapshot,
+  sha,
+}: {
+  repo: Repo
+  path: string
+  lines?: number[]
+  snapshot: string | null
+  sha?: string
+}) {
+  const { data, error, reload } = useApi(`${repo.id}:${snapshot || repo.snapshot?.id}:${path}`, () =>
+    getFile(repo.id, path, snapshot),
+  )
   const commit = data?.commitSha ?? sha
   const cut = path.lastIndexOf('/') + 1 // on a narrow screen the folders give way, the file name stays
   const link = commit && (
-    <a className="inline-flex items-center gap-1 text-[12.5px] whitespace-nowrap text-brand underline-offset-4 hover:underline" href={sourceUrl(repo, commit, path, lines?.[0], lines?.[1])} target="_blank" rel="noreferrer">
+    <a
+      className="inline-flex items-center gap-1 text-[12.5px] whitespace-nowrap text-brand underline-offset-4 hover:underline"
+      href={sourceUrl(repo, commit, path, lines?.[0], lines?.[1])}
+      target="_blank"
+      rel="noreferrer"
+    >
       Open on {providerName(repo.provider)} <ExternalLinkIcon className="size-[13px]" />
     </a>
   )
@@ -34,7 +53,14 @@ export function FileView({ repo, path, lines, snapshot, sha }: { repo: Repo; pat
       {error ? (
         <LoadError className="m-0 p-4" error={error} onRetry={reload} />
       ) : data ? (
-        <CodeView label={path} className={codeHeight} content={data.content} language={data.language} startLine={lines?.[0]} endLine={lines?.[1]} />
+        <CodeView
+          label={path}
+          className={codeHeight}
+          content={data.content}
+          language={data.language}
+          startLine={lines?.[0]}
+          endLine={lines?.[1]}
+        />
       ) : (
         <SkeletonText className="px-4" />
       )}

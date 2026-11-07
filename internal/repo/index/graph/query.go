@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"deepcode/internal/platform/storage"
+	"deepcode/internal/repo/index/analyzer"
 )
 
 // Dependencies returns up to limit files that paths import, paths themselves
@@ -116,8 +117,9 @@ type DirEdge struct {
 }
 
 // DirEdges returns the imports between the snapshot's directories, each cut
-// to its first depth segments ("." for the root), most first; tests,
-// examples and docs left out.
+// to its first depth levels ("." for the root; a run of folders that only
+// lead on to one other is one level), most first; tests, examples and docs
+// left out.
 func DirEdges(ctx context.Context, db *sql.DB, snap int64, depth int) ([]DirEdge, error) {
 	edges, err := loadEdges(ctx, db, snap)
 	return group(edges, depth), err
@@ -126,6 +128,8 @@ func DirEdges(ctx context.Context, db *sql.DB, snap int64, depth int) ([]DirEdge
 // NewDirs returns the directories, cut to depth segments, that snapshot snap
 // holds and base did not and that files outside them import, tests, examples
 // and docs aside: a subsystem a change added and wired in.
+// ponytail: plain segments, not group's levels, so a new Java package under
+// src/main/java goes unseen here; cut both snapshots by one levels if it matters.
 func NewDirs(ctx context.Context, db *sql.DB, base, snap int64, depth int) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT path FROM source_files WHERE snapshot_id = ?`, base)
 	if err != nil {
@@ -178,12 +182,15 @@ func loadEdges(ctx context.Context, db *sql.DB, snap int64) ([]edge, error) {
 	return out, rows.Err()
 }
 
-// group counts edges between directories cut to depth segments, most first,
+// group counts edges between directories cut to depth levels, most first,
 // leaving out those within one and those of tests, examples and docs.
-func group(edges []edge, depth int) []DirEdge {
+func group(edges []edge, depth int) []DirEdge { return levels(edges).group(depth) }
+
+// group is group for the tree's edges.
+func (t tree) group(depth int) []DirEdge {
 	counts := map[[2]string]int{}
-	for _, e := range edges {
-		if from, to := cut(e.src, depth), cut(e.dst, depth); from != to && !secondary(e.src) && !secondary(e.dst) {
+	for i := 0; i < len(t.pairs); i += 2 {
+		if from, to := t.cut(t.pairs[i], depth), t.cut(t.pairs[i+1], depth); from != to {
 			counts[[2]string{from, to}]++
 		}
 	}
@@ -202,20 +209,9 @@ func group(edges []edge, depth int) []DirEdge {
 }
 
 // secondary reports a test, example or docs file, which retrieval ranks lower
-// too (retrieval's secondary): what such a file imports shows how the code is
-// used, not how its parts depend on each other, and examples alone can crowd
-// a diagram of them.
-func secondary(p string) bool {
-	parts := strings.Split(p, "/")
-	for _, d := range parts[:len(parts)-1] {
-		switch d {
-		case "test", "tests", "__tests__", "spec", "docs", "examples", "_examples":
-			return true
-		}
-	}
-	base := parts[len(parts)-1]
-	return strings.HasPrefix(base, "test_") || strings.Contains(base, "_test.") || strings.Contains(base, ".test.") || strings.Contains(base, ".spec.")
-}
+// too: what such a file imports shows how the code is used, not how its parts
+// depend on each other, and examples alone can crowd a diagram of them.
+var secondary = analyzer.Secondary
 
 // cut is the directory of file p cut to its first depth segments, "." at the
 // root.
@@ -226,4 +222,91 @@ func cut(p string, depth int) string {
 	}
 	parts := strings.Split(d, "/")
 	return strings.Join(parts[:min(depth, len(parts))], "/")
+}
+
+// tree is the directories of the files that edges link, tests, examples and
+// docs aside, cut by levels: a level is a directory that holds one of the
+// files or leads to two or more, so folders that only lead on to one other
+// count once, as an editor's compact folders show them: Java's
+// src/main/java/org/acme is one level, not five. The trunk, the first
+// directory under which all files are (src/ when only it has any), is none:
+// a level of one directory draws nothing.
+type tree struct {
+	pairs []string // the linked files, from and to
+	trunk string
+	holds map[string]bool
+	below map[string]map[string]bool
+}
+
+// levels builds the tree of edges' files.
+func levels(edges []edge) tree {
+	t := tree{holds: map[string]bool{}, below: map[string]map[string]bool{}}
+	for _, e := range edges {
+		if !secondary(e.src) && !secondary(e.dst) {
+			t.pairs = append(t.pairs, e.src, e.dst)
+		}
+	}
+	for _, f := range t.pairs {
+		d := dir(f)
+		if t.holds[d] {
+			continue
+		}
+		t.holds[d] = true
+		for p := d; p != ""; p = dir(p) {
+			if t.below[dir(p)] == nil {
+				t.below[dir(p)] = map[string]bool{}
+			}
+			t.below[dir(p)][p] = true
+		}
+	}
+	for !t.holds[t.trunk] && len(t.below[t.trunk]) == 1 {
+		for c := range t.below[t.trunk] {
+			t.trunk = c
+		}
+	}
+	return t
+}
+
+// stop reports whether directory d ends a level.
+func (t tree) stop(d string) bool {
+	return len(d) > len(t.trunk) && (t.holds[d] || len(t.below[d]) > 1)
+}
+
+// cut is the directory of file p cut to its first depth levels, "." at the root.
+func (t tree) cut(p string, depth int) string {
+	d := dir(p)
+	if d == "" {
+		return "."
+	}
+	for i, n := 0, 0; ; i++ {
+		j := strings.IndexByte(d[i:], '/')
+		if j < 0 {
+			return d
+		}
+		if i += j; t.stop(d[:i]) {
+			if n++; n == depth {
+				return d[:i]
+			}
+		}
+	}
+}
+
+// short names directory d with each run of three or more folders that one
+// level or the trunk folds shown as its first and last: gson/…/gson/internal
+// for gson/src/main/java/com/google/gson/internal.
+func (t tree) short(d string) string {
+	parts := strings.Split(d, "/")
+	var out []string
+	from := 0
+	for i := range parts {
+		if p := strings.Join(parts[:i+1], "/"); i == len(parts)-1 || p == t.trunk || t.stop(p) {
+			if run := parts[from : i+1]; len(run) > 2 {
+				out = append(out, run[0], "…", run[len(run)-1])
+			} else {
+				out = append(out, run...)
+			}
+			from = i + 1
+		}
+	}
+	return strings.Join(out, "/")
 }

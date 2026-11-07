@@ -25,9 +25,16 @@ export class ErrorBoundary extends Component<Props, { failed: boolean; at: strin
       <main>
         <Notice title="Something went wrong">
           <p className="text-muted-foreground">This page could not be shown.</p>
-          <Button variant="outline" onClick={() => location.reload()}>Reload</Button>
+          <Button variant="outline" onClick={() => location.reload()}>
+            Reload
+          </Button>
           {/* A plain link: a full load, in case the page fails again. */}
-          <a href="/" className="mx-auto block w-fit text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">Back to repositories</a>
+          <a
+            href="/"
+            className="mx-auto block w-fit text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+          >
+            Back to repositories
+          </a>
         </Notice>
       </main>
     )

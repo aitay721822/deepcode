@@ -10,6 +10,7 @@ import (
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
+	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/provider"
 )
 
@@ -102,14 +103,16 @@ func (c *Catalog) add(ctx context.Context, srv gitserver.Server, url string, met
 }
 
 // Sync queues what brings repository id up to date: an index job when the
-// remote HEAD moved or the embedding model changed, otherwise a wiki job when
-// the wiki is missing or failed. A nil job means it is up to date. Unchanged
-// files and vectors are reused by the indexer.
+// remote HEAD moved, the embedding model changed or an older analyzer read
+// the published commit, otherwise a wiki job when the wiki is missing or
+// failed. A nil job means it is up to date. Unchanged files and vectors are
+// reused by the indexer.
 func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
 	var sha, model, wikiStatus sql.NullString
+	var read sql.NullInt64
 	err := c.DB.QueryRowContext(ctx, `
-		SELECT s.commit_sha, s.embedding_model, s.wiki_status
-		FROM repositories r LEFT JOIN snapshots s ON s.id = r.ready_snapshot_id WHERE r.id = ?`, id).Scan(&sha, &model, &wikiStatus)
+		SELECT s.commit_sha, s.embedding_model, s.wiki_status, s.analyzer
+		FROM repositories r LEFT JOIN snapshots s ON s.id = r.ready_snapshot_id WHERE r.id = ?`, id).Scan(&sha, &model, &wikiStatus, &read)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, failf(ErrNotFound, "repository not found")
 	} else if err != nil {
@@ -125,7 +128,7 @@ func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
 	}
 	var job jobs.Job
 	switch {
-	case head != sha.String || model.String != c.EmbedModel:
+	case head != sha.String || model.String != c.EmbedModel || read.Int64 < analyzer.Version:
 		job, err = c.Queue.EnqueueIndex(ctx, id, head, c.EmbedModel)
 	case c.ChatModel != "" && (wikiStatus.String == WikiNone || wikiStatus.String == WikiFailed):
 		job, err = c.Queue.EnqueueWiki(ctx, id, head)
@@ -139,9 +142,10 @@ func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
 }
 
 // Poll is the poller's Sync: it queues the index job of repository id when
-// the remote HEAD is not the published commit, unless that commit's index
-// job is queued, running or failed. One that succeeded runs again: the branch
-// went back to its commit. A job that failed is left to a Sync, so a
+// the remote HEAD is not the published commit, or is but an older analyzer
+// read it, unless that commit's index job is queued, running or failed. One
+// that succeeded runs again: the branch went back to its commit, or the
+// analyzer is new. A job that failed is left to a Sync, so a
 // repository too large to index is not downloaded every round; a changed
 // embedding model and a failed wiki are left to a Sync too. Its errors go to
 // the server log only, so git's own words are kept, unlike Sync's.
@@ -155,8 +159,14 @@ func (c *Catalog) Poll(ctx context.Context, id int64) (*jobs.Job, error) {
 		return nil, err
 	}
 	r, err := c.Get(ctx, id) // after the slow ls-remote, so an index that finished meanwhile counts
-	if err != nil || (r.Snapshot != nil && r.Snapshot.CommitSHA == head) {
+	if err != nil {
 		return nil, err
+	}
+	if r.Snapshot != nil && r.Snapshot.CommitSHA == head {
+		var read int
+		if err := c.DB.QueryRowContext(ctx, `SELECT analyzer FROM snapshots WHERE id = ?`, r.Snapshot.ID).Scan(&read); err != nil || read >= analyzer.Version {
+			return nil, err
+		}
 	}
 	switch j, err := c.Queue.IndexJob(ctx, id, head, c.EmbedModel); {
 	case errors.Is(err, jobs.ErrNotFound):

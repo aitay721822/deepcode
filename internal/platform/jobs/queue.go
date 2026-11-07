@@ -85,11 +85,12 @@ func (q *Queue) announce(id int64) {
 
 const jobColumns = `id, kind, repository_id, commit_sha, status, attempts, stage, progress, total, error, created_at, updated_at`
 
-// listedColumns are jobColumns of jobs j plus the name of its repository r.
+// listedColumns are jobColumns of jobs j plus the public id and name of its
+// repository r.
 // ponytail: jobs read the repositories table that their repository_id
 // references, to name it in one query; let callers name repositories through
 // the catalog if jobs ever serve more than repositories.
-var listedColumns = "j." + strings.ReplaceAll(jobColumns, ", ", ", j.") + ", r.owner, r.name"
+var listedColumns = "j." + strings.ReplaceAll(jobColumns, ", ", ", j.") + ", r.public_id, r.owner, r.name"
 
 func scanJob(row interface{ Scan(...any) error }) (Job, error) {
 	var j Job
@@ -168,6 +169,6 @@ func scanListed(row interface{ Scan(...any) error }) (Listed, error) {
 	var l Listed
 	j := &l.Job
 	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.CreatedAt, &j.UpdatedAt,
-		&l.RepoOwner, &l.RepoName)
+		&l.RepoPublicID, &l.RepoOwner, &l.RepoName)
 	return l, err
 }

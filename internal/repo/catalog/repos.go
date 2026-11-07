@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"deepcode/internal/platform/jobs"
 )
@@ -29,7 +30,8 @@ const (
 // Repo is an imported repository with its published snapshot (nil until the
 // first index) and its latest job.
 type Repo struct {
-	ID            int64     `json:"id"`
+	ID            int64     `json:"-"`     // the row id, for joins and permissions
+	PublicID      string    `json:"id"`    // a CUID2: the id in the API, URLs and the UI
 	Owner         string    `json:"owner"` // GitLab: the group path, which may hold "/"
 	Name          string    `json:"name"`
 	URL           string    `json:"url"`      // the repository's web page
@@ -48,6 +50,17 @@ func (c *Catalog) List(ctx context.Context, visible func(id int64) bool) ([]Repo
 	return c.repos(ctx, visible, "")
 }
 
+// ID returns the row id of the repository whose public id is publicID, or an
+// ErrNotFound error: a row id ("1") finds none.
+func (c *Catalog) ID(ctx context.Context, publicID string) (int64, error) {
+	var id int64
+	err := c.DB.QueryRowContext(ctx, `SELECT id FROM repositories WHERE public_id = ?`, publicID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, failf(ErrNotFound, "repository not found")
+	}
+	return id, err
+}
+
 // Get returns repository id, or an ErrNotFound error.
 func (c *Catalog) Get(ctx context.Context, id int64) (Repo, error) {
 	list, err := c.repos(ctx, nil, "WHERE r.id = ?", id)
@@ -62,7 +75,7 @@ func (c *Catalog) Get(ctx context.Context, id int64) (Repo, error) {
 
 func (c *Catalog) repos(ctx context.Context, visible func(int64) bool, where string, args ...any) ([]Repo, error) {
 	rows, err := c.DB.QueryContext(ctx, `
-		SELECT r.id, r.owner, r.name, r.url, g.kind, g.id, g.name, r.description, r.stars, r.default_branch,
+		SELECT r.id, r.public_id, r.owner, r.name, r.url, g.kind, g.id, g.name, r.description, r.stars, r.default_branch,
 			s.id, s.commit_sha, coalesce(s.indexed_at, ''), s.wiki_status, s.embedding_model, s.file_count, s.chunk_count
 		FROM repositories r JOIN git_servers g ON g.id = r.git_server_id LEFT JOIN snapshots s ON s.id = r.ready_snapshot_id
 		`+where+` ORDER BY r.id DESC`, args...)
@@ -75,7 +88,7 @@ func (c *Catalog) repos(ctx context.Context, visible func(int64) bool, where str
 		var sid sql.NullInt64
 		var sha, indexed, wikiStatus, model sql.NullString
 		var files, chunks sql.NullInt64
-		if err := rows.Scan(&v.ID, &v.Owner, &v.Name, &v.URL, &v.Provider, &v.ServerID, &v.ServerName, &v.Description, &v.Stars, &v.DefaultBranch,
+		if err := rows.Scan(&v.ID, &v.PublicID, &v.Owner, &v.Name, &v.URL, &v.Provider, &v.ServerID, &v.ServerName, &v.Description, &v.Stars, &v.DefaultBranch,
 			&sid, &sha, &indexed, &wikiStatus, &model, &files, &chunks); err != nil {
 			rows.Close()
 			return nil, err

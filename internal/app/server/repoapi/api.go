@@ -33,12 +33,12 @@ type API struct {
 
 // Mount adds the routes to r, whose requests are signed in.
 func (a *API) Mount(r gin.IRouter) {
-	read := httpx.OnRepo(role.RepoRead)
+	read := httpx.OnRepo(a.Catalog.ID, role.RepoRead)
 	r.GET("/repos", a.listRepos)
 	r.POST("/repos", httpx.Require(role.RepoImport), a.importRepo)
 	r.GET("/servers", httpx.Require(role.RepoImport), a.listServers)
 	r.GET("/repos/:id", read, a.getRepo)
-	r.POST("/repos/:id/sync", httpx.OnRepo(role.RepoSync), a.syncRepo)
+	r.POST("/repos/:id/sync", httpx.OnRepo(a.Catalog.ID, role.RepoSync), a.syncRepo)
 	r.GET("/jobs/:id", a.job)
 
 	r.GET("/repos/:id/files", read, a.listFiles)

@@ -24,12 +24,13 @@ type Message struct {
 }
 
 type Conversation struct {
-	ID         int64     `json:"id"`
-	RepoID     int64     `json:"repoId"`
-	SnapshotID int64     `json:"snapshotId"`
-	CommitSHA  string    `json:"commitSha"`
-	Title      string    `json:"title"`
-	Messages   []Message `json:"messages"`
+	ID           int64     `json:"id"`
+	RepoID       int64     `json:"-"`      // the row id
+	RepoPublicID string    `json:"repoId"` // the repository's public id
+	SnapshotID   int64     `json:"snapshotId"`
+	CommitSHA    string    `json:"commitSha"`
+	Title        string    `json:"title"`
+	Messages     []Message `json:"messages"`
 }
 
 // Adopt gives user the conversations started before there were accounts.
@@ -131,8 +132,9 @@ func (s *Service) addMessage(ctx context.Context, conv int64, role, content stri
 // snapshot its next question would be answered at.
 func (s *Service) Get(ctx context.Context, id, userID int64) (Conversation, error) {
 	var c Conversation
-	err := s.DB.QueryRowContext(ctx, `SELECT id, repository_id, snapshot_id, title FROM conversations WHERE id = ? AND user_id = ?`, id, userID).
-		Scan(&c.ID, &c.RepoID, &c.SnapshotID, &c.Title)
+	err := s.DB.QueryRowContext(ctx, `SELECT c.id, c.repository_id, r.public_id, c.snapshot_id, c.title
+		FROM conversations c JOIN repositories r ON r.id = c.repository_id WHERE c.id = ? AND c.user_id = ?`, id, userID).
+		Scan(&c.ID, &c.RepoID, &c.RepoPublicID, &c.SnapshotID, &c.Title)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	} else if err != nil {

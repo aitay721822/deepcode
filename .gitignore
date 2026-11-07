@@ -1,6 +1,7 @@
 /deepcode
 /deepcode.exe
 /data/
+/deepcode.yaml
 /web/node_modules/
 /web/dist/
 /internal/app/server/webui/dist/*

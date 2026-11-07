@@ -16,13 +16,13 @@ import (
 // checkJobConsole: the console lists finished jobs, and a job's log holds its
 // work, the model's text streamed while each wiki page was written included.
 // The output stream of a finished job sends the lines after ?after= and ends.
-func checkJobConsole(t *testing.T, admin *client, repoID int64) {
+func checkJobConsole(t *testing.T, admin *client, repoID string) {
 	t.Helper()
 	var list []jobs.Listed
 	admin.get("/api/admin/jobs?status=succeeded", &list)
 	var wikiJob *jobs.Listed
 	for i := range list {
-		if list[i].RepoID == repoID && list[i].Kind == jobs.KindWiki {
+		if list[i].RepoPublicID == repoID && list[i].Kind == jobs.KindWiki {
 			wikiJob = &list[i]
 		}
 	}
@@ -102,7 +102,7 @@ func checkGitLab(t *testing.T, admin *client, api *fakeAPI, apiURL, sha string) 
 	if repo.Owner != "group/sub" || repo.Name != "app" || repo.Provider != "gitlab" || api.token() != "glpat-test" {
 		t.Fatalf("GitLab project: %+v (token %q)", repo, api.token())
 	}
-	path := fmt.Sprintf("/api/repos/%d", repo.ID)
+	path := "/api/repos/" + repo.ID
 	waitFor(t, "index and wiki of the GitLab project", func() bool {
 		admin.get(path, &repo)
 		failIfJobFailed(t, repo.Job)
@@ -137,7 +137,7 @@ func checkDownloadLimit(t *testing.T, admin *client) {
 		t.Fatalf("import acme/big: %d", code)
 	}
 	waitFor(t, "the index of acme/big to end", func() bool {
-		admin.get(fmt.Sprintf("/api/repos/%d", big.ID), &big)
+		admin.get("/api/repos/"+big.ID, &big)
 		return big.Job != nil && big.Job.Finished()
 	})
 	if j := big.Job; j.Status != jobs.StatusFailed || j.Attempts != 1 || !strings.Contains(j.Error, "size limit of 1 MB (DEEPCODE_MAX_REPO_MB)") {

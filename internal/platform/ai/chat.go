@@ -7,6 +7,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var thinkRe = regexp.MustCompile(`(?s)<think>.*?</think>`)
@@ -19,8 +20,15 @@ const maxAnswer = 1 << 20
 // StripThinking drops <think> blocks that some servers leave in the content.
 func StripThinking(s string) string { return strings.TrimSpace(thinkRe.ReplaceAllString(s, "")) }
 
+// Generate returns the model's whole answer to messages.
 func (c *OpenAI) Generate(ctx context.Context, messages []Message) (string, error) {
 	return c.Stream(ctx, messages, nil)
+}
+
+// Usage is one answer's size: the characters sent and received, and the
+// tokens the server counted, 0 when it reports none.
+type Usage struct {
+	InChars, OutChars, InTokens, OutTokens int
 }
 
 // Stream sends a streaming chat completion and relays content fragments.
@@ -38,13 +46,21 @@ func (c *OpenAI) Stream(ctx context.Context, messages []Message, onDelta func(st
 	if c.ReasoningEffort != "" {
 		body["reasoning_effort"] = c.ReasoningEffort
 	}
+	var out strings.Builder
+	var usage Usage
+	if c.Measure != nil {
+		body["stream_options"] = map[string]any{"include_usage": true}
+		for _, m := range messages {
+			usage.InChars += utf8.RuneCountInString(m.Content)
+		}
+		defer func() { usage.OutChars = utf8.RuneCountInString(out.String()); c.Measure(usage) }()
+	}
 	resp, err := c.post(ctx, "/chat/completions", body)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	var out strings.Builder
 	finish, done := "", false
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64*1024), 4<<20)
@@ -68,9 +84,16 @@ func (c *OpenAI) Stream(ctx context.Context, messages []Message, onDelta func(st
 			Error *struct {
 				Message string `json:"message"`
 			} `json:"error"`
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
 		}
 		if json.Unmarshal([]byte(data), &chunk) != nil {
 			continue
+		}
+		if chunk.Usage != nil {
+			usage.InTokens, usage.OutTokens = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens
 		}
 		if chunk.Error != nil {
 			return out.String(), errors.New(c.quote([]byte(chunk.Error.Message)))

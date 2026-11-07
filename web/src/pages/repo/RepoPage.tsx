@@ -25,15 +25,19 @@ import { WikiPlaceholder } from './wiki/WikiPlaceholder'
 
 type Tab = 'wiki' | 'files'
 
-export function RepoPage({ id, params }: { id: number; params: URLSearchParams }) {
+export function RepoPage({ id, params }: { id: string; params: URLSearchParams }) {
   const { data: repo, error, status, reload } = useRepo(id)
   const { data: health, error: healthError } = useApi('health', getHealth)
   const sync = useSync(id, reload) // Retry of a failed job, Sync when there is no wiki
   const ready = repo?.snapshot
   const wikiBusy = repo?.job?.kind === 'wiki' && isActive(repo.job)
-  const { data: wiki, error: wikiError, reload: reloadWiki } = useApi(
+  const {
+    data: wiki,
+    error: wikiError,
+    reload: reloadWiki,
+  } = useApi(
     repo && ready ? `${repo.id}:${ready.id}` : null,
-    () => getWiki(repo!.id),
+    () => getWiki(id), // the repository useRepo(id) loaded
     wikiBusy ? 3000 : undefined,
   )
   // Pick up the last page once generation stops; on the first render the wiki is being fetched already.
@@ -41,10 +45,15 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
   useEffect(() => {
     if (wasBusy.current && !wikiBusy) reloadWiki()
     wasBusy.current = wikiBusy
-  }, [wikiBusy])
+  }, [wikiBusy, reloadWiki])
 
   const file = params.get('file')
-  const lines = params.get('L')?.split('-').map(Number).filter(Boolean).sort((a, b) => a - b) // "5-" → [5], "9-3" → [3, 9]
+  const lines = params
+    .get('L')
+    ?.split('-')
+    .map(Number)
+    .filter(Boolean)
+    .sort((a, b) => a - b) // "5-" → [5], "9-3" → [3, 9]
   const fileSnapshot = params.get('s')
   const [tab, setTab] = useState<Tab>(file ? 'files' : 'wiki')
   useEffect(() => setTab(file ? 'files' : 'wiki'), [file]) // follow back/forward too
@@ -68,12 +77,18 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
   // The file tree and symbol search list the published snapshot, so their files open there.
   const openFile = (path: string, start?: number, end?: number, snapshot?: number) =>
-    navigate(`${base}?file=${encodeURIComponent(path)}${start ? `&L=${start}-${end ?? start}` : ''}${snapshot ? `&s=${snapshot}` : ''}`)
+    navigate(
+      `${base}?file=${encodeURIComponent(path)}${start ? `&L=${start}-${end ?? start}` : ''}${snapshot ? `&s=${snapshot}` : ''}`,
+    )
   // A wiki citation points into the wiki's snapshot, which trails the published one while the next wiki is written.
   const openCitation = (path: string, start?: number, end?: number) =>
     openFile(path, start, end, wiki && ready && wiki.snapshotId !== ready.id ? wiki.snapshotId : undefined)
   // The commit a file is shown at, known before (or without) the file loading: s= comes from the wiki's citations.
-  const fileSha = fileSnapshot ? (wiki && String(wiki.snapshotId) === fileSnapshot ? wiki.commitSha : undefined) : ready?.commitSha
+  const fileSha = fileSnapshot
+    ? wiki && String(wiki.snapshotId) === fileSnapshot
+      ? wiki.commitSha
+      : undefined
+    : ready?.commitSha
   // Whether the main column shows the latest job in a card: the first index job, or the wiki job above the wiki.
   const jobCard = ready ? !file && !!wikiJob : !!job
   const syncCard = canSync && <SyncCard repo={repo} jobCard={jobCard} onSynced={reload} />
@@ -81,8 +96,16 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
   return (
     <Frame repo={repo}>
       <div className="grid grid-cols-1 min-[900px]:grid-cols-[260px_minmax(0,1fr)] min-[1240px]:grid-cols-[300px_minmax(0,1fr)_300px]">
-        <aside aria-label="Wiki pages and files" className="max-h-[45dvh] print:hidden overflow-y-auto overscroll-contain border-b px-4 pt-7 pb-4 min-[900px]:sticky min-[900px]:top-16 min-[900px]:h-[calc(100dvh-4rem)] min-[900px]:max-h-none min-[900px]:border-r min-[900px]:border-b-0 min-[900px]:pr-[18px] min-[900px]:pb-36 min-[900px]:pl-6">
-          {ready && <p className="mb-5 font-mono text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground uppercase">Indexed {formatDate(ready.indexedAt)} · <span className="text-foreground normal-case">{shortSha(ready.commitSha)}</span></p>}
+        <aside
+          aria-label="Wiki pages and files"
+          className="max-h-[45dvh] print:hidden overflow-y-auto overscroll-contain border-b px-4 pt-7 pb-4 min-[900px]:sticky min-[900px]:top-16 min-[900px]:h-[calc(100dvh-4rem)] min-[900px]:max-h-none min-[900px]:border-r min-[900px]:border-b-0 min-[900px]:pr-[18px] min-[900px]:pb-36 min-[900px]:pl-6"
+        >
+          {ready && (
+            <p className="mb-5 font-mono text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
+              Indexed {formatDate(ready.indexedAt)} ·{' '}
+              <span className="text-foreground normal-case">{shortSha(ready.commitSha)}</span>
+            </p>
+          )}
           {/* Sync lives in the rail; once the rail is hidden, here. */}
           {syncCard && <div className="mb-4 min-[1240px]:hidden">{syncCard}</div>}
           {ready && (
@@ -92,24 +115,42 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
                 <TabsTrigger value="files">Files</TabsTrigger>
               </TabsList>
               <TabsContent value="wiki">
-                <WikiNav pages={wiki?.pages ?? []} active={file ? undefined : page?.slug} base={base} writing={wikiBusy} />
+                <WikiNav
+                  pages={wiki?.pages ?? []}
+                  active={file ? undefined : page?.slug}
+                  base={base}
+                  writing={wikiBusy}
+                />
               </TabsContent>
               <TabsContent value="files">
-                <FilesPanel repo={repo} active={file} onOpen={openFile} />
+                <FilesPanel repo={repo} snapshot={ready.id} active={file} onOpen={openFile} />
               </TabsContent>
             </Tabs>
           )}
         </aside>
 
-        <main tabIndex={-1} className="mx-auto w-full max-w-[860px] px-4 pt-6 pb-44 outline-none min-[900px]:px-12 min-[900px]:pt-9">
+        <main
+          tabIndex={-1}
+          className="mx-auto w-full max-w-[860px] px-4 pt-6 pb-44 outline-none min-[900px]:px-12 min-[900px]:pt-9"
+        >
           {/* A poll that failed keeps the repository as it was: say so, or a job's card would seem to stand still. */}
           <LoadError className="mb-6" error={error} onRetry={reload} />
           <AnimatePresence mode="wait" initial={false}>
-            <motion.div key={!ready ? 'indexing' : file ? `file:${fileSnapshot}:${file}` : page ? `page:${page.slug}` : 'wiki'} className="space-y-8" {...rise}>
+            <motion.div
+              key={!ready ? 'indexing' : file ? `file:${fileSnapshot}:${file}` : page ? `page:${page.slug}` : 'wiki'}
+              className="space-y-8"
+              {...rise}
+            >
               {!ready ? (
                 repo.job ? (
-                  <JobProgress job={repo.job} title={`Indexing ${repo.owner}/${repo.name}`} retry={canSync ? sync : undefined} />
-                ) : <p className="text-muted-foreground">Not indexed yet.</p> // its first job was never queued, or is gone: Sync queues it
+                  <JobProgress
+                    job={repo.job}
+                    title={`Indexing ${repo.owner}/${repo.name}`}
+                    retry={canSync ? sync : undefined}
+                  />
+                ) : (
+                  <p className="text-muted-foreground">Not indexed yet.</p>
+                ) // its first job was never queued, or is gone: Sync queues it
               ) : file ? (
                 <FileView repo={repo} path={file} lines={lines} snapshot={fileSnapshot} sha={fileSha} />
               ) : (
@@ -119,9 +160,17 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
                   )}
                   {page ? (
                     <WikiArticle page={page} repo={repo} writing={wikiBusy} onToc={setToc} onCite={openCitation} />
-                  ) : !wikiJob && (
-                    <WikiPlaceholder repo={repo} health={healthError ? null : health} wiki={wiki} error={wikiError} onReload={reloadWiki}
-                      sync={canSync ? sync : undefined} />
+                  ) : (
+                    !wikiJob && (
+                      <WikiPlaceholder
+                        repo={repo}
+                        health={healthError ? null : health}
+                        wiki={wiki}
+                        error={wikiError}
+                        onReload={reloadWiki}
+                        sync={canSync ? sync : undefined}
+                      />
+                    )
                   )}
                 </>
               )}
@@ -129,14 +178,23 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
           </AnimatePresence>
         </main>
 
-        <aside aria-label="Sync and outline" className="sticky top-16 hidden print:hidden h-[calc(100dvh-4rem)] overflow-y-auto px-6 pt-7 pb-36 min-[1240px]:block">
+        <aside
+          aria-label="Sync and outline"
+          className="sticky top-16 hidden print:hidden h-[calc(100dvh-4rem)] overflow-y-auto px-6 pt-7 pb-36 min-[1240px]:block"
+        >
           {syncCard && <div className="mb-7">{syncCard}</div>}
           {!file && page?.content && toc.length > 0 && <Toc items={toc} />}
         </aside>
       </div>
       {repo.permissions.includes('repo.chat') && (
         <AskBox
-          placeholder={healthError ? `Questions are unavailable: ${healthError}` : health && !health.chatModel ? 'Set DEEPCODE_CHAT_MODEL to ask questions' : `Ask about ${repo.owner}/${repo.name}`}
+          placeholder={
+            healthError
+              ? `Questions are unavailable: ${healthError}`
+              : health && !health.chatModel
+                ? 'Set DEEPCODE_CHAT_MODEL to ask questions'
+                : `Ask about ${repo.owner}/${repo.name}`
+          }
           disabled={!ready || !health?.chatModel}
           onAsk={(q, deep) => navigate(`${base}/search`, { state: { question: q, deep } })}
         />

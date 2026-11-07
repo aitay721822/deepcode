@@ -1,5 +1,5 @@
 import { ArrowLeftIcon } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { getJob, watchJobOutput } from '../../../api/admin/jobs'
 import type { StreamState } from '../../../api/client'
 import { JobProgress } from '../../../components/repo/JobProgress'
@@ -44,35 +44,53 @@ export function JobDetail({ id }: { id: number }) {
       if (batch.length) setLines((ls) => [...ls, ...batch])
     }
     // Opened for finished jobs too: getJob returns only the first lines of a long output, the stream the rest, then `end`.
-    const stop = watchJobOutput(id, last.current, {
-      log: (l) => {
-        if (l.id <= last.current) return // never a line twice
-        last.current = l.id
-        queued.push(l)
-        frame ||= requestAnimationFrame(flush)
+    const stop = watchJobOutput(
+      id,
+      last.current,
+      {
+        log: (l) => {
+          if (l.id <= last.current) return // never a line twice
+          last.current = l.id
+          queued.push(l)
+          frame ||= requestAnimationFrame(flush)
+        },
+        job: setJob,
+        end: (j) => {
+          setJob(j)
+          stop() // the server closes now; left open, EventSource would reconnect
+        },
       },
-      job: setJob,
-      end: (j) => {
-        setJob(j)
-        stop() // the server closes now; left open, EventSource would reconnect
+      (s) => {
+        setStream(s)
+        if (s === 'closed') refresh().catch(() => {}) // a lost session sends the reader to sign in; otherwise the notice stays
       },
-    }, (s) => {
-      setStream(s)
-      if (s === 'closed') refresh().catch(() => {}) // a lost session sends the reader to sign in; otherwise the notice stays
-    })
+    )
     return () => {
       stop()
       flush() // a reconnect resumes after these, so they must not be dropped
     }
-  }, [data, attempt])
+  }, [id, data, attempt, refresh])
 
-  const back = <Link to="/admin/jobs" className="inline-flex w-fit items-center gap-1.5 text-muted-foreground hover:text-foreground"><ArrowLeftIcon className="size-3.5" /> Jobs</Link>
+  const back = (
+    <Link
+      to="/admin/jobs"
+      className="inline-flex w-fit items-center gap-1.5 text-muted-foreground hover:text-foreground"
+    >
+      <ArrowLeftIcon className="size-3.5" /> Jobs
+    </Link>
+  )
   if (!data) {
     if (!error) return <SkeletonText />
     return (
       <section className="flex flex-col gap-4">
         {back}
-        {status === 404 ? <p className="text-sm text-destructive" role="alert">Job not found.</p> : <LoadError error={error} onRetry={reload} />}
+        {status === 404 ? (
+          <p className="text-sm text-destructive" role="alert">
+            Job not found.
+          </p>
+        ) : (
+          <LoadError error={error} onRetry={reload} />
+        )}
       </section>
     )
   }
@@ -80,23 +98,35 @@ export function JobDetail({ id }: { id: number }) {
   return (
     <section className="flex flex-col gap-4">
       {back}
-      <SectionHead title={`${j.repoOwner}/${j.repoName}`} className="mb-0"><StatusBadge status={j.status} /></SectionHead>
+      <SectionHead title={`${j.repoOwner}/${j.repoName}`} className="mb-0">
+        <StatusBadge status={j.status} />
+      </SectionHead>
       <dl className="flex flex-wrap gap-x-8 gap-y-3 border-y border-dashed py-3.5 text-[13.5px]">
         <Meta term="Job">{j.id}</Meta>
         <Meta term="Kind">{j.kind}</Meta>
-        <Meta term="Commit"><code className="font-mono">{j.commitSha ? shortSha(j.commitSha) : '-'}</code></Meta>
+        <Meta term="Commit">
+          <code className="font-mono">{j.commitSha ? shortSha(j.commitSha) : '-'}</code>
+        </Meta>
         <Meta term="Attempts">{j.attempts}</Meta>
         <Meta term="Created">{formatTime(j.createdAt)}</Meta>
         <Meta term="Updated">{formatTime(j.updatedAt)}</Meta>
-        <Meta term="Repository"><Link to={`/repos/${j.repoId}`} className="text-brand hover:underline">Open repository</Link></Meta>
+        <Meta term="Repository">
+          <Link to={`/repos/${j.repoId}`} className="text-brand hover:underline">
+            Open repository
+          </Link>
+        </Meta>
       </dl>
       <JobProgress job={j} title={j.kind === 'wiki' ? 'Wiki generation' : 'Indexing'} />
       <h2 className="eyebrow mt-3 text-muted-foreground">Output</h2>
       <div>
-        <StreamNotice state={stream} what="Live output" onReconnect={() => {
-          setStream('retrying')
-          setAttempt((a) => a + 1)
-        }} />
+        <StreamNotice
+          state={stream}
+          what="Live output"
+          onReconnect={() => {
+            setStream('retrying')
+            setAttempt((a) => a + 1)
+          }}
+        />
         {/* Only a job still running when opened has live lines: an ended one's long output comes all at once.
             ponytail: a running job opened past getJob's first 5000 lines fades that backlog in too; rare, as a wiki's output is shorter. */}
         <JobConsole lines={lines} liveAfter={isActive(data.job) ? (data.logs.at(-1)?.id ?? 0) : Infinity} />

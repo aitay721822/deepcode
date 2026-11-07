@@ -1,7 +1,7 @@
 import { XIcon } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Dialog as DialogPrimitive } from 'radix-ui'
-import { createContext, useContext, type ComponentProps } from 'react'
+import { type ComponentProps, createContext, useContext } from 'react'
 import { cn } from '../../../lib/style/cn'
 import { fade, pop } from '../../../lib/style/motion'
 
@@ -25,7 +25,11 @@ function DialogContent({ className, children, ...props }: ComponentProps<typeof 
       {open && (
         <DialogPrimitive.Portal forceMount>
           <DialogPrimitive.Overlay forceMount asChild>
-            <motion.div data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-overlay backdrop-blur-[2px]" {...fade} />
+            <motion.div
+              data-slot="dialog-overlay"
+              className="fixed inset-0 z-50 bg-overlay backdrop-blur-[2px]"
+              {...fade}
+            />
           </DialogPrimitive.Overlay>
           <DialogPrimitive.Content forceMount asChild {...props}>
             <motion.div
@@ -53,15 +57,33 @@ function DialogContent({ className, children, ...props }: ComponentProps<typeof 
 }
 
 function DialogHeader({ className, ...props }: ComponentProps<'div'>) {
-  return <div data-slot="dialog-header" className={cn('flex flex-col gap-2 text-center sm:text-left', className)} {...props} />
+  return (
+    <div
+      data-slot="dialog-header"
+      className={cn('flex flex-col gap-2 text-center sm:text-left', className)}
+      {...props}
+    />
+  )
 }
 
 function DialogFooter({ className, ...props }: ComponentProps<'div'>) {
-  return <div data-slot="dialog-footer" className={cn('flex flex-col-reverse gap-2 sm:flex-row sm:justify-end', className)} {...props} />
+  return (
+    <div
+      data-slot="dialog-footer"
+      className={cn('flex flex-col-reverse gap-2 sm:flex-row sm:justify-end', className)}
+      {...props}
+    />
+  )
 }
 
 function DialogTitle({ className, ...props }: ComponentProps<typeof DialogPrimitive.Title>) {
-  return <DialogPrimitive.Title data-slot="dialog-title" className={cn('pr-6 font-serif text-[23px] leading-tight font-medium tracking-[-0.01em]', className)} {...props} />
+  return (
+    <DialogPrimitive.Title
+      data-slot="dialog-title"
+      className={cn('pr-6 font-serif text-[23px] leading-tight font-medium tracking-[-0.01em]', className)}
+      {...props}
+    />
+  )
 }
 
 export { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle }

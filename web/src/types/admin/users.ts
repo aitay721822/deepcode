@@ -1,6 +1,13 @@
 type RoleRef = { id: number; name: string }
 
-export type User = { id: number; username: string; displayName: string; disabled: boolean; roles: RoleRef[]; createdAt: string }
+export type User = {
+  id: number
+  username: string
+  displayName: string
+  disabled: boolean
+  roles: RoleRef[]
+  createdAt: string
+}
 
 export type NewUser = { username: string; displayName: string; password: string; roleIds: number[] }
 

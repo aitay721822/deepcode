@@ -40,10 +40,14 @@ export function ServersSection() {
   return (
     <section>
       <SectionHead title="Git servers">
-        <Button onClick={() => edit.show('new')}><PlusIcon /> New server</Button>
+        <Button onClick={() => edit.show('new')}>
+          <PlusIcon /> New server
+        </Button>
       </SectionHead>
       <LoadError error={error} onRetry={reload} />
-      {!servers ? !error && <SkeletonText /> : (
+      {!servers ? (
+        !error && <SkeletonText />
+      ) : (
         <Table>
           <TableHeader>
             <TableRow>
@@ -52,7 +56,9 @@ export function ServersSection() {
               <TableHead>Base URL / API URL</TableHead>
               <TableHead>Token</TableHead>
               <TableHead>Repositories</TableHead>
-              <TableHead><span className="sr-only">Actions</span></TableHead>
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -63,19 +69,43 @@ export function ServersSection() {
                 <Fragment key={s.id}>
                   <TableRow className={cn(done && 'border-b-0')}>
                     <TableCell className="font-medium">{s.name}</TableCell>
-                    <TableCell><span className="inline-flex items-center gap-1.5"><ProviderIcon provider={s.kind} className="size-3.5" /> {providerName(s.kind)}</span></TableCell>
+                    <TableCell>
+                      <span className="inline-flex items-center gap-1.5">
+                        <ProviderIcon provider={s.kind} className="size-3.5" /> {providerName(s.kind)}
+                      </span>
+                    </TableCell>
                     <TableCell className="font-mono text-[12.5px]">
-                      <span className="block max-w-[200px] truncate" title={s.baseUrl}>{s.baseUrl}</span>
-                      <span className="block max-w-[200px] truncate text-muted-foreground" title={s.apiUrl}>{s.apiUrl}</span>
+                      <span className="block max-w-[200px] truncate" title={s.baseUrl}>
+                        {s.baseUrl}
+                      </span>
+                      <span className="block max-w-[200px] truncate text-muted-foreground" title={s.apiUrl}>
+                        {s.apiUrl}
+                      </span>
                     </TableCell>
                     <TableCell>{s.hasToken ? 'Set' : <span className="text-muted-foreground">None</span>}</TableCell>
                     <TableCell>{s.repositoryCount}</TableCell>
                     <TableCell className="text-right">
-                      <Button variant="outline" size="sm" className="mr-1" busy={result === 'busy'} aria-label={`Test connection to ${s.name}`} onClick={() => test(s)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mr-1"
+                        busy={result === 'busy'}
+                        aria-label={`Test connection to ${s.name}`}
+                        onClick={() => test(s)}
+                      >
                         {result === 'busy' && <Spinner className="size-3" />} Test connection
                       </Button>
-                      <Button variant="ghost" size="icon-sm" aria-label={`Edit ${s.name}`} onClick={() => edit.show(s)}><PencilIcon /></Button>
-                      <Button variant="ghost" size="icon-sm" aria-label={`Delete ${s.name}`} onClick={() => remove.show(s)}><Trash2Icon /></Button>
+                      <Button variant="ghost" size="icon-sm" aria-label={`Edit ${s.name}`} onClick={() => edit.show(s)}>
+                        <PencilIcon />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Delete ${s.name}`}
+                        onClick={() => remove.show(s)}
+                      >
+                        <Trash2Icon />
+                      </Button>
                     </TableCell>
                   </TableRow>
                   {done && (
@@ -83,8 +113,14 @@ export function ServersSection() {
                     // never grows sideways, and it wraps within what a phone shows of a table that scrolls.
                     <TableRow className="hover:bg-transparent">
                       <TableCell colSpan={6} className="pt-0 whitespace-normal">
-                        <Status className={cn('max-w-[calc(100vw-4rem)] text-xs [overflow-wrap:anywhere] [contain:inline-size]', done.ok ? 'text-muted-foreground' : 'text-destructive')}>
-                          {done.ok ? 'Connected' : 'Failed'}{done.detail && `: ${done.detail}`}
+                        <Status
+                          className={cn(
+                            'max-w-[calc(100vw-4rem)] text-xs [overflow-wrap:anywhere] [contain:inline-size]',
+                            done.ok ? 'text-muted-foreground' : 'text-destructive',
+                          )}
+                        >
+                          {done.ok ? 'Connected' : 'Failed'}
+                          {done.detail && `: ${done.detail}`}
                         </Status>
                       </TableCell>
                     </TableRow>
@@ -94,21 +130,37 @@ export function ServersSection() {
             })}
             {servers.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-[13px] text-muted-foreground">No git servers yet.</TableCell>
+                <TableCell colSpan={6} className="text-[13px] text-muted-foreground">
+                  No git servers yet.
+                </TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
       )}
       {edit.item && (
-        <ServerDialog key={edit.key} open={edit.open} server={edit.item === 'new' ? undefined : edit.item} onClose={edit.hide} onSaved={changed} />
+        <ServerDialog
+          key={edit.key}
+          open={edit.open}
+          server={edit.item === 'new' ? undefined : edit.item}
+          onClose={edit.hide}
+          onSaved={changed}
+        />
       )}
       {removing && (
-        <ConfirmDialog key={remove.key} open={remove.open} title={`Delete ${removing.name}?`} confirm="Delete server"
-          description={removing.repositoryCount
-            ? `Used by ${plural(removing.repositoryCount, 'imported repository', 'imported repositories')}, so it cannot be deleted.`
-            : 'No repository uses it. This cannot be undone.'}
-          onClose={remove.hide} onConfirm={() => deleteGitServer(removing.id).then(changed)} />
+        <ConfirmDialog
+          key={remove.key}
+          open={remove.open}
+          title={`Delete ${removing.name}?`}
+          confirm="Delete server"
+          description={
+            removing.repositoryCount
+              ? `Used by ${plural(removing.repositoryCount, 'imported repository', 'imported repositories')}, so it cannot be deleted.`
+              : 'No repository uses it. This cannot be undone.'
+          }
+          onClose={remove.hide}
+          onConfirm={() => deleteGitServer(removing.id).then(changed)}
+        />
       )}
     </section>
   )

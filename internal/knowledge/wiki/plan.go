@@ -136,6 +136,7 @@ func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, sha, r
 	return g.pages(ctx, snap)
 }
 
+// plan asks the model for the wiki's pages from the snapshot's layout.
 func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string) ([]planned, error) {
 	layout, err := g.layout(ctx, snap)
 	if err != nil {
@@ -200,7 +201,7 @@ func clip(s string, n int) string {
 // deep, root files, the imports between those directories, the README and
 // root manifests.
 func (g *Generator) layout(ctx context.Context, snap int64) (string, error) {
-	rows, err := g.DB.QueryContext(ctx, `SELECT path FROM source_files WHERE snapshot_id = ? ORDER BY path`, snap)
+	rows, err := g.DB.QueryContext(ctx, `SELECT path FROM source_files WHERE snapshot_id = ? AND NOT generated ORDER BY path`, snap)
 	if err != nil {
 		return "", err
 	}
@@ -260,7 +261,9 @@ func (g *Generator) layout(ctx context.Context, snap int64) (string, error) {
 	frows, err := g.DB.QueryContext(ctx, `
 		SELECT f.path, c.content FROM source_files f JOIN file_contents c ON c.hash = f.content_hash
 		WHERE f.snapshot_id = ? AND f.path NOT LIKE '%/%'
-		  AND (lower(f.path) LIKE 'readme%' OR lower(f.path) IN ('package.json', 'go.mod', 'cargo.toml', 'pyproject.toml'))
+		  AND (lower(f.path) LIKE 'readme%' OR lower(f.path) IN ('package.json', 'go.mod', 'cargo.toml', 'pyproject.toml',
+		    'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts')
+		    OR lower(f.path) LIKE '%.sln' OR lower(f.path) LIKE '%.slnx')
 		ORDER BY lower(f.path) LIKE 'readme%' DESC`, snap)
 	if err != nil {
 		return "", err

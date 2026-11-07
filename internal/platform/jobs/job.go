@@ -29,7 +29,7 @@ var Statuses = []string{StatusQueued, StatusRunning, StatusSucceeded, StatusFail
 type Job struct {
 	ID        int64  `json:"id"`
 	Kind      string `json:"kind"`
-	RepoID    int64  `json:"repoId"`
+	RepoID    int64  `json:"-"` // the row id; Listed carries the public one
 	CommitSHA string `json:"commitSha"`
 	Status    string `json:"status"` // one of Statuses
 	Attempts  int    `json:"attempts"`
@@ -41,11 +41,12 @@ type Job struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
-// Listed is a job with the name of the repository it works on.
+// Listed is a job with the public id and name of the repository it works on.
 type Listed struct {
 	Job
-	RepoOwner string `json:"repoOwner"`
-	RepoName  string `json:"repoName"`
+	RepoPublicID string `json:"repoId"`
+	RepoOwner    string `json:"repoOwner"`
+	RepoName     string `json:"repoName"`
 }
 
 // LogLine is one line of a job's output.

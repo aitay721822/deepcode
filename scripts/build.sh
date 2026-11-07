@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 npm --prefix web ci
+npm --prefix web run check # Biome: format, lint and import order
 npm --prefix web run build
 rm -rf internal/app/server/webui/dist
 mkdir -p internal/app/server/webui/dist

@@ -3,6 +3,7 @@ package role
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -14,7 +15,7 @@ type Input struct {
 	Description     *string       `json:"description"`
 	Permissions     *[]Permission `json:"permissions"`
 	AllRepositories *bool         `json:"allRepositories"`
-	RepositoryIDs   *[]int64      `json:"repositoryIds"`
+	RepositoryIDs   *[]string     `json:"repositoryIds"` // public ids
 }
 
 type failure struct {
@@ -158,7 +159,15 @@ func links(ctx context.Context, tx *sql.Tx, r Role, in Input) error {
 		return nil
 	}
 	for _, repo := range *in.RepositoryIDs {
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO role_repositories(role_id, repository_id) VALUES (?, ?)`, r.ID, repo); err != nil {
+		var id int64
+		err := tx.QueryRowContext(ctx, `SELECT id FROM repositories WHERE public_id = ?`, repo).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return failure{ErrInvalid, "unknown repository"}
+		}
+		if err == nil {
+			_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO role_repositories(role_id, repository_id) VALUES (?, ?)`, r.ID, id)
+		}
+		if err != nil {
 			return err
 		}
 	}

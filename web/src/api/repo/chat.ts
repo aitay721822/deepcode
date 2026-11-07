@@ -8,7 +8,7 @@ export const getConversation = (id: string) => api<Conversation>(`/api/conversat
  * server-sent event (EventSource cannot POST).
  */
 export async function streamChat(
-  body: { repoId: number; conversationId: number; question: string; deep: boolean },
+  body: { repoId: string; conversationId: number; question: string; deep: boolean },
   on: (e: ChatEvent) => void,
   signal: AbortSignal,
 ) {
@@ -25,8 +25,7 @@ export async function streamChat(
     const { value, done } = await reader.read().catch(unreachable)
     if (done) return
     buf += value
-    let i: number
-    while ((i = buf.indexOf('\n\n')) >= 0) {
+    for (let i = buf.indexOf('\n\n'); i >= 0; i = buf.indexOf('\n\n')) {
       const block = buf.slice(0, i)
       buf = buf.slice(i + 2)
       let event = 'message'

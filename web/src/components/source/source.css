@@ -30,7 +30,7 @@
 }
 
 .hidden-char::before {
-  content: 'U+' attr(data-cp);
+  content: "U+" attr(data-cp);
 }
 
 .hljs-title,
@@ -120,11 +120,12 @@
 .wiki .markdown h2::before {
   counter-increment: section;
   content: counter(section, decimal-leading-zero);
-  content: counter(section, decimal-leading-zero) / ''; /* shown, not read */
+  /* biome-ignore lint/suspicious/noDuplicateProperties: the line above is for browsers without alternative text */
+  content: counter(section, decimal-leading-zero) / ""; /* shown, not read */
   display: block;
   margin-bottom: 8px;
   color: var(--brand);
-  font: 500 11px/1 var(--font-mono);
+  font: 500 11px / 1 var(--font-mono);
   letter-spacing: 0.18em;
 }
 
@@ -157,7 +158,7 @@
   list-style: none; /* its checkbox is the marker */
 }
 
-.markdown input[type='checkbox'] {
+.markdown input[type="checkbox"] {
   accent-color: var(--brand);
 }
 

@@ -26,8 +26,8 @@ func (ix *Indexer) write(ctx context.Context, snap, prev int64, parsed []parsedF
 	defer tx.Rollback()
 	for _, path := range copies {
 		for _, q := range []string{
-			`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count)
-			 SELECT ?, path, language, content_hash, size, line_count FROM source_files WHERE snapshot_id = ? AND path = ?`,
+			`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count, generated)
+			 SELECT ?, path, language, content_hash, size, line_count, generated FROM source_files WHERE snapshot_id = ? AND path = ?`,
 			`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line, signature)
 			 SELECT ?, path, name, qualified_name, kind, start_line, end_line, signature FROM symbols WHERE snapshot_id = ? AND path = ?`,
 			`INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash, terms)
@@ -39,17 +39,21 @@ func (ix *Indexer) write(ctx context.Context, snap, prev int64, parsed []parsedF
 		}
 	}
 	for _, p := range parsed {
-		var imports any // NULL: no grammar reads the language
-		if analyzer.HasGrammar(p.lang) {
+		var imports any                                  // NULL: no grammar reads the language, or the file is generated
+		if analyzer.HasGrammar(p.lang) && !p.generated { // a hand-written copy fills them in
 			imports = graph.Imports(p.imports)
 		}
-		// A content an older version stored has its imports NULL: they are filled in here.
+		// This version's imports replace what an older one stored (NULL, or read otherwise).
 		if _, err := tx.ExecContext(ctx, `INSERT INTO file_contents(hash, content, imports) VALUES (?, ?, ?)
-			ON CONFLICT(hash) DO UPDATE SET imports = coalesce(file_contents.imports, excluded.imports)`, p.sha, p.content, imports); err != nil {
+			ON CONFLICT(hash) DO UPDATE SET imports = coalesce(excluded.imports, file_contents.imports)`, p.sha, p.content, imports); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (?, ?, ?, ?, ?, ?)`,
-			snap, p.path, p.lang, p.sha, p.size, p.lines); err != nil {
+		last, err := replaced(ctx, tx, snap, p.path)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count, generated) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			snap, p.path, p.lang, p.sha, p.size, p.lines, p.generated); err != nil {
 			return err
 		}
 		if err := insertSymbols(ctx, tx, snap, p.path, p.symbols, ""); err != nil {
@@ -61,8 +65,71 @@ func (ix *Indexer) write(ctx context.Context, snap, prev int64, parsed []parsedF
 				return err
 			}
 		}
+		if last > 0 {
+			if err := keepVectors(ctx, tx, snap, p.path, last); err != nil {
+				return err
+			}
+		}
 	}
 	return tx.Commit()
+}
+
+// replaced readies a file the snapshot holds already, read again in place
+// after an analyzer upgrade, to be stored anew: its symbols and file row go,
+// and last is its newest chunk's id (0 for none), whose chunks keepVectors
+// drops once the new ones are in.
+func replaced(ctx context.Context, tx *sql.Tx, snap int64, path string) (last int64, err error) {
+	var newest sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT max(id) FROM chunks WHERE snapshot_id = ? AND path = ?`, snap, path).Scan(&newest); err != nil {
+		return 0, err
+	}
+	for _, table := range []string{"symbols", "source_files"} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE snapshot_id = ? AND path = ?`, snap, path); err != nil {
+			return 0, err
+		}
+	}
+	return newest.Int64, nil
+}
+
+// keepVectors gives the file's new chunks the vectors of its old ones (ids up
+// to last) with the same content, then drops the old ones: an upgrade embeds
+// only what it changed, and search keeps them meanwhile.
+func keepVectors(ctx context.Context, tx *sql.Tx, snap int64, path string, last int64) error {
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO chunk_embeddings(chunk_id, model, dimension, embedding)
+		SELECT n.id, e.model, e.dimension, e.embedding FROM chunks n
+		JOIN chunks o ON o.snapshot_id = n.snapshot_id AND o.path = n.path AND o.id <= ?3 AND o.content_hash = n.content_hash
+		JOIN chunk_embeddings e ON e.chunk_id = o.id
+		WHERE n.snapshot_id = ?1 AND n.path = ?2 AND n.id > ?3`, snap, path, last); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM chunks WHERE snapshot_id = ? AND path = ? AND id <= ?`, snap, path, last)
+	return err
+}
+
+// forget drops the rows of files the snapshot should no longer hold, in one
+// transaction.
+func (ix *Indexer) forget(ctx context.Context, snap int64, paths []string) error {
+	tx, err := ix.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, p := range paths {
+		if err := dropFile(ctx, tx, snap, p); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// dropFile deletes a file's rows from the snapshot; vectors follow chunks.
+func dropFile(ctx context.Context, tx *sql.Tx, snap int64, path string) error {
+	for _, table := range []string{"chunks", "symbols", "source_files"} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE snapshot_id = ? AND path = ?`, snap, path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // FillTerms gives the chunks an older version stored, whose terms are NULL,
@@ -131,6 +198,7 @@ func (ix *Indexer) setTerms(ctx context.Context, batch []filling) (int, error) {
 	return set, tx.Commit()
 }
 
+// insertSymbols stores the file's symbols and their children's, named under parent.
 func insertSymbols(ctx context.Context, tx *sql.Tx, snap int64, path string, syms []analyzer.Symbol, parent string) error {
 	for _, s := range syms {
 		q := s.QualifiedName(parent)

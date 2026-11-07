@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,6 +53,31 @@ func TestStreamEnds(t *testing.T) {
 		if (err == nil) != tc.ok {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// TestMeasure: a measured answer asks for the server's token counts and
+// reports them with its characters; an unmeasured one asks for none.
+func TestMeasure(t *testing.T) {
+	var asked atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked.Store(strings.Contains(string(body), `"include_usage":true`))
+		w.Write([]byte(`data: {"choices":[{"delta":{"content":"héllo"},"finish_reason":"stop"}]}` + "\n\n" +
+			`data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3}}` + "\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+	var got []Usage
+	c := &OpenAI{BaseURL: srv.URL, ModelName: "m", Measure: func(u Usage) { got = append(got, u) }}
+	if _, err := c.Generate(context.Background(), []Message{{Role: "user", Content: "größe"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !asked.Load() || len(got) != 1 || got[0] != (Usage{InChars: 5, OutChars: 5, InTokens: 12, OutTokens: 3}) {
+		t.Fatalf("asked %v, measured %+v", asked.Load(), got)
+	}
+	c.Measure = nil
+	if _, err := c.Generate(context.Background(), nil); err != nil || asked.Load() {
+		t.Fatalf("unmeasured: asked %v, %v", asked.Load(), err)
 	}
 }
 

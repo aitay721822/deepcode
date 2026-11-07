@@ -26,7 +26,7 @@ type span struct {
 }
 
 // Chunks splits a file into chunks aligned to symbol boundaries. A symbol that
-// fits stays whole; a large class or namespace is split along its members,
+// fits stays whole; a large class, and any namespace, is split along its members,
 // keeping the container's name on the pieces in between; any other large
 // region is cut at blank lines. Small neighbours are then merged.
 func Chunks(lines []string, symbols []analyzer.Symbol) []Chunk {
@@ -41,6 +41,7 @@ func Chunks(lines []string, symbols []analyzer.Symbol) []Chunk {
 	return out
 }
 
+// plan splits lines from to to into spans along the symbols' bounds.
 func plan(lines []string, syms []analyzer.Symbol, from, to int, parent string) []span {
 	var out []span
 	cur := from
@@ -54,10 +55,12 @@ func plan(lines []string, syms []analyzer.Symbol, from, to int, parent string) [
 		}
 		name := s.QualifiedName(parent)
 		switch {
+		// A namespace is always split: a C# or Rust file is one, and a chunk
+		// named after it would hide the names of the classes inside.
+		case len(s.Children) > 0 && (s.Kind == "namespace" || end-start >= maxChunkLines):
+			out = append(out, plan(lines, s.Children, start, end, name)...)
 		case end-start < maxChunkLines:
 			out = append(out, span{start, end, name})
-		case len(s.Children) > 0:
-			out = append(out, plan(lines, s.Children, start, end, name)...)
 		default:
 			out = append(out, split(lines, start, end, name)...)
 		}
@@ -109,6 +112,8 @@ func merge(spans []span) []span {
 	return out
 }
 
+// joinNames adds name b to the comma-separated list a, unless b ends it
+// already or a holds five.
 func joinNames(a, b string) string {
 	switch {
 	case b == "" || a == b || strings.HasSuffix(a, ", "+b):

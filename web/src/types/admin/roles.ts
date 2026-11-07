@@ -10,11 +10,11 @@ export type Role = {
   builtin: boolean
   permissions: Permission[]
   allRepositories: boolean
-  repositoryIds: number[]
+  repositoryIds: string[]
   userCount: number
 }
 
 export type RoleInput = Pick<Role, 'name' | 'description' | 'permissions' | 'allRepositories' | 'repositoryIds'>
 
 /** A repository a role can be limited to. */
-export type RepoRef = { id: number; owner: string; name: string; provider: Provider; serverName: string }
+export type RepoRef = { id: string; owner: string; name: string; provider: Provider; serverName: string }

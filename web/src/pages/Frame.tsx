@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react'
+import { type ReactNode, useEffect } from 'react'
 import type { Repo } from '../types/repo/repo'
 import { SiteHeader } from './SiteHeader'
 

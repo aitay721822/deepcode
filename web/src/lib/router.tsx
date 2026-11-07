@@ -1,4 +1,4 @@
-import { useEffect, useState, type AnchorHTMLAttributes } from 'react'
+import { type AnchorHTMLAttributes, useEffect, useState } from 'react'
 
 const current = () => location.pathname + location.search
 

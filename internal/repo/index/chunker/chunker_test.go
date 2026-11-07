@@ -43,6 +43,12 @@ func TestChunks(t *testing.T) {
 				{Name: "m2", StartLine: 101, EndLine: 299},
 			}}},
 			"1-100 C, C.m1 | 101-220 C.m2 | 221-300 C.m2, C"},
+		{"a namespace splits along its types, however small", lines(100),
+			[]analyzer.Symbol{{Name: "N", Kind: "namespace", StartLine: 1, EndLine: 100, Children: []analyzer.Symbol{
+				{Name: "A", StartLine: 3, EndLine: 50},
+				{Name: "B", StartLine: 51, EndLine: 99},
+			}}},
+			"1-50 N, N.A | 51-100 N.B, N"},
 		{"a Go method keeps its receiver", lines(10),
 			[]analyzer.Symbol{{Name: "Get", Container: "Store", StartLine: 1, EndLine: 10}},
 			"1-10 Store.Get"},

@@ -7,10 +7,14 @@ type MermaidApi = typeof import('mermaid').default
 // Mermaid is large: it is fetched the first time a diagram shows, as a chunk of its own; a failed fetch is tried
 // again by the next diagram.
 let loading: Promise<MermaidApi> | undefined
-const load = () => (loading ??= import('mermaid').then((m) => m.default, (e: unknown) => {
-  loading = undefined
-  throw e
-}))
+const load = () =>
+  (loading ??= import('mermaid').then(
+    (m) => m.default,
+    (e: unknown) => {
+      loading = undefined
+      throw e
+    },
+  ))
 
 // One diagram renders at a time: initialize() sets the configuration the next render reads. Each render has an id
 // of its own: render() first removes the element holding its id, which would be the diagram on show.
@@ -21,7 +25,14 @@ const token = (name: string) => getComputedStyle(document.documentElement).getPr
 
 // The diagram's colours are the page's semantic tokens, read as it renders, so it follows the theme.
 function themeVariables() {
-  const [text, line, node, edge, card, muted] = ['--foreground', '--brand', '--chip', '--input', '--card', '--muted'].map(token)
+  const [text, line, node, edge, card, muted] = [
+    '--foreground',
+    '--brand',
+    '--chip',
+    '--input',
+    '--card',
+    '--muted',
+  ].map(token)
   return {
     fontFamily: "'IBM Plex Mono', ui-monospace, monospace",
     fontSize: '13px',
@@ -85,21 +96,33 @@ export function Mermaid({ code, label = 'Diagram' }: { code: string; label?: str
   useEffect(() => {
     if (hides) return
     let live = true
-    const wait = setTimeout(() => draw(code).then((s) => {
-      if (live) {
-        setSvg(s)
-        setFailed(false)
-      }
-    }, () => live && setFailed(true)), 250)
+    const wait = setTimeout(
+      () =>
+        draw(code).then(
+          (s) => {
+            if (live) {
+              setSvg(s)
+              setFailed(false)
+            }
+          },
+          () => live && setFailed(true),
+        ),
+      250,
+    )
     return () => {
       live = false
       clearTimeout(wait)
     }
-  }, [code, theme])
+  }, [code, theme, hides])
   if (hides || failed) {
-    return <pre><code className="hljs" dangerouslySetInnerHTML={{ __html: highlight(code, '') }} /></pre>
+    return (
+      <pre>
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: highlight() escapes the code and marks its hidden characters */}
+        <code className="hljs" dangerouslySetInnerHTML={{ __html: highlight(code, '') }} />
+      </pre>
+    )
   }
-  return svg
-    ? <div role="img" aria-label={label} className="diagram" dangerouslySetInnerHTML={{ __html: svg }} />
-    : <div role="status" aria-label="Drawing the diagram" className="diagram min-h-40 animate-pulse" />
+  if (!svg) return <div role="status" aria-label="Drawing the diagram" className="diagram min-h-40 animate-pulse" />
+  // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
+  return <div role="img" aria-label={label} className="diagram" dangerouslySetInnerHTML={{ __html: svg }} />
 }

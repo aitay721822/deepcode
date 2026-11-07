@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getMe, logout as signOut } from '../../api/auth'
 import { setUnauthorizedHandler } from '../../api/client'
 import { Notice } from '../../components/layout/Notice'
@@ -31,10 +31,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
     if (before === signOuts.current) setUser(me)
   }, [])
-  const load = () => {
+  const load = useCallback(() => {
     setError('')
     refresh().catch((e: Error) => setError(e.message))
-  }
+  }, [refresh])
   useEffect(() => {
     setUnauthorizedHandler(() => setUser(null))
     load()
@@ -48,37 +48,47 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       document.removeEventListener('visibilitychange', again)
       removeEventListener('pageshow', restored)
     }
-  }, [])
+  }, [load, refresh])
   useEffect(() => {
     if (user === null && !publicPage) navigate(`/login?next=${encodeURIComponent(path)}`, { replace: true })
-  }, [user, publicPage])
-  const session = useMemo(() => ({
-    user: user ?? null,
-    can: (p: Permission) => !!user?.permissions.includes(p),
-    refresh,
-    logout: async () => {
-      await signOut().catch(() => {}) // signed out here either way
-      signOuts.current++
-      setUser(null)
-      navigate('/login')
-    },
-  }), [user, refresh])
+  }, [user, publicPage, path])
+  const session = useMemo(
+    () => ({
+      user: user ?? null,
+      can: (p: Permission) => !!user?.permissions.includes(p),
+      refresh,
+      logout: async () => {
+        await signOut().catch(() => {}) // signed out here either way
+        signOuts.current++
+        setUser(null)
+        navigate('/login')
+      },
+    }),
+    [user, refresh],
+  )
 
   let body = children
   if (!publicPage && !user) {
     // Loading (quietly) or failed (with a Retry); null: on the way to /login.
-    body = user === null ? null : (
-      <main>
-        <Notice>
-          {error ? (
-            <>
-              <p className="text-sm text-destructive" role="alert">{error}</p>
-              <Button variant="outline" onClick={load}>Retry</Button>
-            </>
-          ) : <SkeletonText />}
-        </Notice>
-      </main>
-    )
+    body =
+      user === null ? null : (
+        <main>
+          <Notice>
+            {error ? (
+              <>
+                <p className="text-sm text-destructive" role="alert">
+                  {error}
+                </p>
+                <Button variant="outline" onClick={load}>
+                  Retry
+                </Button>
+              </>
+            ) : (
+              <SkeletonText />
+            )}
+          </Notice>
+        </main>
+      )
   }
   return <SessionContext value={session}>{body}</SessionContext>
 }

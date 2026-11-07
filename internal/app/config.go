@@ -2,8 +2,8 @@ package app
 
 import "time"
 
-// Config is everything the application needs; cmd/deepcode fills it from
-// DEEPCODE_* variables and flags.
+// Config is everything the application needs; cmd/deepcode/config fills it
+// from the config file and DEEPCODE_* variables, and flags override that.
 type Config struct {
 	DataDir string // holds deepcode.db, secret.key and repos/ (the git fetch cache)
 

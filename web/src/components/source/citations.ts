@@ -9,7 +9,11 @@ const rangeRe = /^L?\d+(?:-L?\d+)?$/
 const fenceRe = /(```[\s\S]*?(?:```|$))/
 
 /** Links [path:10-20] groups while an answer streams, the way the server will once it has checked them; with the citations linked. */
-export function linkMarkers(text: string, repo: Pick<Repo, 'url' | 'provider'>, sha: string): { text: string; citations: Citation[] } {
+export function linkMarkers(
+  text: string,
+  repo: Pick<Repo, 'url' | 'provider'>,
+  sha: string,
+): { text: string; citations: Citation[] } {
   const citations: Citation[] = []
   if (!sha) return { text, citations }
   const link = (c: Citation) => {
@@ -18,7 +22,9 @@ export function linkMarkers(text: string, repo: Pick<Repo, 'url' | 'provider'>, 
   }
   const linked = text
     .split(fenceRe) // odd parts are code blocks, where links do not render
-    .map((part, i) => (i % 2 ? part : part.replace(groupRe, (m, group: string) => parseRefs(group)?.map(link).join(' ') ?? m)))
+    .map((part, i) =>
+      i % 2 ? part : part.replace(groupRe, (m, group: string) => parseRefs(group)?.map(link).join(' ') ?? m),
+    )
     .join('')
   return { text: linked, citations }
 }

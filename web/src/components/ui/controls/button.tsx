@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from 'class-variance-authority'
-import { motion, type HTMLMotionProps } from 'motion/react'
+import { type HTMLMotionProps, motion } from 'motion/react'
 import { cn } from '../../../lib/style/cn'
 
 const buttonVariants = cva(
@@ -36,7 +36,14 @@ const buttonVariants = cva(
  * that settles it ignores presses, Enter in its form included (implicit submission clicks the default button), but
  * keeps focus, which disabled would drop to the page; so a keyboard user can try again after a failure.
  */
-function Button({ className, variant = 'default', size = 'default', busy, onClick, ...props }: HTMLMotionProps<'button'> & VariantProps<typeof buttonVariants> & { busy?: boolean }) {
+function Button({
+  className,
+  variant = 'default',
+  size = 'default',
+  busy,
+  onClick,
+  ...props
+}: HTMLMotionProps<'button'> & VariantProps<typeof buttonVariants> & { busy?: boolean }) {
   return (
     <motion.button
       data-slot="button"

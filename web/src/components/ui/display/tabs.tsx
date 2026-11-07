@@ -1,6 +1,6 @@
 import { motion } from 'motion/react'
 import { Tabs as TabsPrimitive } from 'radix-ui'
-import { createContext, useContext, useId, type ComponentProps } from 'react'
+import { type ComponentProps, createContext, useContext, useId } from 'react'
 import { cn } from '../../../lib/style/cn'
 import { slide } from '../../../lib/style/motion'
 
@@ -18,7 +18,13 @@ function Tabs({ className, value, ...props }: ComponentProps<typeof TabsPrimitiv
 }
 
 function TabsList({ className, ...props }: ComponentProps<typeof TabsPrimitive.List>) {
-  return <TabsPrimitive.List data-slot="tabs-list" className={cn('flex gap-5 border-b text-muted-foreground', className)} {...props} />
+  return (
+    <TabsPrimitive.List
+      data-slot="tabs-list"
+      className={cn('flex gap-5 border-b text-muted-foreground', className)}
+      {...props}
+    />
+  )
 }
 
 function TabsTrigger({ className, value, children, ...props }: ComponentProps<typeof TabsPrimitive.Trigger>) {
@@ -35,7 +41,11 @@ function TabsTrigger({ className, value, children, ...props }: ComponentProps<ty
     >
       {children}
       {tabs.value === value && (
-        <motion.span layoutId={tabs.layoutId} className="absolute inset-x-0 -bottom-px h-0.5 bg-brand forced-colors:bg-[color:Highlight]" transition={slide} />
+        <motion.span
+          layoutId={tabs.layoutId}
+          className="absolute inset-x-0 -bottom-px h-0.5 bg-brand forced-colors:bg-[color:Highlight]"
+          transition={slide}
+        />
       )}
     </TabsPrimitive.Trigger>
   )

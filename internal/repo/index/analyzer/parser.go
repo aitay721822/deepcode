@@ -1,5 +1,6 @@
 // Package analyzer detects file languages and extracts symbols and imports
-// with Tree-sitter.
+// with Tree-sitter: Go, JavaScript and TypeScript here, other languages in a
+// folder each, all read through the syntax package.
 package analyzer
 
 import (
@@ -9,35 +10,25 @@ import (
 	tsgo "github.com/tree-sitter/tree-sitter-go/bindings/go"
 	tsjs "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
 	tsts "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
+
+	"deepcode/internal/repo/index/analyzer/dotnet"
+	"deepcode/internal/repo/index/analyzer/jvm"
+	"deepcode/internal/repo/index/analyzer/rust"
+	"deepcode/internal/repo/index/analyzer/syntax"
 )
 
-type Symbol struct {
-	Name      string
-	Kind      string // function, method, class, interface, struct, type, enum, namespace
-	Container string // receiver type for Go methods
-	StartLine int    // 1-based, inclusive; widened to cover a leading doc comment
-	EndLine   int
-	Signature string
-	Children  []Symbol
-}
+type Symbol = syntax.Symbol
 
-// QualifiedName is the name search shows: Receiver.Method for Go methods,
-// Parent.Member inside classes and namespaces.
-func (s Symbol) QualifiedName(parent string) string {
-	switch {
-	case s.Container != "":
-		return s.Container + "." + s.Name
-	case parent != "":
-		return parent + "." + s.Name
-	}
-	return s.Name
-}
+var comments = syntax.Kinds("comment")
 
-var languages = map[string]*sitter.Language{
-	"go":         sitter.NewLanguage(tsgo.Language()),
-	"javascript": sitter.NewLanguage(tsjs.Language()),
-	"typescript": sitter.NewLanguage(tsts.LanguageTypescript()),
-	"tsx":        sitter.NewLanguage(tsts.LanguageTSX()),
+var languages = map[string]*syntax.Grammar{
+	"go":         {Language: sitter.NewLanguage(tsgo.Language()), Decl: decl, Facts: goImports, Leading: comments},
+	"javascript": {Language: sitter.NewLanguage(tsjs.Language()), Decl: decl, Facts: jsImports, Leading: comments},
+	"typescript": {Language: sitter.NewLanguage(tsts.LanguageTypescript()), Decl: decl, Facts: jsImports, Leading: comments},
+	"tsx":        {Language: sitter.NewLanguage(tsts.LanguageTSX()), Decl: decl, Facts: jsImports, Leading: comments},
+	"csharp":     dotnet.CSharp,
+	"java":       jvm.Java,
+	"rust":       rust.Rust,
 }
 
 // Parser holds one Tree-sitter parser per language. Not safe for concurrent use.
@@ -45,8 +36,10 @@ type Parser struct {
 	parsers map[string]*sitter.Parser
 }
 
+// NewParser returns a Parser with no grammar loaded yet.
 func NewParser() *Parser { return &Parser{parsers: map[string]*sitter.Parser{}} }
 
+// Close frees the parsers p made.
 func (p *Parser) Close() {
 	for _, ps := range p.parsers {
 		ps.Close()
@@ -54,12 +47,18 @@ func (p *Parser) Close() {
 }
 
 // File is what Parse finds in a source file: its top-level declarations (with
-// class members and namespace contents as children) and the modules it
-// imports, as its source spells them.
+// class members and namespace contents as children) and its imports: for Go,
+// JavaScript and TypeScript the modules as its source spells them, for other
+// languages the facts their resolver in the graph package reads.
 type File struct {
 	Symbols []Symbol
 	Imports []string
 }
+
+// Version is raised whenever what Detect, Generated or Parse make of a file
+// changes: a snapshot an older version indexed lends the next none of its
+// files' rows, so each is read again. 1 added C#, Java and Rust.
+const Version = 1
 
 // HasGrammar reports whether Parse reads lang; it finds nothing in others.
 func HasGrammar(lang string) bool { return languages[lang] != nil }
@@ -76,14 +75,14 @@ func Grammars() []string {
 
 // Parse reads src as lang, in one pass for its symbols and its imports.
 func (p *Parser) Parse(lang string, src []byte) File {
+	g := languages[lang]
+	if g == nil {
+		return File{}
+	}
 	ps := p.parsers[lang]
 	if ps == nil {
-		l := languages[lang]
-		if l == nil {
-			return File{}
-		}
 		ps = sitter.NewParser()
-		if err := ps.SetLanguage(l); err != nil {
+		if err := ps.SetLanguage(g.Language); err != nil {
 			ps.Close()
 			return File{}
 		}
@@ -94,6 +93,6 @@ func (p *Parser) Parse(lang string, src []byte) File {
 		return File{}
 	}
 	defer tree.Close()
-	x := &extractor{src: src}
-	return File{Symbols: x.block(tree.RootNode()), Imports: x.imports(tree.RootNode(), lang)}
+	syms, imports := syntax.Extract(g, tree.RootNode(), src)
+	return File{Symbols: syms, Imports: imports}
 }

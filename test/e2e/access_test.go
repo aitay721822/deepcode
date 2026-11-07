@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ import (
 // checkAccess: a user sees and does only what their roles grant on which
 // repositories, never another user's conversations, and the admin console
 // keeps an administrator around.
-func checkAccess(t *testing.T, base string, admin *client, repoID, adminConv int64) {
+func checkAccess(t *testing.T, base string, admin *client, repoID string, adminConv int64) {
 	t.Helper()
 	var readers struct {
 		ID int64 `json:"id"`
@@ -52,7 +53,7 @@ func checkAccess(t *testing.T, base string, admin *client, repoID, adminConv int
 	}
 
 	// No repositories granted: none visible, and a repository's existence stays hidden.
-	repo := fmt.Sprintf("/api/repos/%d", repoID)
+	repo := "/api/repos/" + repoID
 	var list []repoView
 	if dev.get("/api/repos", &list); len(list) != 0 {
 		t.Fatalf("dev sees %d repositories before any grant", len(list))
@@ -79,7 +80,7 @@ func checkAccess(t *testing.T, base string, admin *client, repoID, adminConv int
 
 	// Granted: readable, but asking and syncing need their own permissions on it,
 	// so the repository says dev may only read it.
-	if code := admin.patch(fmt.Sprintf("/api/admin/roles/%d", readers.ID), fmt.Sprintf(`{"repositoryIds":[%d]}`, repoID), nil); code != http.StatusOK {
+	if code := admin.patch(fmt.Sprintf("/api/admin/roles/%d", readers.ID), fmt.Sprintf(`{"repositoryIds":[%q]}`, repoID), nil); code != http.StatusOK {
 		t.Fatalf("grant: %d", code)
 	}
 	if dev.get("/api/repos", &list); len(list) != 1 || fmt.Sprint(list[0].Permissions) != "[repo.read]" {
@@ -95,7 +96,7 @@ func checkAccess(t *testing.T, base string, admin *client, repoID, adminConv int
 	if code := dev.get(repo+"/wiki", nil); code != http.StatusOK {
 		t.Fatalf("dev wiki: %d", code)
 	}
-	if code, _ := dev.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%d,"question":"hi"}`, repoID)); code != http.StatusForbidden {
+	if code, _ := dev.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"question":"hi"}`, repoID)); code != http.StatusForbidden {
 		t.Fatalf("dev chat without repo.chat: %d", code)
 	}
 	if code := dev.post(repo+"/sync", `{}`, nil); code != http.StatusForbidden {
@@ -182,7 +183,7 @@ func checkSignUp(t *testing.T, base string, admin *client) {
 // role; one imported before, under any of its names, is the importer's only
 // if they could already read it. It returns the importer, signed in, and
 // their repository.
-func checkImportPolicy(t *testing.T, base string, admin *client, demoID int64) (*client, int64) {
+func checkImportPolicy(t *testing.T, base string, admin *client, demoID string) (*client, string) {
 	t.Helper()
 	var importers struct {
 		ID int64 `json:"id"`
@@ -215,21 +216,21 @@ func checkImportPolicy(t *testing.T, base string, admin *client, demoID int64) (
 		}
 	}
 	var roles []struct {
-		ID            int64   `json:"id"`
-		RepositoryIDs []int64 `json:"repositoryIds"`
+		ID            int64    `json:"id"`
+		RepositoryIDs []string `json:"repositoryIds"`
 	}
 	admin.get("/api/admin/roles", &roles)
 	for _, r := range roles {
 		if r.ID == importers.ID && (len(r.RepositoryIDs) != 1 || r.RepositoryIDs[0] != tools.ID) {
-			t.Fatalf("the importers role holds %v, want only %d", r.RepositoryIDs, tools.ID)
+			t.Fatalf("the importers role holds %v, want only %s", r.RepositoryIDs, tools.ID)
 		}
 	}
-	if code := ivy.get(fmt.Sprintf("/api/repos/%d", demoID), nil); code != http.StatusNotFound {
+	if code := ivy.get("/api/repos/"+demoID, nil); code != http.StatusNotFound {
 		t.Fatalf("ivy reads acme/demo: %d", code)
 	}
 	waitFor(t, "index and wiki of acme/tools", func() bool {
 		var r repoView
-		admin.get(fmt.Sprintf("/api/repos/%d", tools.ID), &r)
+		admin.get("/api/repos/"+tools.ID, &r)
 		failIfJobFailed(t, r.Job)
 		return r.Snapshot != nil && r.Snapshot.WikiStatus == "ready" && r.Job.Finished()
 	})
@@ -239,15 +240,15 @@ func checkImportPolicy(t *testing.T, base string, admin *client, demoID int64) (
 // checkJobErrors: a failed job's error may quote git or paths on the server,
 // so only those who can open the job console read it; the repository's other
 // readers get a fixed text.
-func checkJobErrors(t *testing.T, db *sql.DB, admin, reader *client, repoID int64) {
+func checkJobErrors(t *testing.T, db *sql.DB, admin, reader *client, repoID string) {
 	t.Helper()
 	const detail = "git fetch: exit status 128: /srv/deepcode/data/repos/7: not a git repository"
-	if _, err := db.Exec(`UPDATE jobs SET status = 'failed', error = ? WHERE id = (SELECT max(id) FROM jobs WHERE repository_id = ?)`, detail, repoID); err != nil {
+	if _, err := db.Exec(`UPDATE jobs SET status = 'failed', error = ? WHERE id = (SELECT max(id) FROM jobs WHERE repository_id = (SELECT id FROM repositories WHERE public_id = ?))`, detail, repoID); err != nil {
 		t.Fatal(err)
 	}
 	var seen, full repoView
-	reader.get(fmt.Sprintf("/api/repos/%d", repoID), &seen)
-	admin.get(fmt.Sprintf("/api/repos/%d", repoID), &full)
+	reader.get("/api/repos/"+repoID, &seen)
+	admin.get("/api/repos/"+repoID, &full)
 	if seen.Job == nil || full.Job == nil || seen.Job.Error != "an administrator can find the details in the job console" || full.Job.Error != detail {
 		t.Fatalf("job error: the reader sees %+v, the admin %+v", seen.Job, full.Job)
 	}
@@ -265,12 +266,12 @@ func checkJobErrors(t *testing.T, db *sql.DB, admin, reader *client, repoID int6
 // checkJobEvents: the live job list sends a jobs.view holder the changes of
 // jobs on the repositories they may read, and none of the others. during runs
 // a job on hidden, then one on visible.
-func checkJobEvents(t *testing.T, base string, admin *client, hidden, visible int64, during func()) {
+func checkJobEvents(t *testing.T, base string, admin *client, hidden, visible string, during func()) {
 	t.Helper()
 	var watchers struct {
 		ID int64 `json:"id"`
 	}
-	body := fmt.Sprintf(`{"name":"watchers","permissions":["repo.read","jobs.view"],"repositoryIds":[%d]}`, visible)
+	body := fmt.Sprintf(`{"name":"watchers","permissions":["repo.read","jobs.view"],"repositoryIds":[%q]}`, visible)
 	if code := admin.post("/api/admin/roles", body, &watchers); code != http.StatusCreated {
 		t.Fatalf("create role: %d", code)
 	}
@@ -290,7 +291,7 @@ func checkJobEvents(t *testing.T, base string, admin *client, hidden, visible in
 	}
 	defer resp.Body.Close()
 	type change struct {
-		RepoID int64  `json:"repoId"`
+		RepoID string `json:"repoId"`
 		Status string `json:"status"`
 	}
 	changes := make(chan change, 1024) // read on while during runs
@@ -323,5 +324,27 @@ func checkJobEvents(t *testing.T, base string, admin *client, hidden, visible in
 		case <-deadline:
 			t.Fatal("no change of the visible repository's job arrived")
 		}
+	}
+}
+
+// checkPublicID: a repository is known by its CUID2 alone. Its row id, which
+// counts up from 1, finds nothing, even for an administrator, in a URL or in
+// a question's body.
+func checkPublicID(t *testing.T, admin *client, id string) {
+	t.Helper()
+	if !regexp.MustCompile(`^[a-z][0-9a-z]{23}$`).MatchString(id) {
+		t.Fatalf("repository id %q is not a CUID2", id)
+	}
+	for _, path := range []string{"/api/repos/" + id, "/api/repos/1", "/api/repos/1/wiki", "/api/repos/1/files"} {
+		want := http.StatusNotFound
+		if strings.HasSuffix(path, id) {
+			want = http.StatusOK
+		}
+		if code := admin.get(path, nil); code != want {
+			t.Fatalf("GET %s: %d, want %d", path, code, want)
+		}
+	}
+	if code, _ := admin.events(http.MethodPost, "/api/chat/stream", `{"repoId":"1","question":"hi"}`); code != http.StatusNotFound {
+		t.Fatalf("a question about row id 1: %d, want 404", code)
 	}
 }

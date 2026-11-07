@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"testing"
@@ -212,5 +213,52 @@ func TestTermsMigration(t *testing.T) {
 	exec(`DELETE FROM chunks`)
 	if match("terms:token") != 0 || match("terms:check") != 0 {
 		t.Fatal("deleted chunks are still found by their terms")
+	}
+}
+
+// TestPublicIDMigration: migration 010 gives every repository stored before
+// it a CUID2 of its own, and its trigger gives one to each repository added
+// after it.
+func TestPublicIDMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "deepcode.db")
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{ // back to the schema before 010, with two repositories stored then
+		`DROP TRIGGER repositories_public_id_fill`, `DROP INDEX repositories_public_id`, `ALTER TABLE repositories DROP COLUMN public_id`,
+		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/a', 'o', 'a'), (2, 'https://github.com/o/b', 'o', 'b')`,
+		`DELETE FROM schema_migrations WHERE name = 'migrations/010_repository_public_id.sql'`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	db.Close()
+	if db, err = Open(ctx, path); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO repositories(url, owner, name) VALUES ('https://github.com/o/c', 'o', 'c')`); err != nil {
+		t.Fatal(err)
+	}
+	shape := regexp.MustCompile(`^[a-z][0-9a-z]{23}$`)
+	var ids []string
+	rows, err := db.Query(`SELECT coalesce(public_id, '') FROM repositories ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		if !shape.MatchString(id) || slices.Contains(ids, id) {
+			t.Fatalf("public ids %v, then %q: want distinct CUID2s", ids, id)
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("%d public ids, want 3", len(ids))
 	}
 }

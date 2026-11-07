@@ -4,7 +4,7 @@ import { syncRepo } from '../../api/repo/repos'
 export type Sync = ReturnType<typeof useSync>
 
 /** Syncs a repository on request: busy meanwhile, then why it failed, or that it was already up to date; onDone runs either way. */
-export function useSync(repoId: number, onDone: () => void) {
+export function useSync(repoId: string, onDone: () => void) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [upToDate, setUpToDate] = useState(false)

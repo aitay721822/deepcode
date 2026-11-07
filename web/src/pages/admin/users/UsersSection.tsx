@@ -33,14 +33,21 @@ export function UsersSection() {
   return (
     <section>
       <SectionHead title="Users">
-        <Button disabled={!roles} onClick={() => edit.show('new')}><PlusIcon /> New user</Button>
+        <Button disabled={!roles} onClick={() => edit.show('new')}>
+          <PlusIcon /> New user
+        </Button>
       </SectionHead>
       <SignUpSwitch />
-      <LoadError error={failed} onRetry={() => {
-        if (error) reload()
-        if (rolesError) reloadRoles()
-      }} />
-      {!users ? !error && <SkeletonText /> : (
+      <LoadError
+        error={failed}
+        onRetry={() => {
+          if (error) reload()
+          if (rolesError) reloadRoles()
+        }}
+      />
+      {!users ? (
+        !error && <SkeletonText />
+      ) : (
         <Table>
           <TableHeader>
             <TableRow>
@@ -49,7 +56,9 @@ export function UsersSection() {
               <TableHead>Roles</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Created</TableHead>
-              <TableHead><span className="sr-only">Actions</span></TableHead>
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -57,13 +66,42 @@ export function UsersSection() {
               <TableRow key={u.id}>
                 <TableCell className="font-medium">{u.username}</TableCell>
                 <TableCell dir="auto">{u.displayName}</TableCell>
-                <TableCell><span className="inline-flex flex-wrap gap-1">{u.roles.map((r) => <Badge key={r.id}>{r.name}</Badge>)}</span></TableCell>
-                <TableCell>{u.disabled ? <Badge variant="outline" className="border-destructive/50 text-destructive">Disabled</Badge> : 'Active'}</TableCell>
+                <TableCell>
+                  <span className="inline-flex flex-wrap gap-1">
+                    {u.roles.map((r) => (
+                      <Badge key={r.id}>{r.name}</Badge>
+                    ))}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  {u.disabled ? (
+                    <Badge variant="outline" className="border-destructive/50 text-destructive">
+                      Disabled
+                    </Badge>
+                  ) : (
+                    'Active'
+                  )}
+                </TableCell>
                 <TableCell>{formatDate(u.createdAt)}</TableCell>
                 <TableCell className="text-right">
-                  <Button variant="ghost" size="icon-sm" aria-label={`Edit ${u.username}`} disabled={!roles} onClick={() => edit.show(u)}><PencilIcon /></Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Edit ${u.username}`}
+                    disabled={!roles}
+                    onClick={() => edit.show(u)}
+                  >
+                    <PencilIcon />
+                  </Button>
                   {u.id !== me?.id && (
-                    <Button variant="ghost" size="icon-sm" aria-label={`Delete ${u.username}`} onClick={() => remove.show(u)}><Trash2Icon /></Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Delete ${u.username}`}
+                      onClick={() => remove.show(u)}
+                    >
+                      <Trash2Icon />
+                    </Button>
                   )}
                 </TableCell>
               </TableRow>
@@ -72,12 +110,26 @@ export function UsersSection() {
         </Table>
       )}
       {edit.item && roles && (
-        <UserDialog key={edit.key} open={edit.open} user={editing} self={editing?.id === me?.id} roles={roles} onClose={edit.hide} onSaved={saved} />
+        <UserDialog
+          key={edit.key}
+          open={edit.open}
+          user={editing}
+          self={editing?.id === me?.id}
+          roles={roles}
+          onClose={edit.hide}
+          onSaved={saved}
+        />
       )}
       {removing && (
-        <ConfirmDialog key={remove.key} open={remove.open} title={`Delete ${removing.username}?`} confirm="Delete user"
+        <ConfirmDialog
+          key={remove.key}
+          open={remove.open}
+          title={`Delete ${removing.username}?`}
+          confirm="Delete user"
           description="The account can no longer sign in. This cannot be undone."
-          onClose={remove.hide} onConfirm={() => deleteUser(removing.id).then(reload)} />
+          onClose={remove.hide}
+          onConfirm={() => deleteUser(removing.id).then(reload)}
+        />
       )}
     </section>
   )

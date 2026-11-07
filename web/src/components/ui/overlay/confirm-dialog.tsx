@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 import { Button } from '../controls/button'
 import { Spinner } from '../feedback/spinner'
 import {
@@ -15,7 +15,14 @@ import {
  * Asks before a destructive step. Cancel has focus first; the action stays busy until onConfirm settles,
  * then closes the dialog or shows why it failed. Mount it anew for each opening (useDialog's key).
  */
-export function ConfirmDialog({ open, title, description, confirm, onClose, onConfirm }: {
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirm,
+  onClose,
+  onConfirm,
+}: {
   open: boolean
   title: string
   description: ReactNode
@@ -29,28 +36,38 @@ export function ConfirmDialog({ open, title, description, confirm, onClose, onCo
   const close = () => busy || onClose()
   return (
     <AlertDialog open={open} onOpenChange={(o) => o || close()}>
-      <AlertDialogContent onCloseAutoFocus={(e) => {
-        e.preventDefault()
-        opener?.focus()
-      }}>
+      <AlertDialogContent
+        onCloseAutoFocus={(e) => {
+          e.preventDefault()
+          opener?.focus()
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
-        {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+        {error && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-          <Button variant="destructive" busy={busy} onClick={async () => {
-            setBusy(true)
-            setError('')
-            try {
-              await onConfirm()
-              onClose()
-            } catch (err) {
-              setError((err as Error).message)
-              setBusy(false)
-            }
-          }}>
+          <Button
+            variant="destructive"
+            busy={busy}
+            onClick={async () => {
+              setBusy(true)
+              setError('')
+              try {
+                await onConfirm()
+                onClose()
+              } catch (err) {
+                setError((err as Error).message)
+                setBusy(false)
+              }
+            }}
+          >
             {busy && <Spinner />}
             {confirm}
           </Button>

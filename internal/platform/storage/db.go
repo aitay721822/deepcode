@@ -4,10 +4,23 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"strings"
 
-	_ "modernc.org/sqlite" // registers the "sqlite" driver (pure Go, FTS5 included)
+	"modernc.org/sqlite" // registers the "sqlite" driver (pure Go, FTS5 included)
+
+	"deepcode/internal/platform/storage/cuid"
 )
+
+// cuid() is a new CUID2 on every call (not deterministic, so each row of an
+// UPDATE gets its own): a repository's public id, set by the trigger
+// migration 010 adds. Only connections of this binary know the function, so
+// another SQLite client cannot insert a repository.
+func init() {
+	sqlite.MustRegisterScalarFunction("cuid", 0, func(*sqlite.FunctionContext, []driver.Value) (driver.Value, error) {
+		return cuid.New(), nil
+	})
+}
 
 // Open opens or creates the database at path and applies pending migrations.
 // Write transactions start with BEGIN IMMEDIATE so they queue on busy_timeout

@@ -10,7 +10,14 @@ import type { Role } from '../../../types/admin/roles'
 import type { User } from '../../../types/admin/users'
 
 /** Creates a user, or edits one (no username change; a blank password keeps the current one; self: nobody disables themselves). */
-export function UserDialog({ open, user, self, roles, onClose, onSaved }: {
+export function UserDialog({
+  open,
+  user,
+  self,
+  roles,
+  onClose,
+  onSaved,
+}: {
   open: boolean
   user?: User
   self?: boolean
@@ -30,18 +37,38 @@ export function UserDialog({ open, user, self, roles, onClose, onSaved }: {
     onSaved()
   }
   return (
-    <FormDialog open={open} title={user ? `Edit ${user.username}` : 'New user'} submit={user ? 'Save' : 'Create user'} onClose={onClose} onSubmit={save}>
+    <FormDialog
+      open={open}
+      title={user ? `Edit ${user.username}` : 'New user'}
+      submit={user ? 'Save' : 'Create user'}
+      onClose={onClose}
+      onSubmit={save}
+    >
       {!user && (
         <Field label="Username">
-          <Input required autoComplete="off" autoCapitalize="none" spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)} />
+          <Input
+            required
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
         </Field>
       )}
       <Field label="Display name">
         <Input autoComplete="off" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
       </Field>
       <Field label={user ? 'New password' : 'Password'}>
-        <Input type="password" autoComplete="new-password" required={!user} minLength={8} value={password}
-          placeholder={user ? 'Leave blank to keep the current password' : undefined} onChange={(e) => setPassword(e.target.value)} />
+        <Input
+          type="password"
+          autoComplete="new-password"
+          required={!user}
+          minLength={8}
+          value={password}
+          placeholder={user ? 'Leave blank to keep the current password' : undefined}
+          onChange={(e) => setPassword(e.target.value)}
+        />
       </Field>
       <fieldset>
         <legend className="text-sm font-medium">Roles</legend>
@@ -49,7 +76,10 @@ export function UserDialog({ open, user, self, roles, onClose, onSaved }: {
           {roles.map((r) => (
             <Label key={r.id} className="items-start leading-snug font-normal">
               <Checkbox className="mt-0.5" checked={roleIds.includes(r.id)} onCheckedChange={() => toggle(r.id)} />
-              <span>{r.name}{r.description && <span className="text-muted-foreground"> {r.description}</span>}</span>
+              <span>
+                {r.name}
+                {r.description && <span className="text-muted-foreground"> {r.description}</span>}
+              </span>
             </Label>
           ))}
         </div>
