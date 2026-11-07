@@ -31,7 +31,7 @@ Ctrl-C（或 SIGTERM）停止服務：進行中的請求最多再等 10 秒，�
 
 不設模型也能匯入、索引、瀏覽檔案與搜尋 Symbol：
 
-- 未設 `DEEPCODE_EMBED_MODEL`：只用 FTS5 與 Symbol 檢索，不計算向量。端點沒有 `/embeddings`（例如只載入聊天模型的 llama.cpp）時就不要設。FTS5 以 porter 取詞幹（`subscribers` 也找得到 `subscribe`），測試、文件與範例的分數減半，讓實作程式碼排在前面；有 Embedding 時語意檢索仍是最準的。
+- 未設 `DEEPCODE_EMBED_MODEL`：只用 FTS5 與 Symbol 檢索，不計算向量。端點沒有 `/embeddings`（例如只載入聊天模型的 llama.cpp）時就不要設。FTS5 以 porter 取詞幹（`subscribers` 也找得到 `subscribe`），camelCase 識別字另外拆成單字索引（`getUserToken` 拆成 get、user、token，問題只寫 token 也找得到；問題裡的 `userToken` 也拆開來找），測試、文件與範例的分數減半，讓實作程式碼排在前面；有 Embedding 時語意檢索仍是最準的。
 - 未設 `DEEPCODE_CHAT_MODEL`：不生成 Wiki，問答會回傳錯誤。
 
 ### 設定
@@ -258,8 +258,8 @@ internal/
     catalog/             Repository 目錄：匯入、同步與輪詢判斷、目前版本、檔案清單（快取）、內容與兩個版本間變更的檔案
     index/               索引
       analyzer/          語言判斷、Tree-sitter Symbol（Go、JavaScript、TypeScript / TSX）
-      chunker/           Symbol-aware chunking
-      indexer/           增量索引、Embedding、版本發佈與清理
+      chunker/           Symbol-aware chunking；camelCase 識別字拆字（FTS5 的 terms 欄）
+      indexer/           增量索引、Embedding、版本發佈與清理、補齊舊 Chunk 的 terms
       vectorstore/       向量 BLOB 儲存與 Cosine 檢索
   knowledge/             由索引產生知識
     retrieval/           FTS5、Symbol、向量檢索與 RRF
@@ -298,7 +298,7 @@ web/src/                 React + TypeScript + Vite；Tailwind CSS v4 + shadcn/ui
 - **取得原始碼**以 shallow bare fetch 抓固定 SHA，再用 `git cat-file --batch` 讀取，不建立工作目錄。快取只保留正在索引的 Commit：換成別的 Commit 時整份重抓（depth 1 本來就會下載整棵樹，增量比對靠資料庫裡的 blob SHA），同步再多次也不會累積舊版本。下載時每 0.25 秒量一次快取大小、結束時再量一次，超過 `DEEPCODE_MAX_REPO_MB` 就中止並刪掉這份快取；抓取時關掉 Git 的自動維護，免得重新打包被算成下載量。每個 Git 指令的輸出最多保留 64 MB：上百萬個空檔案的樹只要下載幾 MB，`ls-tree` 卻要列出上百 MB，超過就讓該次索引失敗。
 - **工作恢復**：資料庫只由一個程序使用，啟動時把 `running` 的工作重新排入（已用完重試次數的改為 `failed`），沒有 lease；多程序共用資料庫時才需要。
 - **向量儲存**（`vectorstore.SQLite`）的 `Upsert` 一次寫多筆；沒有 `Delete`，向量隨 Chunk 以外鍵 cascade 刪除。沒有熱門向量的記憶體快取，量測到掃描成為瓶頸再加。
-- **migrations** 放在 `internal/platform/storage/migrations/` 並編入執行檔；`002_fts_porter.sql` 把 FTS5 改為 porter 詞幹，並在同一個 transaction 內重建既有資料的索引。`003_access.sql`（帳號、角色、session）與 `004_git_servers_job_logs.sql`（Git 伺服器、工作輸出）讓既有資料庫升級：原有 Repository 歸到 GitHub 伺服器，原有對話歸給第一位管理員。`005_signup.sql` 新增註冊開關（預設關閉）。之後的 migration 依業務放進子資料夾（每個資料夾最多 5 個檔案），例如 `knowledge/006_wiki_language.sql`：仍記錄為 `migrations/<檔名>`、依檔名的編號排序，所以檔案搬進子資料夾不會重跑；兩個同名檔案會讓啟動失敗。`006_wiki_language.sql` 記錄每個版本的 Wiki 以哪種語言撰寫：新版本只沿用同語言 Wiki 的頁面，續寫時語言不同就重新規劃（之前的 Wiki 沒有記錄語言，不會被沿用，未完成的會重新規劃）。
+- **migrations** 放在 `internal/platform/storage/migrations/` 並編入執行檔；`002_fts_porter.sql` 把 FTS5 改為 porter 詞幹，並在同一個 transaction 內重建既有資料的索引。`003_access.sql`（帳號、角色、session）與 `004_git_servers_job_logs.sql`（Git 伺服器、工作輸出）讓既有資料庫升級：原有 Repository 歸到 GitHub 伺服器，原有對話歸給第一位管理員。`005_signup.sql` 新增註冊開關（預設關閉）。之後的 migration 依業務放進子資料夾（每個資料夾最多 5 個檔案），例如 `knowledge/006_wiki_language.sql`：仍記錄為 `migrations/<檔名>`、依檔名的編號排序，所以檔案搬進子資料夾不會重跑；兩個同名檔案會讓啟動失敗。`006_wiki_language.sql` 記錄每個版本的 Wiki 以哪種語言撰寫：新版本只沿用同語言 Wiki 的頁面，續寫時語言不同就重新規劃（之前的 Wiki 沒有記錄語言，不會被沿用，未完成的會重新規劃）。`repo/007_chunk_terms.sql` 為 Chunk 加上 camelCase 識別字拆開後的單字欄（`terms`），並以它重建 FTS5 索引；SQL 拆不了 camelCase，所以升級前的 Chunk 在升級後第一次啟動時於背景分批補上（中斷時下次啟動接續，補完後 log 寫出筆數），補完之前照舊只以原文比對。
 - **Wiki 增量更新**以頁面的引用加上重新檢索的結果判斷受影響的頁面，沒有呼叫圖；寧可多重寫，也不留下與程式碼不符的頁面。
 - **帳號與 Git 伺服器**是計畫之外新增的：計畫只匯入公開 GitHub、沒有登入機制。
 - 沒有 Makefile；DeepWiki 的 Deep Research 模式屬於研究 Agent，不在 V1 範圍。

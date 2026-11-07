@@ -56,6 +56,19 @@ func (p pipeline) subscribe(bus *events.Bus) {
 		})
 }
 
+// fillTerms splits the identifiers of the chunks an older version stored
+// without terms, beside the server: until it is done they are found by their
+// content alone, and a stop leaves the rest to the next start.
+func (p pipeline) fillTerms(ctx context.Context) {
+	n, err := p.indexer.FillTerms(ctx)
+	if n > 0 {
+		log.Printf("indexer: split the identifiers of %d chunks stored before this version", n)
+	}
+	if err != nil && ctx.Err() == nil {
+		log.Printf("indexer: splitting the identifiers of earlier chunks stopped (the next start goes on): %v", err)
+	}
+}
+
 // poll checks every repository's remote HEAD each syncEvery until ctx is
 // cancelled, and does nothing when syncEvery is 0.
 func (p pipeline) poll(ctx context.Context) {

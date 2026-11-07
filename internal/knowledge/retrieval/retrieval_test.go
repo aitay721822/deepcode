@@ -28,8 +28,13 @@ func TestFuse(t *testing.T) {
 }
 
 func TestFTSQuery(t *testing.T) {
-	if got, want := ftsQuery("How does the getUserName function work in auth_service?"), `"getusername"* OR "auth_service"*`; got != want {
+	if got, want := ftsQuery("How does the getUserName function work in auth_service?"), `"getusername"* OR "auth_service"* OR "user"* OR "name"*`; got != want {
 		t.Fatalf("got %s, want %s", got, want)
+	}
+	// At most 16 terms, the question's own words before the words of its identifiers.
+	long := ftsQuery("How do getUserToken, refreshAccessToken, validateSessionCookie, parseAuthHeader and loadConfigFile interact with the rate limiter?")
+	if strings.Count(long, " OR ") != 15 || !strings.Contains(long, `"limiter"*`) {
+		t.Fatalf("a long question: %s", long)
 	}
 	if got := ftsQuery("講解vscode的幾個組件"); got != `"vscode"*` {
 		t.Fatalf("got %s", got)
@@ -99,6 +104,24 @@ func TestFTSRanksCodeFirst(t *testing.T) {
 	}
 	if ids, _ := (&Retriever{DB: db}).fts(context.Background(), 1, "subscribers"); len(ids) != 2 {
 		t.Fatalf("\"subscribers\" matched %d chunks, want both (stemmed to subscrib)", len(ids))
+	}
+}
+
+// TestFTSFindsWordsOfIdentifiers: a question's word finds the compound
+// identifiers made of it through their terms, ahead of the same word in
+// prose, and a compound identifier in a question finds others that share its
+// words.
+func TestFTSFindsWordsOfIdentifiers(t *testing.T) {
+	db := seeded(t,
+		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash, terms) VALUES
+			(1, 'auth/session.go', 1, 9, 'func refreshUserToken() {}', 'h1', 'refresh user token'),
+			(1, 'auth/check.go', 1, 9, 'the token', 'h2', ''),
+			(1, 'cart/cart.go', 1, 9, 'func checkout() {}', 'h3', '')`,
+	)
+	for _, q := range []string{"Where is the token renewed?", "Who calls userToken?"} {
+		if ids, err := (&Retriever{DB: db}).fts(context.Background(), 1, q); err != nil || !reflect.DeepEqual(ids, []int64{1, 2}) {
+			t.Errorf("%q found chunks %v %v, want refreshUserToken's (1), then the prose (2)", q, ids, err)
+		}
 	}
 }
 

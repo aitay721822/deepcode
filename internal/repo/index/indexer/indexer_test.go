@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
 	"deepcode/internal/repo/index/analyzer"
+	"deepcode/internal/repo/index/chunker"
 )
 
 // TestIndexable: non-empty files of a known language up to the per-file size
@@ -225,6 +227,69 @@ func TestReuseCoversEveryRange(t *testing.T) {
 	db.QueryRow(`SELECT count(*) FROM chunk_embeddings e JOIN chunks c ON c.id = e.chunk_id WHERE c.snapshot_id = 2`).Scan(&n)
 	if n != want {
 		t.Fatalf("%d of %d chunks got the stored vector", n, want)
+	}
+}
+
+// TestTerms: a parsed chunk is stored with the words of its compound
+// identifiers, and an unchanged file's chunks are copied with theirs;
+// FillTerms gives the chunks an older version stored theirs, past one batch,
+// and full-text search then finds every one by a word.
+func TestTerms(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "deepcode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r');
+		INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, 'a'), (2, 1, 'b')`); err != nil {
+		t.Fatal(err)
+	}
+	ix := &Indexer{DB: db}
+	f := parsedFile{file: file{path: "auth/userToken.go", sha: "s", lang: "go", size: 1}, content: "x", lines: 1,
+		chunks: []chunker.Chunk{{StartLine: 1, EndLine: 1, Content: "func getUserToken() {}"}}}
+	if err := ix.write(ctx, 1, 0, []parsedFile{f}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := ix.write(ctx, 2, 1, nil, []string{f.path}); err != nil { // unchanged in snapshot 2
+		t.Fatal(err)
+	}
+	const want = "user token get user token"
+	terms := func() string {
+		var s string
+		db.QueryRow(`SELECT group_concat(DISTINCT coalesce(terms, 'NULL')) FROM chunks`).Scan(&s)
+		return s
+	}
+	if got := terms(); got != want {
+		t.Fatalf("stored and copied chunks hold terms %q, want %q", got, want)
+	}
+	// As an older version left them: those two, and a batch's worth more.
+	if _, err := db.Exec(`UPDATE chunks SET terms = NULL;
+		WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+		INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash)
+		SELECT 2, 'auth/userToken.go', i + 1, i + 1, 'func getUserToken() {}', 'h' || i FROM n`, termsBatch); err != nil {
+		t.Fatal(err)
+	}
+	n, err := ix.FillTerms(ctx)
+	if err != nil || n != termsBatch+2 || terms() != want {
+		t.Fatalf("filled %d of %d chunks (%v); terms %q", n, termsBatch+2, err, terms())
+	}
+	var found int
+	db.QueryRow(`SELECT count(*) FROM chunk_fts WHERE chunk_fts MATCH 'terms:token'`).Scan(&found)
+	if found != termsBatch+2 {
+		t.Fatalf("full-text search finds %d chunks by a word of their identifiers, want %d", found, termsBatch+2)
+	}
+	// A chunk stored again at an id FillTerms read, with other content, keeps NULL for the next pass.
+	if _, err := db.Exec(`UPDATE chunks SET terms = NULL WHERE id = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if set, err := ix.setTerms(ctx, []filling{{id: 1, hash: "what FillTerms read", terms: "stale"}}); err != nil || set != 0 {
+		t.Fatalf("set %d (%v), want 0", set, err)
+	}
+	var stale sql.NullString
+	db.QueryRow(`SELECT terms FROM chunks WHERE id = 1`).Scan(&stale)
+	if stale.Valid {
+		t.Fatalf("terms worked out from other content were written: %q", stale.String)
 	}
 }
 

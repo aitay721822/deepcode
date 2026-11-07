@@ -1,5 +1,6 @@
-// The snapshot's rows in SQLite: batches committed while parsing, and the
-// data of older snapshots pruned once a newer one is published.
+// The snapshot's rows in SQLite: batches committed while parsing, the terms
+// an older version left out filled in, and the data of older snapshots pruned
+// once a newer one is published.
 
 package indexer
 
@@ -8,7 +9,11 @@ import (
 	"database/sql"
 
 	"deepcode/internal/repo/index/analyzer"
+	"deepcode/internal/repo/index/chunker"
 )
+
+// termsBatch is how many chunks FillTerms splits in one transaction.
+const termsBatch = 500
 
 // write commits one batch in a short transaction: a file's rows land together,
 // which is what makes an interrupted run resumable.
@@ -24,8 +29,8 @@ func (ix *Indexer) write(ctx context.Context, snap, prev int64, parsed []parsedF
 			 SELECT ?, path, language, content_hash, size, line_count FROM source_files WHERE snapshot_id = ? AND path = ?`,
 			`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line, signature)
 			 SELECT ?, path, name, qualified_name, kind, start_line, end_line, signature FROM symbols WHERE snapshot_id = ? AND path = ?`,
-			`INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash)
-			 SELECT ?, path, symbol_name, start_line, end_line, content, content_hash FROM chunks WHERE snapshot_id = ? AND path = ?`,
+			`INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash, terms)
+			 SELECT ?, path, symbol_name, start_line, end_line, content, content_hash, terms FROM chunks WHERE snapshot_id = ? AND path = ?`,
 		} {
 			if _, err := tx.ExecContext(ctx, q, snap, prev, path); err != nil {
 				return err
@@ -44,13 +49,79 @@ func (ix *Indexer) write(ctx context.Context, snap, prev int64, parsed []parsedF
 			return err
 		}
 		for _, c := range p.chunks {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-				snap, p.path, c.Symbol, c.StartLine, c.EndLine, c.Content, contentHash(p.path, c.Symbol, c.Content)); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash, terms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				snap, p.path, c.Symbol, c.StartLine, c.EndLine, c.Content, contentHash(p.path, c.Symbol, c.Content), chunker.Terms(p.path, c.Content)); err != nil {
 				return err
 			}
 		}
 	}
 	return tx.Commit()
+}
+
+// FillTerms gives the chunks an older version stored, whose terms are NULL,
+// the words of their compound identifiers, termsBatch at a time in id order
+// so no transaction holds the write lock for long. Until then such a chunk is
+// found by its content alone, as before; a stop leaves the rest to the next
+// start. It returns how many chunks it filled.
+func (ix *Indexer) FillTerms(ctx context.Context) (int, error) {
+	filled := 0
+	for last := int64(0); ; {
+		rows, err := ix.DB.QueryContext(ctx, `SELECT id, path, content, content_hash FROM chunks WHERE id > ? AND terms IS NULL ORDER BY id LIMIT ?`, last, termsBatch)
+		if err != nil {
+			return filled, err
+		}
+		var batch []filling
+		for rows.Next() {
+			var f filling
+			var path, content string
+			if err := rows.Scan(&f.id, &path, &content, &f.hash); err != nil {
+				rows.Close()
+				return filled, err
+			}
+			f.terms = chunker.Terms(path, content)
+			batch = append(batch, f)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil || len(batch) == 0 {
+			return filled, err
+		}
+		set, err := ix.setTerms(ctx, batch)
+		if err != nil {
+			return filled, err
+		}
+		filled, last = filled+set, batch[len(batch)-1].id
+	}
+}
+
+// filling is a chunk's terms as FillTerms worked them out, with the content
+// hash of what it read.
+type filling struct {
+	id          int64
+	hash, terms string
+}
+
+// setTerms writes a batch of FillTerms' work in one transaction, to chunks
+// that still hold what it read: one deleted meanwhile and stored again at its
+// id with other content is left for the next pass. It returns how many it set.
+func (ix *Indexer) setTerms(ctx context.Context, batch []filling) (int, error) {
+	tx, err := ix.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	set := 0
+	for _, f := range batch {
+		res, err := tx.ExecContext(ctx, `UPDATE chunks SET terms = ? WHERE id = ? AND content_hash = ?`, f.terms, f.id, f.hash)
+		if err != nil {
+			return 0, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		set += int(n)
+	}
+	return set, tx.Commit()
 }
 
 func insertSymbols(ctx context.Context, tx *sql.Tx, snap int64, path string, syms []analyzer.Symbol, parent string) error {

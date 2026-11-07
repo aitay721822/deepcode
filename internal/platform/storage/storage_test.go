@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -154,5 +155,62 @@ func TestPorterMigrationRebuildsIndex(t *testing.T) {
 	db.QueryRow(`SELECT count(*) FROM chunk_fts WHERE chunk_fts MATCH 'subscribers'`).Scan(&n)
 	if n != 1 {
 		t.Fatalf("after migration 002 the index finds %d chunks for a stemmed word, want 1", n)
+	}
+}
+
+// TestTermsMigration: migration 007 rebuilds the full-text index with the
+// terms column in its transaction, so a chunk stored before it stays
+// searchable, its terms NULL until deepcode fills them in; the remade triggers
+// keep terms in step as chunks are added, changed and deleted.
+func TestTermsMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "deepcode.db")
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := func(qs ...string) {
+		for _, q := range qs {
+			if _, err := db.Exec(q); err != nil {
+				t.Fatalf("%s: %v", q, err)
+			}
+		}
+	}
+	// Back to the schema before 007, with a chunk stored then.
+	exec(`DROP TRIGGER chunks_ai`, `DROP TRIGGER chunks_ad`, `DROP TRIGGER chunks_au`, `DROP TABLE chunk_fts`,
+		`ALTER TABLE chunks DROP COLUMN terms`,
+		`CREATE VIRTUAL TABLE chunk_fts USING fts5(path, symbol_name, content, content='chunks', content_rowid='id', tokenize='porter unicode61')`,
+		`CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN SELECT 1; END`,
+		`CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN SELECT 1; END`,
+		`CREATE TRIGGER chunks_au AFTER UPDATE ON chunks BEGIN SELECT 1; END`,
+		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r')`,
+		`INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, 'abc')`,
+		`INSERT INTO chunks(id, snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 1, 'auth.go', 1, 9, 'func getUserToken() {}', 'h1')`,
+		`DELETE FROM schema_migrations WHERE name = 'migrations/007_chunk_terms.sql'`)
+	db.Close()
+	if db, err = Open(ctx, path); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	match := func(q string) int {
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM chunk_fts WHERE chunk_fts MATCH ?`, q).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	var terms sql.NullString
+	db.QueryRow(`SELECT terms FROM chunks WHERE id = 1`).Scan(&terms)
+	if match("getusertoken") != 1 || terms.Valid {
+		t.Fatalf("after migration 007 the earlier chunk is found %d times, terms %v", match("getusertoken"), terms)
+	}
+	exec(`UPDATE chunks SET terms = 'get user token' WHERE id = 1`,
+		`INSERT INTO chunks(id, snapshot_id, path, start_line, end_line, content, content_hash, terms) VALUES (2, 1, 'cart.go', 1, 9, 'func checkOut() {}', 'h2', 'check out')`)
+	if match("terms:token") != 1 || match("terms:check") != 1 {
+		t.Fatalf("terms written are found %d and %d times, want 1 and 1", match("terms:token"), match("terms:check"))
+	}
+	exec(`DELETE FROM chunks`)
+	if match("terms:token") != 0 || match("terms:check") != 0 {
+		t.Fatal("deleted chunks are still found by their terms")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"deepcode/internal/platform/storage"
+	"deepcode/internal/repo/index/chunker"
 )
 
 var (
@@ -26,13 +27,23 @@ func toSet(s string) map[string]bool {
 	return m
 }
 
-// ftsQuery turns a question into an OR of prefix terms, so "authentication
-// token" also matches authenticateUser and tokens.
+// ftsQuery turns a question into an OR of at most 16 prefix terms, so
+// "authentication token" also matches authenticateUser and tokens. The words
+// of its compound identifiers follow its own words (userToken: user, token),
+// so they never crowd out the question's own words; the terms column holds
+// them for every identifier made of them, refreshUserToken's included.
 func ftsQuery(q string) string {
+	words := wordRe.FindAllString(q, -1)
+	candidates := make([]string, 0, 2*len(words))
+	for _, w := range words {
+		candidates = append(candidates, strings.ToLower(w))
+	}
+	for _, w := range words {
+		candidates = append(candidates, chunker.Split(w)...)
+	}
 	var terms []string
 	seen := map[string]bool{}
-	for _, w := range wordRe.FindAllString(q, -1) {
-		w = strings.ToLower(w)
+	for _, w := range candidates {
 		if len(w) < 3 || stopwords[w] || seen[w] {
 			continue
 		}
@@ -67,7 +78,8 @@ func globs(column string, patterns ...string) string {
 }
 
 // fts ranks the snapshot's chunks by BM25 (porter-stemmed), weighting symbol
-// names and paths above content and source code above tests and docs.
+// names and paths above the words of compound identifiers (terms), those above
+// the rest of the content, and source code above tests and docs.
 // ponytail: MATCH spans every snapshot and the join filters afterwards; give
 // chunk_fts a snapshot column once many repositories share one database.
 func (r *Retriever) fts(ctx context.Context, snapshotID int64, query string) ([]int64, error) {
@@ -79,7 +91,7 @@ func (r *Retriever) fts(ctx context.Context, snapshotID int64, query string) ([]
 	return scanIDs(r.DB.QueryContext(ctx, `
 		SELECT c.id FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid
 		WHERE chunk_fts MATCH ? AND c.snapshot_id = ?
-		ORDER BY bm25(chunk_fts, 4.0, 6.0, 1.0) * `+secondary+` LIMIT ?`, m, snapshotID, ftsLimit))
+		ORDER BY bm25(chunk_fts, 4.0, 6.0, 1.0, 2.0) * `+secondary+` LIMIT ?`, m, snapshotID, ftsLimit))
 }
 
 // symbolChunks finds chunks holding the definition of any of the first 32

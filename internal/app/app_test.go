@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"io"
 	"log"
 	"net/http"
@@ -108,6 +109,45 @@ func TestRunPolls(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("the moved commit's index job was not queued without a sync")
+		}
+	}
+}
+
+// TestRunFillsTerms: Run gives the chunks an older version stored without
+// terms theirs, beside the server.
+func TestRunFillsTerms(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	db, err := storage.Open(ctx, filepath.Join(dir, "deepcode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/acme/demo', 'acme', 'demo');
+		INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, 'a');
+		INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'a.go', 1, 1, 'getUserToken()', 'h')`); err != nil {
+		t.Fatal(err)
+	}
+	log.SetOutput(io.Discard) // the new administrator's one-time password
+	defer log.SetOutput(os.Stderr)
+	a, err := New(ctx, Config{DataDir: dir}, db, http.NotFoundHandler(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		var terms sql.NullString
+		if err := db.QueryRow(`SELECT terms FROM chunks`).Scan(&terms); err != nil {
+			t.Fatal(err)
+		}
+		if terms.String == "get user token" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the chunk's terms were not filled in: %v", terms)
 		}
 	}
 }

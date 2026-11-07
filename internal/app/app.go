@@ -102,8 +102,8 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 
 // Run works the background pipeline until ctx is cancelled: it settles the
 // jobs a previous process left running, subscribes the workers and the
-// pipeline's reactions, polls the remotes when SyncEvery is set, and runs the
-// event bus.
+// pipeline's reactions, fills in the chunk terms an older version left out,
+// polls the remotes when SyncEvery is set, and runs the event bus.
 func (a *App) Run(ctx context.Context) error {
 	if err := a.queue.Recover(ctx); err != nil {
 		return err
@@ -111,6 +111,7 @@ func (a *App) Run(ctx context.Context) error {
 	a.queue.Register(ctx, a.workers, a.pipeline.handlers())
 	a.pipeline.subscribe(a.bus)
 	go a.queue.Sweep(ctx)
+	go a.pipeline.fillTerms(ctx)
 	go a.pipeline.poll(ctx)
 	return a.bus.Run(ctx)
 }
