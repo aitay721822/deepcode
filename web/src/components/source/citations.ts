@@ -2,7 +2,7 @@ import type { Citation } from '../../types/repo/code'
 import type { Repo } from '../../types/repo/repo'
 import { sourceUrl } from '../repo/sourceLinks'
 
-// The same grammar as the server's parser (internal/knowledge/evidence/citations.go).
+// The bracket groups of the server's parser (internal/knowledge/evidence/citations.go), which links bare references too.
 const groupRe = /\[([^[\]\n]+)\](?!\()/g
 const refRe = /^`?([^\s`]+?):L?(\d+)(?:-L?(\d+))?`?$/
 const rangeRe = /^L?\d+(?:-L?\d+)?$/

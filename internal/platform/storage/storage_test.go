@@ -30,6 +30,10 @@ func TestMigrationsInSubfolders(t *testing.T) {
 	if _, err := db.Exec(`UPDATE snapshots SET wiki_language = 'English'`); err != nil {
 		t.Fatalf("migration 006 did not run: %v", err)
 	}
+	var admin string
+	if db.QueryRow(`SELECT description FROM roles WHERE id = 1`).Scan(&admin); admin != "所有 Repository 的所有權限" {
+		t.Fatalf("after migration 012 the admin role reads %q", admin)
+	}
 	files, err := migrationFiles(fstest.MapFS{
 		"migrations/002_b.sql": {}, "migrations/x/001_a.sql": {}, "migrations/y/003_c.sql": {}, "migrations/notes.txt": {},
 	})

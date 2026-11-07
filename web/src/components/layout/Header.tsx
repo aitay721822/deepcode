@@ -1,5 +1,5 @@
+import { Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
-import { Link } from '../../lib/router'
 import type { Repo } from '../../types/repo/repo'
 import { ThemeToggle } from './ThemeToggle'
 
@@ -26,7 +26,9 @@ export function Header({ repo, children }: { repo?: Pick<Repo, 'id' | 'owner' | 
               /
             </span>
             <Link
-              to={`/repos/${repo.id}`}
+              to="/repos/$id"
+              params={{ id: repo.id }}
+              activeOptions={{ exact: true }} // the current page only on the repository's own, not its search
               className="truncate font-mono text-[13.5px] text-muted-foreground hover:text-foreground"
             >
               {repo.owner}/{repo.name}

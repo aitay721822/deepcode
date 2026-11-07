@@ -62,7 +62,7 @@ export function FormDialog({
           )}
           <DialogFooter>
             <Button type="button" variant="outline" disabled={busy} onClick={close}>
-              Cancel
+              取消
             </Button>
             <Button type="submit" busy={busy}>
               {busy && <Spinner />}

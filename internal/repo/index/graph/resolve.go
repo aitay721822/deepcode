@@ -9,6 +9,7 @@ import (
 	"deepcode/internal/repo/index/graph/dotnet"
 	"deepcode/internal/repo/index/graph/jvm"
 	"deepcode/internal/repo/index/graph/rust"
+	"deepcode/internal/repo/index/graph/store"
 )
 
 // file is a source file in a language with a grammar, with the modules it
@@ -18,8 +19,8 @@ type file struct {
 	imports    []string
 }
 
-// edge is an import of one file by another: src imports dst.
-type edge struct{ src, dst string }
+// edge is an import of one file by another: Src imports Dst.
+type edge = store.Edge
 
 // family names the resolver of each language that a folder of its own
 // resolves, from its files' facts (the analyzer's folder of the same name
@@ -84,7 +85,7 @@ func resolve(files []file, configs map[string]string) []edge {
 			}
 			for _, d := range dsts {
 				if d != f.path {
-					out = append(out, edge{f.path, d})
+					out = append(out, edge{Src: f.path, Dst: d})
 				}
 			}
 		}
@@ -92,12 +93,12 @@ func resolve(files []file, configs map[string]string) []edge {
 	for fam, group := range groups {
 		for _, e := range resolvers[fam](group, configs) {
 			if e[0] != e[1] {
-				out = append(out, edge{e[0], e[1]})
+				out = append(out, edge{Src: e[0], Dst: e[1]})
 			}
 		}
 	}
 	// Sorted, then each once: two specifiers can name one file (./a, ./a.ts). No set: a monorepo has millions.
-	slices.SortFunc(out, func(a, b edge) int { return cmp.Or(cmp.Compare(a.src, b.src), cmp.Compare(a.dst, b.dst)) })
+	slices.SortFunc(out, func(a, b edge) int { return cmp.Or(cmp.Compare(a.Src, b.Src), cmp.Compare(a.Dst, b.Dst)) })
 	return slices.Compact(out)
 }
 

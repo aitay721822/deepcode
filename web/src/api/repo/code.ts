@@ -8,7 +8,7 @@ export const listFiles = (repoId: string, snapshotId: number) =>
 /** A file as of the given snapshot (none: the published one). A path with . or .. segments, which the URL would resolve away, is not found. */
 export const getFile = (repoId: string, path: string, snapshot?: string | number | null) =>
   path.split('/').some((s) => s === '.' || s === '..')
-    ? Promise.reject(Object.assign(new Error('file not found in this snapshot'), { status: 404 }))
+    ? Promise.reject(Object.assign(new Error('在這個版本中找不到此檔案'), { status: 404 }))
     : api<FileContent>(
         `/api/repos/${repoId}/files/${encodePath(path)}${snapshot ? `?snapshot=${encodeURIComponent(snapshot)}` : ''}`,
       )

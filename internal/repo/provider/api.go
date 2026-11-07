@@ -35,7 +35,9 @@ func get(ctx context.Context, s gitserver.Server, endpoint string, v any) error 
 	}
 	req.Header.Set("User-Agent", "deepcode")
 	if s.Kind == gitserver.GitLab {
-		if s.Token() != "" {
+		if s.OAuth() && s.Token() != "" { // GitLab takes OAuth tokens only as bearer tokens
+			req.Header.Set("Authorization", "Bearer "+s.Token())
+		} else if s.Token() != "" {
 			req.Header.Set("PRIVATE-TOKEN", s.Token())
 		}
 	} else {
@@ -47,24 +49,24 @@ func get(ctx context.Context, s gitserver.Server, endpoint string, v any) error 
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("provider: %s: %v", s.Name, err) // may name internal addresses
-		return failure{ErrUpstream, s.Name + " API is unreachable; an administrator can find the details in the server log"}
+		return failure{ErrUpstream, s.Name + " API 無法連線；管理員可在伺服器記錄檔中查看詳細資訊"}
 	}
 	defer resp.Body.Close()
 	switch code := resp.StatusCode; {
 	case code == http.StatusOK:
 	case code == http.StatusNotFound:
-		return failure{ErrNotFound, "repository not found on " + s.Name + ", or its token cannot read it"}
+		return failure{ErrNotFound, "在 " + s.Name + " 上找不到 Repository，或它的 Token 沒有讀取權限"}
 	case code == http.StatusUnauthorized:
-		return failure{ErrUpstream, s.Name + " rejected the access token"}
+		return failure{ErrUpstream, s.Name + " 拒絕了存取 Token"}
 	case code == http.StatusTooManyRequests || code == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0":
-		return failure{ErrUpstream, s.Name + " API rate limit reached; try again later, or give the server a token"}
+		return failure{ErrUpstream, s.Name + " API 已達速率限制；請稍後再試，或為這個伺服器設定 Token"}
 	case code == http.StatusForbidden:
-		return failure{ErrUpstream, s.Name + " refused the request (403): the token may lack a scope"}
+		return failure{ErrUpstream, s.Name + " 拒絕了請求（403）：Token 可能缺少所需的權限範圍"}
 	default:
-		return failure{ErrUpstream, fmt.Sprintf("%s API: %s", s.Name, resp.Status)}
+		return failure{ErrUpstream, fmt.Sprintf("%s API 回傳 %s", s.Name, resp.Status)}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(v); err != nil {
-		return failure{ErrUpstream, fmt.Sprintf("%s API: unexpected answer: %v", s.Name, err)}
+		return failure{ErrUpstream, fmt.Sprintf("%s API 回傳了非預期的回應：%v", s.Name, err)}
 	}
 	return nil
 }

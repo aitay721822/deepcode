@@ -39,10 +39,9 @@ export function SignUpSwitch() {
           onCheckedChange={(next) => busy || change(next)}
         />
         <span>
-          <span id={`${id}-name`}>Open sign-up</span>{' '}
+          <span id={`${id}-name`}>開放註冊</span>{' '}
           <span id={`${id}-note`} className="text-muted-foreground">
-            Anyone who can reach this site can create an account. It gets the member role and everything that role
-            grants.
+            任何能連上此網站的人都能建立帳號，帳號會取得 member 角色及其授予的所有權限。
           </span>
         </span>
       </Label>

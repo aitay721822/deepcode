@@ -9,21 +9,18 @@ import (
 )
 
 var (
-	ErrSignUpClosed = errors.New("sign-up is closed; ask an administrator for an account")
-	ErrSignUpLimit  = errors.New("too many sign-ups from this address; try again in 15 minutes")
+	ErrSignUpClosed = errors.New("目前不開放註冊；請向管理員申請帳號")
+	ErrSignUpLimit  = errors.New("這個 IP 位址的註冊次數過多；請在 15 分鐘後再試")
 )
 
 // SignUpOpen reports whether visitors may create their own account.
-func (s *Store) SignUpOpen(ctx context.Context) (bool, error) {
-	var open bool
-	err := s.DB.QueryRowContext(ctx, `SELECT open FROM signup`).Scan(&open)
-	return open, err
+func (s *Service) SignUpOpen(ctx context.Context) (bool, error) {
+	return s.Store.SignUpOpen(ctx)
 }
 
 // SetSignUpOpen opens or closes sign-up; accounts made meanwhile stay.
-func (s *Store) SetSignUpOpen(ctx context.Context, open bool) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE signup SET open = ?`, open)
-	return err
+func (s *Service) SetSignUpOpen(ctx context.Context, open bool) error {
+	return s.Store.SetSignUpOpen(ctx, open)
 }
 
 // SignUp creates an account with the member role, while sign-up is open, and
@@ -32,7 +29,7 @@ func (s *Store) SetSignUpOpen(ctx context.Context, open bool) error {
 // hashing passwords; one refused as invalid, before any hashing, is given back.
 // ponytail: many addresses are slowed only by PBKDF2, as at sign-in; closing
 // sign-up stops them.
-func (s *Store) SignUp(ctx context.Context, username, displayName, password, client string) (string, *Principal, error) {
+func (s *Service) SignUp(ctx context.Context, username, displayName, password, client string) (string, *Principal, error) {
 	open, err := s.SignUpOpen(ctx)
 	if err != nil {
 		return "", nil, err

@@ -1,9 +1,10 @@
 {
   "$schema": "../node_modules/@biomejs/biome/configuration_schema.json",
   // Here, not beside package.json: web/ already holds its five files. The npm scripts pass --config-path=.config, and
-  // the scan skips this folder (!!), or Biome would take this file for a second, nested root.
+  // the scan skips this folder (!!), or Biome would take this file for a second, nested root. The route tree is the
+  // router plugin's output.
   "files": {
-    "includes": ["**", "!package-lock.json", "!!.config", "!!dist"]
+    "includes": ["**", "!package-lock.json", "!!.config", "!!dist", "!src/routeTree.gen.ts"]
   },
   "formatter": {
     "indentStyle": "space",

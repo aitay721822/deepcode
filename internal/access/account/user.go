@@ -4,16 +4,17 @@
 package account
 
 import (
-	"database/sql"
 	"errors"
 	"regexp"
+
+	"deepcode/internal/access/account/store"
 )
 
 // Kinds of failure a caller can act on; the HTTP layer maps each to a status.
 var (
-	ErrNotFound = errors.New("user not found")
-	ErrInvalid  = errors.New("invalid user")
-	ErrConflict = errors.New("user conflict") // a taken username, or the last admin
+	ErrNotFound = store.ErrNotFound
+	ErrInvalid  = errors.New("無效的使用者")
+	ErrConflict = errors.New("使用者衝突") // a taken username, or the last admin
 )
 
 type failure struct {
@@ -24,19 +25,10 @@ type failure struct {
 func (f failure) Error() string        { return f.msg }
 func (f failure) Is(target error) bool { return target == f.kind }
 
-type RoleRef struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
-}
-
-type User struct {
-	ID          int64     `json:"id"`
-	Username    string    `json:"username"`
-	DisplayName string    `json:"displayName"`
-	Disabled    bool      `json:"disabled"`
-	Roles       []RoleRef `json:"roles"`
-	CreatedAt   string    `json:"createdAt"`
-}
+type (
+	RoleRef = store.RoleRef
+	User    = store.User
+)
 
 // Input creates or changes a user; nil fields keep their value. The username
 // is set once, at creation.
@@ -50,4 +42,5 @@ type Input struct {
 
 var usernameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$`)
 
-type Store struct{ DB *sql.DB }
+// Service applies the account rules over the users in Store.
+type Service struct{ Store *store.Store }

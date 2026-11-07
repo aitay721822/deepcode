@@ -45,10 +45,23 @@ func TestLinkCitations(t *testing.T) {
 		"Lines [README.md:L3-L4]":                "Lines " + link("README.md", 3, 4),
 		"Ranges [README.md:1-2, 4-5; async.ts:12, L14]": "Ranges " + link("README.md", 1, 2) + " " + link("README.md", 4, 5) +
 			" " + link("src/vs/base/async.ts", 12, 12) + " " + link("src/vs/base/async.ts", 14, 14),
-		"Route [page.tsx:2-3]":                  `Route [app/\[slug\]/page.tsx:2-3](` + href(Citation{"app/[slug]/page.tsx", 2, 3}) + ")",
-		"Bare [3, 4] stays":                     "Bare [3, 4] stays",
-		"Code ```\nx[README.md:1-2]\n``` stays": "Code ```\nx[README.md:1-2]\n``` stays",
-		"Open ```\nx[README.md:1-2]":            "Open ```\nx[README.md:1-2]",
+		"Route [page.tsx:2-3]": `Route [app/\[slug\]/page.tsx:2-3](` + href(Citation{"app/[slug]/page.tsx", 2, 3}) + ")",
+		"Bare [3, 4] stays":    "Bare [3, 4] stays",
+		// A reference in code stays as written and is linked after the text, unless the text links it already.
+		"Code ```\nx[README.md:1-2]\n``` stays":       "Code ```\nx[README.md:1-2]\n``` stays\n\n來源：" + link("README.md", 1, 2),
+		"Open ```\nx[README.md:1-2]":                  "Open ```\nx[README.md:1-2]\n```\n\n來源：" + link("README.md", 1, 2),
+		"```ts\n// async.ts:12-13 and nope.go:1\n```": "```ts\n// async.ts:12-13 and nope.go:1\n```\n\n來源：" + link("src/vs/base/async.ts", 12, 13),
+		"[README.md:1-2] ```\n// README.md:1-2\n```":  link("README.md", 1, 2) + " ```\n// README.md:1-2\n```",
+		// A bare reference is linked when it is a shown source, and else left as written.
+		"Bare src/vs/base/async.ts:12-30 here":       "Bare " + link("src/vs/base/async.ts", 12, 30) + " here",
+		"Ticked `README.md:L2-L4`.":                  "Ticked " + link("README.md", 2, 4) + ".",
+		"見README.md:3。":                              "見" + link("README.md", 3, 3) + "。",
+		"Hosts localhost:8080, example.com:80 stay":  "Hosts localhost:8080, example.com:80 stay",
+		"Unknown other.go:1-2 and README.md:90 stay": "Unknown other.go:1-2 and README.md:90 stay",
+		"Not [a](https://x/README.md:1) a bare one":  "Not [a](https://x/README.md:1) a bare one",
+		"Span `README.md:3 is it` stays":             "Span `README.md:3 is it` stays\n\n來源：" + link("README.md", 3, 3),
+		"Unpaired `README.md:3 here":                 "Unpaired `" + link("README.md", 3, 3) + " here",
+		"Path C:\\README.md:3 stays":                 "Path C:\\README.md:3 stays",
 		// The edges of a shown range, a range written backwards, a path written from the root.
 		"Edges [README.md:20-25; async.ts:5-10]": "Edges " + link("README.md", 20, 20) + " " + link("src/vs/base/async.ts", 10, 10),
 		"Reversed [README.md:4-2]":               "Reversed " + link("README.md", 2, 4),

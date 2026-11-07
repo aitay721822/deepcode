@@ -345,6 +345,7 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	checkGitLab(t, admin, api, apiSrv.URL, sha3)
+	checkOAuth(t, admin)
 	ivy, tools := checkImportPolicy(t, srv.URL, admin, repo.ID)
 	checkJobErrors(t, db, admin, ivy, tools)
 	checkJobEvents(t, srv.URL, admin, repo.ID, tools, func() {

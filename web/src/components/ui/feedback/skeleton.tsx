@@ -14,7 +14,7 @@ function Skeleton({ className, ...props }: ComponentProps<'div'>) {
 /** Lines of placeholder text of uneven length, while something loads. */
 function SkeletonText({ lines = 5, className }: { lines?: number; className?: string }) {
   return (
-    <div role="status" aria-label="Loading" className={cn('grid gap-3 py-3', className)}>
+    <div role="status" aria-label="載入中" className={cn('grid gap-3 py-3', className)}>
       {Array.from({ length: lines }, (_, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: the placeholder lines are all alike; the index is all that tells them apart
         <Skeleton key={i} className="h-3" style={{ width: `${92 - ((i * 37) % 45)}%` }} />

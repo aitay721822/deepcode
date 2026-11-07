@@ -1,7 +1,7 @@
 // Package gitserver keeps the git servers repositories are imported from:
 // GitHub, GitLab, or a self-hosted instance of either, each with an optional
-// access token sealed at rest, and knows their URLs: repository pages, clone
-// URLs and links to lines.
+// access token sealed at rest, pasted or granted through OAuth, and knows
+// their URLs: repository pages, clone URLs and links to lines.
 package gitserver
 
 import (
@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	"deepcode/internal/repo/git"
+	"deepcode/internal/repo/gitserver/secret"
+	"deepcode/internal/repo/gitserver/store"
 )
 
 const (
@@ -22,24 +24,38 @@ const (
 
 // Kinds of failure a caller can act on; the HTTP layer maps each to a status.
 var (
-	ErrNotFound = errors.New("git server not found")
-	ErrInvalid  = errors.New("invalid git server")
-	ErrConflict = errors.New("git server conflict") // a duplicate, or in use by repositories
+	ErrNotFound = store.ErrNotFound
+	ErrInvalid  = errors.New("無效的 Git 伺服器")
+	ErrConflict = errors.New("Git 伺服器衝突") // a duplicate, or in use by repositories
+	ErrSealed   = secret.ErrSealed
+	ErrOutage   = errors.New("Git 伺服器沒有回應") // its OAuth token endpoint did not answer; the authorization stands
 )
+
+// Box seals the tokens and OAuth secrets; OpenBox opens the one this
+// installation's key makes.
+type Box = secret.Box
+
+var OpenBox = secret.OpenBox
 
 type Server struct {
 	ID              int64  `json:"id"`
 	Name            string `json:"name"`
 	Kind            string `json:"kind"`
 	BaseURL         string `json:"baseUrl"`
-	APIURL          string `json:"apiUrl"` // the override, else the kind's default
-	HasToken        bool   `json:"hasToken"`
+	APIURL          string `json:"apiUrl"`   // the override, else the kind's default
+	HasToken        bool   `json:"hasToken"` // with OAuth: authorized
 	RepositoryCount int    `json:"repositoryCount"`
 	CreatedAt       string `json:"createdAt"`
+	ClientID        string `json:"clientId"` // the OAuth app the token is granted to, "" when it is pasted
+	HasClientSecret bool   `json:"hasClientSecret"`
 
-	sealed string // the token as stored
-	token  string // the token, once unsealed
+	sealed string      // the token as stored
+	token  string      // the token, once unsealed
+	oauth  store.OAuth // the app's secret and the refresh token, sealed
 }
+
+// OAuth reports whether the server's token is granted through OAuth.
+func (s Server) OAuth() bool { return s.ClientID != "" }
 
 // Token is the access token, "" for anonymous access or before it is unsealed.
 func (s Server) Token() string { return s.token }
@@ -88,16 +104,19 @@ func defaultAPI(kind, base string) string {
 
 // Input creates or changes a server; nil fields keep their value.
 type Input struct {
-	Name       *string `json:"name"`
-	Kind       *string `json:"kind"`
-	BaseURL    *string `json:"baseUrl"`
-	APIURL     *string `json:"apiUrl"`
-	Token      *string `json:"token"` // "" keeps the current token
-	ClearToken bool    `json:"clearToken"`
+	Name         *string `json:"name"`
+	Kind         *string `json:"kind"`
+	BaseURL      *string `json:"baseUrl"`
+	APIURL       *string `json:"apiUrl"`
+	Token        *string `json:"token"`        // "" keeps the current token
+	ClearToken   bool    `json:"clearToken"`   // with OAuth: ends the authorization
+	ClientID     *string `json:"clientId"`     // the OAuth app; "" to paste a token instead
+	ClientSecret *string `json:"clientSecret"` // "" keeps the current secret
 }
 
-// apply validates in and applies it to s; token is the new token, if any.
-func (in Input) apply(s *Server) (token string, err error) {
+// apply validates in and applies it to s; token and clientSecret are the new
+// ones, if any.
+func (in Input) apply(s *Server) (token, clientSecret string, err error) {
 	set := func(dst *string, src *string) {
 		if src != nil {
 			*dst = strings.TrimSpace(*src)
@@ -113,23 +132,31 @@ func (in Input) apply(s *Server) (token string, err error) {
 		s.APIURL = strings.TrimRight(strings.TrimSpace(*in.APIURL), "/")
 	}
 	set(&token, in.Token)
+	set(&s.ClientID, in.ClientID)
+	set(&clientSecret, in.ClientSecret)
 	switch {
 	case s.Name == "" || utf8.RuneCountInString(s.Name) > 64: // characters, not bytes
-		return "", invalid("a name of 1 to 64 characters is required")
+		return "", "", invalid("名稱必須為 1 到 64 個字元")
 	case s.Kind != GitHub && s.Kind != GitLab:
-		return "", invalid("kind must be github or gitlab")
+		return "", "", invalid("類型必須是 github 或 gitlab")
 	case !webRoot(s.BaseURL):
-		return "", invalid("the base URL must be an http(s) URL such as https://gitlab.example.com, without a query")
+		return "", "", invalid("基底網址必須是不含查詢字串的 http(s) URL，例如 https://gitlab.example.com")
 	case s.APIURL != "" && !webRoot(s.APIURL):
-		return "", invalid("the API URL must be an http(s) URL without a query")
+		return "", "", invalid("API URL 必須是不含查詢字串的 http(s) URL")
 	case len(token) > 1024:
-		return "", invalid("the token is too long")
+		return "", "", invalid("Token 太長")
+	case len(s.ClientID) > 256 || len(clientSecret) > 1024:
+		return "", "", invalid("Client ID 或 Client Secret 太長")
+	case s.OAuth() && token != "":
+		return "", "", invalid("以 OAuth 授權的伺服器不能另外輸入存取 Token")
+	case s.OAuth() && clientSecret == "" && s.oauth.ClientSecret == "":
+		return "", "", invalid("請輸入 OAuth 應用程式的 Client Secret")
 	}
 	// The UI sends back the API URL it was shown: a default is no override.
 	if s.APIURL == oldDefault || s.APIURL == defaultAPI(s.Kind, s.BaseURL) {
 		s.APIURL = ""
 	}
-	return token, nil
+	return token, clientSecret, nil
 }
 
 // webRoot reports whether s is an absolute http(s) URL without credentials,

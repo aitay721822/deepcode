@@ -20,8 +20,16 @@ const (
 // got, and lines of output. Each change is announced on the bus for the admin
 // console. The zero value records nothing, for callers outside a job.
 type Progress struct {
-	q  *Queue
-	id int64
+	q      *Queue
+	id     int64
+	prefix string // starts each line of output
+}
+
+// With is p with each line of output starting with prefix: the lines of one
+// of several things the job does at a time.
+func (p Progress) With(prefix string) Progress {
+	p.prefix += prefix
+	return p
 }
 
 // Stage records the current stage and how far it has got.
@@ -29,7 +37,7 @@ func (p Progress) Stage(stage string, done, total int) {
 	if p.q == nil {
 		return
 	}
-	if _, err := p.q.DB.Exec(`UPDATE jobs SET stage = ?, progress = ?, total = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, stage, done, total, p.id); err != nil {
+	if err := p.q.Store.Stage(p.id, stage, done, total); err != nil {
 		log.Printf("jobs: progress #%d: %v", p.id, err)
 	}
 	p.q.changed(events.TopicJobUpdated, p.id)
@@ -40,11 +48,11 @@ func (p Progress) Logf(format string, args ...any) {
 	if p.q == nil {
 		return
 	}
-	line := fmt.Sprintf(format, args...)
+	line := p.prefix + fmt.Sprintf(format, args...)
 	if len(line) > maxLine {
 		line = strings.ToValidUTF8(line[:maxLine], "") + "…"
 	}
-	if _, err := p.q.DB.Exec(`INSERT INTO job_logs(job_id, line) VALUES (?, ?)`, p.id, line); err != nil {
+	if err := p.q.Store.Log(p.id, line); err != nil {
 		log.Printf("jobs: log #%d: %v", p.id, err)
 	}
 	p.q.changed(events.TopicJobOutput, p.id)
@@ -85,20 +93,7 @@ func (p Progress) Lines() (write func(string), flush func()) {
 
 // Logs returns up to limit lines of job id's output after line after, oldest first.
 func (q *Queue) Logs(ctx context.Context, id, after int64, limit int) ([]LogLine, error) {
-	rows, err := q.DB.QueryContext(ctx, `SELECT id, at, line FROM job_logs WHERE job_id = ? AND id > ? ORDER BY id LIMIT ?`, id, after, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	lines := []LogLine{}
-	for rows.Next() {
-		var l LogLine
-		if err := rows.Scan(&l.ID, &l.At, &l.Line); err != nil {
-			return nil, err
-		}
-		lines = append(lines, l)
-	}
-	return lines, rows.Err()
+	return q.Store.Logs(ctx, id, after, limit)
 }
 
 // Follow passes job id's output after line after to line, oldest first, and

@@ -1,15 +1,16 @@
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { getSignUp, login } from '../../api/auth'
 import { Button } from '../../components/ui/controls/button'
 import { Spinner } from '../../components/ui/feedback/spinner'
 import { Field } from '../../components/ui/form/field'
 import { Input } from '../../components/ui/form/input'
-import { Link, navigate } from '../../lib/router'
 import { useApi } from '../../lib/useApi'
 import { SessionCard, SessionError } from './SessionCard'
-import { destination, useSession, withNext } from './session'
+import { destination, useSession } from './session'
 
-export function LoginPage({ next }: { next: string | null }) {
+export function LoginPage({ next }: { next?: string }) {
+  const navigate = useNavigate()
   const { user, refresh } = useSession()
   const { data: signUpState } = useApi('signup', getSignUp) // sign-up is offered only while open
   const [username, setUsername] = useState('')
@@ -17,15 +18,15 @@ export function LoginPage({ next }: { next: string | null }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   useEffect(() => {
-    if (user) navigate(destination(next), { replace: true }) // signed in, now or already
-  }, [user, next])
+    if (user) navigate({ href: destination(next), replace: true, resetScroll: false }) // signed in, now or already
+  }, [user, next, navigate])
 
   return (
     <SessionCard
-      title="Sign in"
+      title="登入"
       heading={
         <>
-          Sign in to <em>deepcode</em>
+          登入 <em>deepcode</em>
         </>
       }
     >
@@ -46,7 +47,7 @@ export function LoginPage({ next }: { next: string | null }) {
           }
         }}
       >
-        <Field label="Username">
+        <Field label="使用者名稱">
           <Input
             autoComplete="username"
             autoCapitalize="none"
@@ -57,7 +58,7 @@ export function LoginPage({ next }: { next: string | null }) {
             onChange={(e) => setUsername(e.target.value)}
           />
         </Field>
-        <Field label="Password">
+        <Field label="密碼">
           <Input
             type="password"
             autoComplete="current-password"
@@ -68,14 +69,14 @@ export function LoginPage({ next }: { next: string | null }) {
         </Field>
         <SessionError error={error} />
         <Button type="submit" size="lg" className="mt-1 w-full" busy={busy}>
-          {busy && <Spinner />} Sign in
+          {busy && <Spinner />} 登入
         </Button>
       </form>
       {signUpState?.open && (
         <p className="text-center text-sm text-muted-foreground">
-          No account yet?{' '}
-          <Link to={withNext('/signup', next)} className="text-brand underline-offset-4 hover:underline">
-            Create one
+          還沒有帳號？
+          <Link to="/signup" search={{ next }} className="text-brand underline-offset-4 hover:underline">
+            建立帳號
           </Link>
         </p>
       )}

@@ -15,14 +15,20 @@ import (
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
+	serverstore "deepcode/internal/repo/gitserver/store"
 	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/index/chunker"
 	"deepcode/internal/repo/index/graph"
+	graphstore "deepcode/internal/repo/index/graph/store"
+	"deepcode/internal/repo/index/indexer/store"
 )
 
-// TestIndexable: non-empty files of a known language up to the per-file size
-// are indexed, unless their path hides characters or is not UTF-8; too many files, or too much
-// text, fails the job for good.
+func indexerOn(db *sql.DB) *Indexer {
+	return &Indexer{Store: &store.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}}
+}
+
+// TestIndexable: non-empty files of a known language up to the per-file size are indexed, unless their path
+// hides characters or is not UTF-8; too many files, or too much text, fails the job for good.
 func TestIndexable(t *testing.T) {
 	entries := []git.TreeEntry{
 		{Path: "main.go", SHA: "a", Size: 10},
@@ -148,7 +154,7 @@ func TestParseResumes(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, ?)`, sha); err != nil {
 		t.Fatal(err)
 	}
-	ix := &Indexer{DB: db, Git: &git.Client{Dir: dir}, Limits: Limits{MaxFiles: 10, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}}
+	ix := &Indexer{Store: &store.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}, Git: &git.Client{Dir: dir}, Limits: Limits{MaxFiles: 10, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}}
 	parse := func() error { return ix.parse(ctx, filepath.Join(dir, ".git"), sha, 1, 0, false, jobs.Progress{}) }
 	count := func() (files, chunks int) {
 		db.QueryRow(`SELECT count(*) FROM source_files WHERE snapshot_id = 1`).Scan(&files)
@@ -271,11 +277,11 @@ func TestDotNetFramework(t *testing.T) {
 		INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, ?)`, sha); err != nil {
 		t.Fatal(err)
 	}
-	ix := &Indexer{DB: db, Git: &git.Client{Dir: dir}, Limits: Limits{MaxFiles: 100, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}}
+	ix := &Indexer{Store: &store.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}, Git: &git.Client{Dir: dir}, Limits: Limits{MaxFiles: 100, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}}
 	if err := ix.parse(ctx, filepath.Join(dir, ".git"), sha, 1, 0, false, jobs.Progress{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := graph.Link(ctx, db, 1); err != nil {
+	if _, err := ix.Graph.Link(ctx, 1); err != nil {
 		t.Fatal(err)
 	}
 	var files, edges, symbols string
@@ -315,7 +321,7 @@ func TestPruneSweepsContents(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := (&Indexer{DB: db}).prune(ctx, 1, 3); err != nil {
+	if err := indexerOn(db).prune(ctx, 1, 3); err != nil {
 		t.Fatal(err)
 	}
 	var status, hashes string
@@ -353,7 +359,7 @@ func TestReuseCoversEveryRange(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := (&Indexer{DB: db}).reuse(ctx, 2, "m"); err != nil {
+	if err := indexerOn(db).reuse(ctx, 2, "m"); err != nil {
 		t.Fatal(err)
 	}
 	var n int
@@ -378,7 +384,7 @@ func TestTerms(t *testing.T) {
 		INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, 'a'), (2, 1, 'b')`); err != nil {
 		t.Fatal(err)
 	}
-	ix := &Indexer{DB: db}
+	ix := indexerOn(db)
 	f := parsedFile{file: file{path: "auth/userToken.go", sha: "s", lang: "go", size: 1}, content: "x", lines: 1,
 		chunks: []chunker.Chunk{{StartLine: 1, EndLine: 1, Content: "func getUserToken() {}"}}}
 	if err := ix.write(ctx, 1, 0, []parsedFile{f}, nil); err != nil {
@@ -416,7 +422,7 @@ func TestTerms(t *testing.T) {
 	if _, err := db.Exec(`UPDATE chunks SET terms = NULL WHERE id = 1`); err != nil {
 		t.Fatal(err)
 	}
-	if set, err := ix.setTerms(ctx, []filling{{id: 1, hash: "what FillTerms read", terms: "stale"}}); err != nil || set != 0 {
+	if set, err := ix.Store.SetTerms(ctx, []store.Terms{{ID: 1, Hash: "what FillTerms read", Terms: "stale"}}); err != nil || set != 0 {
 		t.Fatalf("set %d (%v), want 0", set, err)
 	}
 	var stale sql.NullString
@@ -441,7 +447,7 @@ func TestImports(t *testing.T) {
 		INSERT INTO file_contents(hash, content) VALUES ('old', 'import "./b"')`); err != nil {
 		t.Fatal(err)
 	}
-	ix := &Indexer{DB: db}
+	ix := indexerOn(db)
 	files := []parsedFile{
 		{file: file{path: "a.ts", sha: "old", lang: "typescript"}, content: `import "./b"`, imports: []string{"./b"}},
 		{file: file{path: "b.ts", sha: "b", lang: "typescript"}, content: "export {}"},
@@ -486,7 +492,7 @@ func TestSealedTokenFailsForGood(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO repositories(id, url, owner, name, git_server_id) VALUES (1, 'https://github.com/o/r', 'o', 'r', 1)`); err != nil {
 		t.Fatal(err)
 	}
-	ix := &Indexer{DB: db, Servers: &gitserver.Store{DB: db, Box: now}}
+	ix := &Indexer{Store: &store.Store{DB: db}, Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: now}}
 	err = ix.Run(ctx, 1, strings.Repeat("a", 40), jobs.Progress{})
 	if reflect.TypeOf(err) != reflect.TypeOf(jobs.Permanent(errors.New(""))) || !errors.Is(err, gitserver.ErrSealed) {
 		t.Fatalf("a sealed token: %v", err)

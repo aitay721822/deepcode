@@ -5,11 +5,15 @@
 //	DEEPCODE_BENCH=1 DEEPCODE_CHAT_MODEL=... go test -run TestBench -timeout 0 -v ./test/bench/
 //
 // with the DEEPCODE_CHAT_* settings deepcode serve reads (the key only ever in
-// the environment). DEEPCODE_BENCH_REPOS=chi,axum picks repositories. Without
-// a chat model only indexing, the graph and the retrieval eval are measured.
+// the environment). DEEPCODE_BENCH_REPOS=chi,axum picks repositories, and
+// DEEPCODE_BENCH_PARALLEL=1,2 writes each first wiki once per number of pages
+// written at a time (DEEPCODE_WIKI_PARALLEL, else 1, by default), the last
+// one kept. Without a chat model only indexing, the graph and the retrieval
+// eval are measured.
 package bench
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -17,24 +21,36 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"deepcode/internal/knowledge/chat"
+	"deepcode/internal/knowledge/chat/draft"
+	chatstore "deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/retrieval"
+	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/knowledge/wiki"
+	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
+	jobstore "deepcode/internal/platform/jobs/store"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/catalog"
+	catalogstore "deepcode/internal/repo/catalog/store"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
+	serverstore "deepcode/internal/repo/gitserver/store"
 	"deepcode/internal/repo/index/graph"
+	graphstore "deepcode/internal/repo/index/graph/store"
 	"deepcode/internal/repo/index/indexer"
+	indexstore "deepcode/internal/repo/index/indexer/store"
 	"deepcode/test/eval"
 )
 
@@ -50,6 +66,7 @@ func (m *meter) add(u ai.Usage) {
 	defer m.mu.Unlock()
 	m.calls++
 	m.u.InChars, m.u.OutChars, m.u.InTokens, m.u.OutTokens = m.u.InChars+u.InChars, m.u.OutChars+u.OutChars, m.u.InTokens+u.InTokens, m.u.OutTokens+u.OutTokens
+	m.u.CachedTokens += u.CachedTokens
 }
 
 // take returns what was summed since the last take, and starts again.
@@ -63,13 +80,14 @@ func (m *meter) take() (int, ai.Usage) {
 
 // rig is deepcode's parts as the server wires them, on a database of the bench's own.
 type rig struct {
-	db    *sql.DB
-	ix    *indexer.Indexer
-	cat   *catalog.Catalog
-	ret   *retrieval.Retriever
-	wiki  *wiki.Generator // nil without a chat model
-	chat  *chat.Service
-	meter *meter
+	db       *sql.DB
+	ix       *indexer.Indexer
+	cat      *catalog.Catalog
+	ret      *retrieval.Retriever
+	wiki     *wiki.Generator // nil without a chat model
+	chat     *chat.Service
+	meter    *meter
+	parallel []int // the first wiki's runs, by pages written at a time
 }
 
 func TestBench(t *testing.T) {
@@ -91,6 +109,13 @@ func TestBench(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := setup(t, work)
+	for _, p := range strings.Split(cmp.Or(os.Getenv("DEEPCODE_BENCH_PARALLEL"), os.Getenv("DEEPCODE_WIKI_PARALLEL"), "1"), ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil || n < 1 {
+			t.Fatalf("DEEPCODE_BENCH_PARALLEL holds %q, which is no number of pages at a time", p)
+		}
+		r.parallel = append(r.parallel, n)
+	}
 	rep := report{Started: time.Now().UTC().Format(time.RFC3339), Model: os.Getenv("DEEPCODE_CHAT_MODEL"),
 		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Deepcode: head()}
 	for i, tg := range targets {
@@ -129,16 +154,21 @@ func setup(t *testing.T, work string) *rig {
 		t.Fatal(err)
 	}
 	gitc := &git.Client{Dir: filepath.Join(work, "repos"), AllowProtocol: "https", MaxBytes: 1 << 30}
-	servers := &gitserver.Store{DB: db, Box: box}
-	r := &rig{db: db, meter: &meter{}, ret: &retrieval.Retriever{DB: db}}
-	r.cat = &catalog.Catalog{DB: db, Queue: jobs.New(db, bus, 2*time.Hour), Git: gitc, Servers: servers}
-	r.ix = &indexer.Indexer{DB: db, Git: gitc, Servers: servers, Events: bus,
+	servers := &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}
+	graphs := &graph.Graph{Store: &graphstore.Store{DB: db}}
+	r := &rig{db: db, meter: &meter{}, ret: &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: graphs}}
+	r.cat = &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: jobs.New(&jobstore.Store{DB: db}, bus, 2*time.Hour), Git: gitc, Servers: servers}
+	r.ix = &indexer.Indexer{Store: &indexstore.Store{DB: db}, Graph: graphs, Git: gitc, Servers: servers, Events: bus,
 		Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
 	if model := os.Getenv("DEEPCODE_CHAT_MODEL"); model != "" {
 		llm := &ai.OpenAI{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model,
 			ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Measure: r.meter.add}
-		r.wiki = &wiki.Generator{DB: db, Catalog: r.cat, Retriever: r.ret, Chat: llm, Language: "English"}
-		r.chat = &chat.Service{DB: db, Catalog: r.cat, Retriever: r.ret, Chat: llm}
+		pages, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), "0")) // 0, the default, when unset
+		if err != nil || pages < 0 {
+			t.Fatalf("DEEPCODE_WIKI_MAX_PAGES holds %q, which is no number of pages", os.Getenv("DEEPCODE_WIKI_MAX_PAGES"))
+		}
+		r.wiki = &wiki.Generator{Store: &wikistore.Store{DB: db}, Graph: graphs, Catalog: r.cat, Retriever: r.ret, Chat: llm, Language: "English", MaxPages: pages}
+		r.chat = &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: r.cat, Retriever: r.ret, Chat: llm}
 	}
 	return r
 }
@@ -178,9 +208,21 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 		return res
 	}
 	res.IndexFailed = false
-	if r.wiki != nil {
+	for i, n := range r.parallel {
+		if r.wiki == nil {
+			break
+		}
+		if i > 0 { // written again from nothing
+			if _, err := r.db.Exec(`DELETE FROM wiki_pages WHERE snapshot_id = ?1; UPDATE snapshots SET wiki_status = 'none' WHERE id = ?1`, base); err != nil {
+				fail("wiki again", err)
+				break
+			}
+		}
+		r.wiki.Parallel = n
 		res.Wiki = r.writeWiki(ctx, id, tg.base, fail)
+		res.Wiki.Parallel = n
 		query("base pages", &res.Wiki.Pages, pages, base)
+		res.WikiRuns = append(res.WikiRuns, *res.Wiki)
 	}
 
 	start = time.Now()
@@ -224,7 +266,12 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 	} {
 		query(c.step, c.dst, c.q, snap)
 	}
-	if d, err := graph.Diagram(ctx, r.db, snap); err != nil {
+	if tree, err := pageTree(ctx, r.db, snap); err != nil {
+		fail("page tree", err)
+	} else {
+		res.Tree = tree
+	}
+	if d, err := r.ix.Graph.Diagram(ctx, snap); err != nil {
 		fail("diagram", err)
 	} else {
 		res.DiagramEdges = strings.Count(d, "-->")
@@ -239,7 +286,15 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 	}
 	if r.chat != nil {
 		for n, q := range tg.questions {
-			a := r.ask(ctx, id, q)
+			a := r.ask(ctx, id, q.ask)
+			low := strings.ToLower(a.Answer)
+			for _, w := range q.want {
+				if !slices.ContainsFunc(strings.Split(strings.ToLower(w), "|"), func(alt string) bool { return strings.Contains(low, alt) }) {
+					a.Missing = append(a.Missing, w)
+				}
+			}
+			a.SelfTalk = draft.Read(a.Answer).SelfTalk
+			a.OtherLanguage = a.Error == "" && chinese(a.Answer) != chinese(q.ask)
 			if a.Error != "" {
 				fail(fmt.Sprintf("question %d", n+1), errors.New(a.Error))
 			}
@@ -247,6 +302,72 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 		}
 	}
 	return res
+}
+
+var (
+	codeOrLink = regexp.MustCompile("(?s)```.*?```|```.*|`[^`\n]*`|\\[[^\\]\n]*\\](\\([^)\n]*\\))?") // a fence left open (a cut-off answer) runs to the end
+	latinWord  = regexp.MustCompile(`[A-Za-z]+`)
+)
+
+// chinese reports whether s, its code and links aside, has at least as many
+// Han characters as Latin words: a Chinese sentence naming identifiers stays
+// Chinese, an English one quoting a Chinese string stays English.
+func chinese(s string) bool {
+	s = codeOrLink.ReplaceAllString(s, " ")
+	han := 0
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) {
+			han++
+		}
+	}
+	return han > 0 && han >= len(latinWord.FindAllStringIndex(s, -1))
+}
+
+func TestChinese(t *testing.T) {
+	for s, want := range map[string]bool{
+		"How does Mount work?": false,
+		"Mount 如何運作？":          true,
+		"It returns `錯誤` on failure, then retries the whole request.":                                                                   false,
+		"The error says 「找不到 Git 伺服器」 when the server id is unknown to the catalog.":                                                    false,
+		"為何 PaymentSucceededEventHandlerFactory 會觸發 InvoiceProjectionRebuildCoordinator":                                                true,
+		"設定如下：\n```go\nfunc Mount(pattern string, h http.Handler) { r.mux.Handle(pattern, h) }\n```\n見 [chi/mux.go:10-20](https://x/y)": true,
+		"見 [mux.go:10-20]，程式碼如下：\n```go\nfunc (mx *Mux) Mount(pattern string, handler http.Handler) {\n\tif handler == nil {":           true,
+		"": false,
+	} {
+		if chinese(s) != want {
+			t.Errorf("chinese(%q) = %v", s, !want)
+		}
+	}
+}
+
+// pageTree is the outline of the snapshot's wiki, as a Markdown list: each
+// page numbered, a section's pages under it.
+func pageTree(ctx context.Context, db *sql.DB, snap int64) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT title, position, coalesce(parent, -1) FROM wiki_pages WHERE snapshot_id = ? ORDER BY position`, snap)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	numbers, under := map[int]string{}, map[int]int{}
+	top := 0
+	for rows.Next() {
+		var title string
+		var position, parent int
+		if err := rows.Scan(&title, &position, &parent); err != nil {
+			return nil, err
+		}
+		if section, ok := numbers[parent]; ok {
+			under[parent]++
+			numbers[position] = fmt.Sprintf("%s.%d", section, under[parent])
+			out = append(out, fmt.Sprintf("  - %s %s", numbers[position], title))
+			continue
+		}
+		top++
+		numbers[position] = fmt.Sprint(top)
+		out = append(out, fmt.Sprintf("- %d %s", top, title))
+	}
+	return out, rows.Err()
 }
 
 // writeWiki writes the wiki of the snapshot at sha and measures it.
@@ -259,7 +380,7 @@ func (r *rig) writeWiki(ctx context.Context, id int64, sha string, fail func(str
 		fail("wiki "+sha[:7], err)
 	}
 	calls, u := r.meter.take()
-	w.Calls, w.InTokens, w.OutTokens, w.InChars, w.OutChars = calls, u.InTokens, u.OutTokens, u.InChars, u.OutChars
+	w.Calls, w.InTokens, w.OutTokens, w.InChars, w.OutChars, w.CachedTokens = calls, u.InTokens, u.OutTokens, u.InChars, u.OutChars, u.CachedTokens
 	return w
 }
 

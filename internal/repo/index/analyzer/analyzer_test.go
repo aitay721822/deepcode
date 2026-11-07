@@ -184,7 +184,8 @@ func TestSecondary(t *testing.T) {
 		"tests/Ordering.UnitTests/OrderTest.cs": true, "src/Basket.FunctionalTests/Api.cs": true, "src/Contest.cs": false,
 		"src/test/java/org/x/OwnerControllerTests.java": true, "src/main/java/org/x/Owner.java": false, "OwnerIT.java": true,
 		"benches/routing.rs": true, "axum/benches/x.rs": true, "src/routing.rs": false, "README.md": true,
-		"e2e/login.setup.ts": true, "web/e2e/cart.ts": true, "src/e2e2/x.ts": false} {
+		"e2e/login.setup.ts": true, "web/e2e/cart.ts": true, "src/e2e2/x.ts": false,
+		".github/workflows/ci.yml": true, "web/.storybook/main.ts": true, ".eslintrc.js": false, "src/a.b/c.go": false, "a/.b": false} {
 		if Secondary(p) != want {
 			t.Errorf("Secondary(%q) = %v", p, !want)
 		}

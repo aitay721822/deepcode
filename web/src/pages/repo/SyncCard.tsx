@@ -18,8 +18,8 @@ export function SyncCard({ repo, jobCard, onSynced }: { repo: Repo; jobCard: boo
     job && active
       ? stageName(job)
       : upToDate
-        ? 'Already at the latest commit'
-        : failed || (repo.snapshot ? `At ${shortSha(repo.snapshot.commitSha)}` : '')
+        ? '已是最新的 Commit'
+        : failed || (repo.snapshot ? `目前為 ${shortSha(repo.snapshot.commitSha)}` : '')
   const count = job && active ? stageCount(job) : ''
   return (
     <Card className="gap-0 p-4">
@@ -34,7 +34,7 @@ export function SyncCard({ repo, jobCard, onSynced }: { repo: Repo; jobCard: boo
         </p>
       )}
       <Button variant="outline" size="sm" className="w-fit" busy={busy || active} onClick={run}>
-        {active || busy ? <Spinner /> : <RefreshCwIcon />} Sync
+        {active || busy ? <Spinner /> : <RefreshCwIcon />} 同步
       </Button>
     </Card>
   )

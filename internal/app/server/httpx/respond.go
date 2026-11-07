@@ -35,7 +35,7 @@ func InternalError(c *gin.Context, err error) {
 	if c.Request.Context().Err() == nil {
 		log.Printf("api: %s %s: %v", c.Request.Method, c.Request.URL.Path, err)
 	}
-	Fail(c, http.StatusInternalServerError, "internal error; an administrator can find the details in the server log")
+	Fail(c, http.StatusInternalServerError, "伺服器內部錯誤；管理員可在伺服器記錄檔中查看詳細資訊")
 }
 
 // statuses maps the domain packages' kinds of failure to HTTP statuses.
@@ -50,7 +50,7 @@ var statuses = []struct {
 	{[]error{importer.ErrForbidden, session.ErrSignUpClosed}, http.StatusForbidden},
 	{[]error{session.ErrThrottled, session.ErrSignUpLimit}, http.StatusTooManyRequests},
 	{[]error{catalog.ErrTooLarge}, http.StatusRequestEntityTooLarge},
-	{[]error{catalog.ErrUpstream}, http.StatusBadGateway},
+	{[]error{catalog.ErrUpstream, gitserver.ErrOutage}, http.StatusBadGateway},
 }
 
 // DomainError answers with the status that fits the kind of err.
@@ -70,7 +70,7 @@ func DomainError(c *gin.Context, err error) {
 func PathID(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		Fail(c, http.StatusBadRequest, "invalid id")
+		Fail(c, http.StatusBadRequest, "無效的 ID")
 		return 0, false
 	}
 	return id, true
@@ -81,9 +81,9 @@ func Bind(c *gin.Context, v any) bool {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBody)
 	if err := c.ShouldBindJSON(v); err != nil {
 		if errors.As(err, new(*http.MaxBytesError)) {
-			Fail(c, http.StatusRequestEntityTooLarge, "the request body is larger than 64 KB")
+			Fail(c, http.StatusRequestEntityTooLarge, "請求內容超過 64 KB")
 		} else {
-			Fail(c, http.StatusBadRequest, "invalid JSON body")
+			Fail(c, http.StatusBadRequest, "無效的 JSON 請求內容")
 		}
 		return false
 	}

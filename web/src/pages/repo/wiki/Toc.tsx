@@ -10,8 +10,8 @@ export function Toc({ items }: { items: TocItem[] }) {
   let section = 0
   const numbered = items.map((i) => ({ ...i, n: i.level === 2 ? ++section : 0 }))
   return (
-    <nav aria-label="On this page">
-      <div className="eyebrow mb-3 text-muted-foreground">On this page</div>
+    <nav aria-label="本頁內容">
+      <div className="eyebrow mb-3 text-muted-foreground">本頁內容</div>
       <ul>
         {numbered.map((i) => (
           <li key={i.id}>

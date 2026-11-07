@@ -6,16 +6,16 @@ package importer
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 
 	"deepcode/internal/access/role"
 	"deepcode/internal/access/session"
+	"deepcode/internal/app/importer/store"
 	"deepcode/internal/repo/catalog"
 )
 
 // ErrForbidden: the repository exists, but the user may not read it.
-var ErrForbidden = errors.New("this repository was imported before; ask an administrator for access")
+var ErrForbidden = errors.New("這個 Repository 先前已被匯入；請向管理員申請存取權限")
 
 type Service struct{ Catalog *catalog.Catalog }
 
@@ -23,9 +23,7 @@ type Service struct{ Catalog *catalog.Catalog }
 // for p. A new repository joins p's import roles and created is true; one
 // imported before is returned when p may read it.
 func (s *Service) Import(ctx context.Context, p *session.Principal, raw string, serverID int64) (repo catalog.Repo, created bool, err error) {
-	repo, created, err = s.Catalog.Import(ctx, raw, serverID, func(tx *sql.Tx, id int64) error {
-		return role.Grant(ctx, tx, p.ImportRoles(), id)
-	})
+	repo, created, err = s.Catalog.Import(ctx, raw, serverID, store.JoinRoles(ctx, p.ImportRoles()))
 	if err == nil && !created && !p.CanOn(role.RepoRead, repo.ID) {
 		return catalog.Repo{}, false, ErrForbidden
 	}

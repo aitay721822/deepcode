@@ -12,9 +12,12 @@ import (
 	"strings"
 	"testing"
 
+	"deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/storage"
+	"deepcode/internal/repo/index/graph"
+	graphstore "deepcode/internal/repo/index/graph/store"
 )
 
 func TestFuse(t *testing.T) {
@@ -62,6 +65,11 @@ func seeded(t *testing.T, inserts ...string) *sql.DB {
 	return db
 }
 
+// retriever is a retriever on db, without vector search.
+func retriever(db *sql.DB) *Retriever {
+	return &Retriever{Store: &store.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}}
+}
+
 // TestReadme: the first two chunks of the top-level README, in order; a
 // file in a folder named readme is not the repository's README.
 func TestReadme(t *testing.T) {
@@ -70,7 +78,7 @@ func TestReadme(t *testing.T) {
 			(1, 'README.md', 40, 60, 'later', 'h1'), (1, 'README.md', 1, 20, 'intro', 'h2'), (1, 'README.md', 21, 39, 'usage', 'h3'),
 			(1, 'readme/guide.md', 1, 9, 'nested', 'h4'), (1, 'main.go', 1, 9, 'code', 'h5')`,
 	)
-	hits, err := (&Retriever{DB: db}).Readme(context.Background(), 1)
+	hits, err := retriever(db).Readme(context.Background(), 1)
 	var got []string
 	for _, h := range hits {
 		got = append(got, h.Content)
@@ -90,7 +98,7 @@ func TestFTSRanksCodeFirst(t *testing.T) {
 			VALUES (1, 'src/store.ts', 1, 9, 'const setState = (next) => { state = next; listeners.forEach((l) => l(state)) }
 			const subscribe = (listener) => { listeners.add(listener) }', 'h2')`,
 	)
-	ids, err := (&Retriever{DB: db}).fts(context.Background(), 1, "How does setState notify subscribers?", nil, ftsLimit)
+	ids, err := retriever(db).fts(context.Background(), 1, "How does setState notify subscribers?", nil, ftsLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +111,7 @@ func TestFTSRanksCodeFirst(t *testing.T) {
 	if want := []string{"src/store.ts", "tests/store.test.ts"}; !reflect.DeepEqual(paths, want) {
 		t.Fatalf("got %v, want %v", paths, want)
 	}
-	if ids, _ := (&Retriever{DB: db}).fts(context.Background(), 1, "subscribers", nil, ftsLimit); len(ids) != 2 {
+	if ids, _ := retriever(db).fts(context.Background(), 1, "subscribers", nil, ftsLimit); len(ids) != 2 {
 		t.Fatalf("\"subscribers\" matched %d chunks, want both (stemmed to subscrib)", len(ids))
 	}
 }
@@ -120,7 +128,7 @@ func TestFTSFindsWordsOfIdentifiers(t *testing.T) {
 			(1, 'cart/cart.go', 1, 9, 'func checkout() {}', 'h3', '')`,
 	)
 	for _, q := range []string{"Where is the token renewed?", "Who calls userToken?"} {
-		ids, err := (&Retriever{DB: db}).fts(context.Background(), 1, q, nil, ftsLimit)
+		ids, err := retriever(db).fts(context.Background(), 1, q, nil, ftsLimit)
 		slices.Sort(ids)
 		if err != nil || !reflect.DeepEqual(ids, []int64{1, 2}) {
 			t.Errorf("%q found chunks %v %v, want refreshUserToken's (1) and the prose (2)", q, ids, err)
@@ -136,7 +144,7 @@ func TestSymbolSearch(t *testing.T) {
 			(1, 'a.go', 'xa_', 'xa_', 'function', 1, 1), (1, 'a.go', 'a_bc', 'a_bc', 'function', 2, 2),
 			(1, 'a.go', 'a_', 'a_', 'function', 3, 3), (1, 'a.go', 'axb', 'axb', 'function', 4, 4)`,
 	)
-	hits, err := (&Retriever{DB: db}).Symbols(context.Background(), 1, "a_", 10)
+	hits, err := retriever(db).Symbols(context.Background(), 1, "a_", 10)
 	var names []string
 	for _, h := range hits {
 		names = append(names, h.Name)
@@ -144,7 +152,7 @@ func TestSymbolSearch(t *testing.T) {
 	if err != nil || strings.Join(names, " ") != "a_ a_bc xa_" {
 		t.Fatalf("%v %v", names, err)
 	}
-	if hits, _ := (&Retriever{DB: db}).Symbols(context.Background(), 1, "a_", 2); len(hits) != 2 {
+	if hits, _ := retriever(db).Symbols(context.Background(), 1, "a_", 2); len(hits) != 2 {
 		t.Fatalf("a limit of 2 gave %d", len(hits))
 	}
 }
@@ -162,7 +170,7 @@ func TestSymbolChunks(t *testing.T) {
 	for i := range 32 {
 		others = append(others, fmt.Sprintf("Other%d", i))
 	}
-	r := &Retriever{DB: db}
+	r := retriever(db)
 	if last, err := r.symbolChunks(context.Background(), 1, strings.Join(others[:31], " ")+" Target"); err != nil || len(last) != 1 {
 		t.Fatalf("the 32nd name: %v %v", last, err)
 	}
@@ -171,6 +179,30 @@ func TestSymbolChunks(t *testing.T) {
 	}
 	if ids, err := r.symbolChunks(context.Background(), 1, "target or targethandler"); err != nil || !reflect.DeepEqual(ids, []int64{2, 1}) {
 		t.Fatalf("got chunks %v %v, want TargetHandler's (2) before Target's (1)", ids, err)
+	}
+}
+
+// TestSymbolChunksJoined: adjacent words name a method or function written as
+// one word, not across a stopword, and never a type: a question's nouns.
+func TestSymbolChunksJoined(t *testing.T) {
+	db := seeded(t,
+		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
+			(1, 'context.go', 1, 9, 'func (c *Context) RoutePattern() string', 'h1'), (1, 'item.cs', 1, 9, 'class CatalogItem {}', 'h2')`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES
+			(1, 'context.go', 'RoutePattern', 'Context.RoutePattern', 'method', 1, 1), (1, 'item.cs', 'CatalogItem', 'CatalogItem', 'class', 1, 1)`,
+	)
+	r := retriever(db)
+	for q, want := range map[string][]int64{
+		"How can I get the matched route pattern?":        {1},
+		"Which route is the pattern of this request?":     nil, // a stopword between
+		"What happens when a catalog item price changes?": nil, // a type
+	} {
+		if ids, err := r.symbolChunks(context.Background(), 1, q); err != nil || !reflect.DeepEqual(ids, want) {
+			t.Errorf("%q: got %v %v, want %v", q, ids, err, want)
+		}
+	}
+	if got := joined("matched route pattern of it"); !reflect.DeepEqual(got, []string{"matchedroute", "matchedroutepattern", "routepattern"}) {
+		t.Errorf("joined: %q", got)
 	}
 }
 
@@ -189,7 +221,7 @@ func TestSearchImports(t *testing.T) {
 		// Not the top hit's: those ranked after it.
 		`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'f1.go', 'b.go'), (1, 'f2.go', 'b.go'), (1, 'f3.go', 'b.go'), (1, 'f4.go', 'b.go'), (1, 'f5.go', 'b.go')`,
 	)
-	r := &Retriever{DB: db}
+	r := retriever(db)
 	paths := func() ([]string, int) {
 		res, err := r.Search(context.Background(), 1, "route", 4)
 		if err != nil {
@@ -231,6 +263,47 @@ func TestSearchImports(t *testing.T) {
 	}
 }
 
+// TestUsers: the chunks that use a name, from the files importing a file that
+// defines it (either of two that do), the files using more of the names
+// first; one chunk a file, tests aside, and a name only as the code spells it.
+func TestUsers(t *testing.T) {
+	db := seeded(t,
+		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
+			(1, 'pay/event.go', 1, 9, 'type PaymentDone struct{}', 'h1'), (1, 'order/event.go', 1, 9, 'type PaymentDone struct{}', 'h2'),
+			(1, 'order/handle.go', 1, 9, 'func Handle(e PaymentDone) { SetPaid() }', 'h3'), (1, 'order/handle.go', 10, 19, 'PaymentDone again', 'h4'),
+			(1, 'order/wire.go', 1, 9, 'bus.On(PaymentDone{}); bus.On(Shipped{})', 'h5'), (1, 'order/other.go', 1, 9, 'imports, uses neither', 'h6'),
+			(1, 'order/handle_test.go', 1, 9, 'Handle(PaymentDone{})', 'h7'), (1, 'ship/event.go', 1, 9, 'type Shipped struct{}', 'h8')`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES
+			(1, 'pay/event.go', 'PaymentDone', 'pay.PaymentDone', 'struct', 1, 1), (1, 'order/event.go', 'PaymentDone', 'order.PaymentDone', 'struct', 1, 1),
+			(1, 'ship/event.go', 'Shipped', 'ship.Shipped', 'struct', 1, 1)`,
+		`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'order/handle.go', 'order/event.go'), (1, 'order/wire.go', 'pay/event.go'),
+			(1, 'order/wire.go', 'ship/event.go'), (1, 'order/other.go', 'order/event.go'), (1, 'order/handle_test.go', 'order/event.go')`,
+	)
+	r := retriever(db)
+	for _, c := range []struct {
+		names []string
+		limit int
+		want  []string
+	}{
+		{[]string{"PaymentDone", "Shipped", "Missing"}, 5, []string{"order/wire.go:1", "order/handle.go:1"}},
+		{[]string{"PaymentDone"}, 1, []string{"order/handle.go:1"}},
+		{[]string{"paymentdone"}, 5, nil},
+		{nil, 5, nil},
+	} {
+		hits, err := r.Users(context.Background(), 1, c.names, c.limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, h := range hits {
+			got = append(got, fmt.Sprintf("%s:%d", h.Path, h.StartLine))
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("Users(%q, %d) = %q, want %q", c.names, c.limit, got, c.want)
+		}
+	}
+}
+
 // TestSearchWithoutEmbeddings: a server without /embeddings leaves search to
 // FTS5 and symbols, in fused order and cut to the limit.
 func TestSearchWithoutEmbeddings(t *testing.T) {
@@ -242,7 +315,8 @@ func TestSearchWithoutEmbeddings(t *testing.T) {
 	)
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
-	r := &Retriever{DB: db, Embed: &ai.OpenAI{BaseURL: srv.URL, ModelName: "embed"}, Cache: cache.New(1 << 20)}
+	r := retriever(db)
+	r.Embed, r.Cache = &ai.OpenAI{BaseURL: srv.URL, ModelName: "embed"}, cache.New(1<<20)
 	res, err := r.Search(context.Background(), 1, "subscribe", 2)
 	if err != nil || res.Vector != 0 || res.FTS != 3 || res.Symbol != 1 || len(res.Hits) != 2 || res.Hits[0].Path != "src/store.ts" {
 		t.Fatalf("got %+v %v; want the defining chunk first of two, from FTS5 and symbols", res, err)

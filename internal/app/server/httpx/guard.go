@@ -14,12 +14,12 @@ import (
 func Guard(loopback bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if loopback && !loopbackHost(c.Request.Host) {
-			Fail(c, http.StatusForbidden, "unexpected Host header")
+			Fail(c, http.StatusForbidden, "非預期的 Host 標頭")
 			return
 		}
 		m := c.Request.Method
 		if (m == http.MethodPost || m == http.MethodPatch) && !strings.HasPrefix(c.GetHeader("Content-Type"), "application/json") {
-			Fail(c, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+			Fail(c, http.StatusUnsupportedMediaType, "Content-Type 必須是 application/json")
 			return
 		}
 		c.Next()

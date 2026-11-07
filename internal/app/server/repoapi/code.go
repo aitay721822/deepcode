@@ -20,7 +20,7 @@ func (a *API) snapshot(c *gin.Context) (catalog.Ref, bool) {
 	if v := c.Query("snapshot"); v != "" {
 		var err error
 		if id, err = strconv.ParseInt(v, 10, 64); err != nil {
-			httpx.Fail(c, http.StatusBadRequest, "invalid snapshot")
+			httpx.Fail(c, http.StatusBadRequest, "無效的版本")
 			return catalog.Ref{}, false
 		}
 	}
@@ -87,7 +87,7 @@ func (a *API) search(c *gin.Context) {
 		return
 	}
 	if q == "" {
-		httpx.Fail(c, http.StatusBadRequest, "q is required")
+		httpx.Fail(c, http.StatusBadRequest, "q 為必填")
 		return
 	}
 	res, err := a.Retriever.Search(c.Request.Context(), snap.ID, q, 20)
@@ -112,7 +112,7 @@ const maxQuery = 1000
 func query(c *gin.Context) (string, bool) {
 	q := strings.TrimSpace(c.Query("q"))
 	if len(q) > maxQuery {
-		httpx.Fail(c, http.StatusBadRequest, fmt.Sprintf("q is longer than %d bytes", maxQuery))
+		httpx.Fail(c, http.StatusBadRequest, fmt.Sprintf("q 超過 %d 位元組", maxQuery))
 		return "", false
 	}
 	return q, true

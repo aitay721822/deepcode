@@ -1,22 +1,29 @@
 // Package wiki generates a DeepWiki-style set of pages for a snapshot: the
-// model plans the pages from the repository layout (or .devin/wiki.json lists
-// them), then writes each page from retrieved evidence with checked citations.
+// model plans them, in sections of the code that imports itself most, sized
+// by the repository (or .devin/wiki.json lists them), then writes each page
+// from retrieved evidence with checked citations, Parallel at a time.
 // A new snapshot carries over the pages of the previous wiki that its change
 // does not touch.
 package wiki
 
 import (
+	"cmp"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
+	"deepcode/internal/knowledge/wiki/fanout"
+	"deepcode/internal/knowledge/wiki/manifest"
+	"deepcode/internal/knowledge/wiki/outline"
+	"deepcode/internal/knowledge/wiki/steering"
+	"deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/catalog"
@@ -24,22 +31,22 @@ import (
 )
 
 type Generator struct {
-	DB        *sql.DB
+	Store     *store.Store
+	Graph     *graph.Graph // the imports: how the code divides into sections, and what a change reaches
 	Catalog   *catalog.Catalog
 	Retriever *retrieval.Retriever
 	Chat      *ai.OpenAI
 	Language  string
+	Parallel  int // pages planned or written at a time; 0 is one
+	MaxPages  int // the most pages a wiki gets; 0 is defaultMaxPages
 }
 
 const (
-	maxPages      = 8
-	pageHits      = 12
-	evidenceChars = 48000
-
-	// A planned page's title and query, in characters: a prompt-injected README
-	// could ask for one the size of a page, shown in the nav and the slug.
-	maxTitle = 120
-	maxQuery = 500
+	defaultMaxPages = 64 // enough for DeepWiki's page counts on the bench's repositories
+	flatPages       = 8  // the most pages of a wiki too small for sections
+	pageHits        = 12
+	evidenceChars   = 48000 // a page's sources in all
+	sectionChars    = 24000 // of those, the ones a section's pages share
 )
 
 // source is where the wiki's citations link: a commit of a repository on its git server.
@@ -47,14 +54,10 @@ type source struct {
 	url, kind, sha string
 }
 
-// page is a stored wiki page; content is empty until it has been written.
-type page struct {
-	id       int64
-	title    string
-	query    string
-	position int
-	content  string
-}
+type (
+	page    = store.Page    // a stored page
+	newPage = store.NewPage // a page to store
+)
 
 // Run generates the wiki of the READY snapshot of repoID at sha. Its pages are
 // stored before any is written, so a retry resumes with the pages left.
@@ -65,18 +68,16 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 	} else if err != nil {
 		return err
 	}
-	var snap int64
-	var status, wikiStatus, language string
-	err = g.DB.QueryRowContext(ctx, `SELECT id, status, wiki_status, wiki_language FROM snapshots WHERE repository_id = ? AND commit_sha = ?`,
-		repoID, sha).Scan(&snap, &status, &wikiStatus, &language)
-	if errors.Is(err, sql.ErrNoRows) {
+	at, err := g.Store.Snapshot(ctx, repoID, sha)
+	if errors.Is(err, store.ErrNotFound) {
 		return jobs.Permanent(fmt.Errorf("snapshot %s is gone", sha))
 	} else if err != nil {
 		return err
 	}
+	snap := at.ID
 	src := source{url: r.URL, kind: r.Provider, sha: sha}
-	if status != "ready" || wikiStatus == catalog.WikiReady { // a re-index republishes a snapshot whose wiki is written
-		progress.Logf("snapshot %.7s is %s with a %s wiki: nothing to generate", sha, status, wikiStatus)
+	if at.Status != "ready" || at.WikiStatus == catalog.WikiReady { // a re-index republishes a snapshot whose wiki is written
+		progress.Logf("snapshot %.7s is %s with a %s wiki: nothing to generate", sha, at.Status, at.WikiStatus)
 		return nil
 	}
 	g.setStatus(ctx, snap, catalog.WikiGenerating)
@@ -89,11 +90,11 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 		}
 	}()
 
-	if language != g.Language {
+	if at.Language != g.Language {
 		// Pages stored in another language (DEEPCODE_WIKI_LANGUAGE changed since,
 		// or they predate wiki_language) are dropped and planned again, so no wiki
 		// mixes two languages.
-		if _, err := g.DB.ExecContext(ctx, `DELETE FROM wiki_pages WHERE snapshot_id = ?`, snap); err != nil {
+		if err := g.Store.Drop(ctx, snap); err != nil {
 			return err
 		}
 	}
@@ -106,26 +107,42 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 	if err != nil {
 		return err
 	}
-	titles := make([]string, len(pages))
-	for i, p := range pages {
-		titles[i] = p.title
-	}
-	for i, p := range pages {
-		progress.Stage("write", i, len(pages))
-		if p.content != "" {
-			continue
+	// The top pages first, sections' among them, then the pages under those:
+	// a section's shared sources are in the model server's prompt cache by
+	// the time its pages are written.
+	var top, under []page
+	for _, p := range pages {
+		if p.Content == "" && p.Parent < 0 {
+			top = append(top, p)
+		} else if p.Content == "" {
+			under = append(under, p)
 		}
-		progress.Logf("== page %d of %d: %s", i+1, len(pages), p.title)
-		content, cites, err := g.write(ctx, snap, repo, src, p, titles, steer.notes, progress)
-		if err != nil {
+	}
+	var mu sync.Mutex
+	done := len(pages) - len(top) - len(under)
+	progress.Stage("write", done, len(pages))
+	for _, todo := range [][]page{top, under} {
+		if err := fanout.Each(ctx, len(todo), g.Parallel, func(ctx context.Context, i int) error {
+			p := todo[i]
+			log := progress.With("[" + p.Title + "] ") // pages written at a time interleave their lines
+			log.Logf("== page %d of %d", p.Position+1, len(pages))
+			content, cites, err := g.write(ctx, snap, repo, src, p, pages, steer.Notes, log)
+			if err != nil {
+				return err
+			}
+			if err := g.Store.Save(ctx, p.ID, content, cites); err != nil {
+				return err
+			}
+			log.Logf("== saved with %d checked citations", len(cites))
+			mu.Lock()
+			defer mu.Unlock()
+			done++
+			progress.Stage("write", done, len(pages))
+			return nil
+		}); err != nil {
 			return err
 		}
-		if err := g.save(ctx, p.id, content, cites); err != nil {
-			return err
-		}
-		progress.Logf("== saved with %d checked citations", len(cites))
 	}
-	progress.Stage("write", len(pages), len(pages))
 	g.setStatus(ctx, snap, catalog.WikiReady)
 	return nil
 }
@@ -133,87 +150,19 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 // setStatus records wiki progress on the snapshot; it runs even when ctx was
 // cancelled, so a failed run is never left "generating".
 func (g *Generator) setStatus(ctx context.Context, snap int64, s string) {
-	if _, err := g.DB.ExecContext(context.WithoutCancel(ctx), `UPDATE snapshots SET wiki_status = ? WHERE id = ?`, s, snap); err != nil {
+	if err := g.Store.SetStatus(context.WithoutCancel(ctx), snap, s); err != nil {
 		log.Printf("wiki: status: %v", err)
 	}
 }
 
-func (g *Generator) pages(ctx context.Context, snap int64) ([]page, error) {
-	rows, err := g.DB.QueryContext(ctx, `SELECT id, title, query, position, content FROM wiki_pages WHERE snapshot_id = ? ORDER BY position`, snap)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []page
-	for rows.Next() {
-		var p page
-		if err := rows.Scan(&p.id, &p.title, &p.query, &p.position, &p.content); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-// save stores a written page and replaces its citations in one transaction.
-func (g *Generator) save(ctx context.Context, pageID int64, content string, cites []evidence.Citation) error {
-	tx, err := g.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE wiki_pages SET content = ? WHERE id = ?`, content, pageID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM wiki_citations WHERE page_id = ?`, pageID); err != nil {
-		return err
-	}
-	if err := insertCitations(ctx, tx, pageID, cites); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func insertCitations(ctx context.Context, tx *sql.Tx, pageID int64, cites []evidence.Citation) error {
-	for _, c := range cites {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO wiki_citations(page_id, path, start_line, end_line) VALUES (?, ?, ?, ?)`,
-			pageID, c.Path, c.StartLine, c.EndLine); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// newPage is a page to store for a snapshot: planned, with no content yet, or
-// carried over with its content and citations.
-type newPage struct {
-	title, query, content string
-	cites                 []evidence.Citation
-}
-
-// store saves the snapshot's pages, in order, and the language they are
-// written in, in one transaction: a resumed job must not take half a plan for
-// the whole.
+// store saves the snapshot's pages, in order, each keyed by its slug, and
+// the language they are written in, in one transaction: a resumed job must
+// not take half a plan for the whole.
 func (g *Generator) store(ctx context.Context, snap int64, pages []newPage) error {
-	tx, err := g.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
+	for i := range pages {
+		pages[i].Slug = slug(i, pages[i].Title)
 	}
-	defer tx.Rollback()
-	for i, p := range pages {
-		var id int64
-		if err := tx.QueryRowContext(ctx, `INSERT INTO wiki_pages(snapshot_id, slug, title, query, position, content) VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
-			snap, slug(i, p.title), p.title, p.query, i, p.content).Scan(&id); err != nil {
-			return err
-		}
-		if err := insertCitations(ctx, tx, id, p.cites); err != nil {
-			return err
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE snapshots SET wiki_language = ? WHERE id = ?`, g.Language, snap); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return g.Store.Add(ctx, snap, g.Language, pages)
 }
 
 // carry starts the snapshot's wiki from the repository's newest finished wiki
@@ -221,17 +170,14 @@ func (g *Generator) store(ctx context.Context, snap int64, pages []newPage) erro
 // change may touch it, so only the touched pages are written again. It
 // reports false, storing nothing, when there is no such wiki, when
 // .devin/wiki.json changed (it may list other pages), when more than half of
-// the files changed, or when the change adds a directory, two levels deep as
-// planning sees them, that code outside it imports: a new subsystem, which
-// only a new plan gives a page.
-func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, progress jobs.Progress) (bool, error) {
-	var base int64
-	var baseSHA string
-	err := g.DB.QueryRowContext(ctx, `
-		SELECT id, commit_sha FROM snapshots
-		WHERE repository_id = ? AND id <> ? AND status = 'ready' AND wiki_status = ? AND wiki_language = ?
-		ORDER BY id DESC LIMIT 1`, repoID, snap, catalog.WikiReady, g.Language).Scan(&base, &baseSHA)
-	if errors.Is(err, sql.ErrNoRows) {
+// the files changed, when the change adds a directory, two levels deep as
+// planning sees them, that code outside it imports (a new subsystem, which
+// only a new plan gives a page), or, unless .devin/wiki.json lists the pages,
+// when the wiki is flat and the repository now calls for sections, or the
+// other way round.
+func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, listed bool, progress jobs.Progress) (bool, error) {
+	base, baseSHA, err := g.Store.Base(ctx, repoID, snap, g.Language)
+	if errors.Is(err, store.ErrNotFound) {
 		return false, nil
 	} else if err != nil {
 		return false, err
@@ -240,11 +186,11 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, p
 	if err != nil {
 		return false, err
 	}
-	if changed[steeringFile] || 2*len(changed) > files {
-		progress.Logf("%d of %d files changed since %.7s, or %s did: planning anew", len(changed), files, baseSHA, steeringFile)
+	if changed[steering.File] || 2*len(changed) > files {
+		progress.Logf("%d of %d files changed since %.7s, or %s did: planning anew", len(changed), files, baseSHA, steering.File)
 		return false, nil
 	}
-	added, err := graph.NewDirs(ctx, g.DB, base, snap, 2)
+	added, err := g.Graph.NewDirs(ctx, base, snap, 2)
 	if err != nil {
 		return false, err
 	}
@@ -254,33 +200,51 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, p
 	}
 	// A page may also read differently when a file it cites imports a
 	// declaration the change altered.
-	ripple, err := graph.Impact(ctx, g.DB, base, snap, changed)
+	ripple, err := g.Graph.Impact(ctx, base, snap, changed)
 	if err != nil {
 		return false, err
 	}
 	affected := maps.Clone(changed)
 	maps.Copy(affected, ripple)
-	old, err := g.pages(ctx, base)
+	edits, err := g.manifestEdits(ctx, base, snap, changed)
 	if err != nil {
 		return false, err
 	}
-	cites, err := citations(ctx, g.DB, base)
+	old, err := g.Store.Pages(ctx, base)
+	if err != nil {
+		return false, err
+	}
+	if !listed { // a wiki planned flat, or before sections, gets them as the repository grows into them
+		n, err := g.Store.FileCount(ctx, snap)
+		if err != nil {
+			return false, err
+		}
+		// More pages than a flat plan holds: sections whose pages the model all failed to plan.
+		// ponytail: 8 such pages or fewer read as flat and are planned anew, which may fill them;
+		// store the shape if a model that keeps failing section plans replans every snapshot.
+		sectioned := len(old) > flatPages || slices.ContainsFunc(old, func(p page) bool { return p.Parent >= 0 })
+		if !outline.Fits(sectioned, n, cmp.Or(g.MaxPages, defaultMaxPages)) {
+			progress.Logf("the wiki of %.7s is no longer the shape %d files call for: planning anew", baseSHA, n)
+			return false, nil
+		}
+	}
+	cites, err := g.Store.Citations(ctx, base)
 	if err != nil {
 		return false, err
 	}
 	pages := make([]newPage, len(old))
 	kept := 0
 	for i, p := range old {
-		pages[i] = newPage{title: p.title, query: p.query}
-		touched, err := g.touched(ctx, snap, p, cites[p.id], affected)
+		pages[i] = newPage{Title: p.Title, Query: p.Query, Parent: p.Parent}
+		touched, err := g.touched(ctx, snap, p, cites[p.ID], affected, edits)
 		if err != nil {
 			return false, err
 		}
 		if !touched {
 			// The cited files did not change, so their lines and citations hold;
 			// the links move to the new commit.
-			pages[i].content = strings.ReplaceAll(p.content, "/blob/"+baseSHA+"/", "/blob/"+sha+"/")
-			pages[i].cites = cites[p.id]
+			pages[i].Content = strings.ReplaceAll(p.Content, "/blob/"+baseSHA+"/", "/blob/"+sha+"/")
+			pages[i].Cites = cites[p.ID]
 			kept++
 		}
 	}
@@ -294,11 +258,52 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, p
 
 // touched reports whether the change may make page p read differently: a
 // file it cites, or one that its search now finds, was added, edited or
-// removed, or imports what was (affected holds them all).
-func (g *Generator) touched(ctx context.Context, snap int64, p page, cites []evidence.Citation, affected map[string]bool) (bool, error) {
-	if slices.ContainsFunc(cites, func(c evidence.Citation) bool { return affected[c.Path] }) {
+// removed, or imports what was (affected holds them all). A manifest counts
+// only where the page cites the lines that changed (edits holds them): a new
+// dependency version in package.json leaves the pages that cite its scripts.
+func (g *Generator) touched(ctx context.Context, snap int64, p page, cites []evidence.Citation, affected map[string]bool, edits map[string]manifest.Edit) (bool, error) {
+	if slices.ContainsFunc(cites, func(c evidence.Citation) bool {
+		return manifest.Touches(c.Path, c.StartLine, c.EndLine, p.Content, affected, edits)
+	}) {
 		return true, nil
 	}
-	hits, err := g.sources(ctx, snap, p)
-	return slices.ContainsFunc(hits, func(h retrieval.Hit) bool { return affected[h.Path] }), err
+	// ponytail: the page's own search only; the sources its section shares count
+	// where it cites them, so one changed file does not rewrite a whole section.
+	_, hits, err := g.sources(ctx, snap, p, page{}, false)
+	return slices.ContainsFunc(hits, func(h retrieval.Hit) bool { return affected[h.Path] && !manifest.Is(h.Path) }), err
+}
+
+// manifestEdits returns, for each changed manifest that base held, what the
+// change did to its base version; a removed manifest's lines are all
+// replaced, and an added one has none, as base's pages cannot cite it.
+func (g *Generator) manifestEdits(ctx context.Context, base, snap int64, changed map[string]bool) (map[string]manifest.Edit, error) {
+	edits := map[string]manifest.Edit{}
+	for p := range changed {
+		if !manifest.Is(p) {
+			continue
+		}
+		before, ok, err := g.content(ctx, base, p)
+		if err != nil {
+			return nil, err
+		} else if !ok {
+			continue
+		}
+		after, ok, err := g.content(ctx, snap, p)
+		if err != nil {
+			return nil, err
+		}
+		if edits[p] = (manifest.Edit{Lines: manifest.All(before)}); ok {
+			edits[p] = manifest.Diff(before, after)
+		}
+	}
+	return edits, nil
+}
+
+// content reads file p of the snapshot, and whether it holds one.
+func (g *Generator) content(ctx context.Context, snap int64, p string) (string, bool, error) {
+	f, err := g.Catalog.File(ctx, catalog.Ref{ID: snap}, p)
+	if errors.Is(err, catalog.ErrNotFound) {
+		return "", false, nil
+	}
+	return f.Content, err == nil, err
 }

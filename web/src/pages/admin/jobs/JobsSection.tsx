@@ -1,3 +1,4 @@
+import { Link, useNavigate } from '@tanstack/react-router'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { listJobs, watchJobs } from '../../../api/admin/jobs'
 import type { StreamState } from '../../../api/client'
@@ -9,14 +10,13 @@ import { SkeletonText } from '../../../components/ui/feedback/skeleton'
 import { Label } from '../../../components/ui/form/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../components/ui/form/select'
 import { formatTime } from '../../../lib/format'
-import { Link, navigate } from '../../../lib/router'
 import { cn } from '../../../lib/style/cn'
 import { useApi } from '../../../lib/useApi'
 import type { JobRow } from '../../../types/admin/jobs'
 import type { Job } from '../../../types/repo/repo'
 import { useSession } from '../../session/session'
 import { SectionHead } from '../SectionHead'
-import { StatusBadge } from './StatusBadge'
+import { kindLabel, StatusBadge, statusLabel } from './StatusBadge'
 import { StreamNotice } from './StreamNotice'
 
 const statuses: Job['status'][] = ['queued', 'running', 'succeeded', 'failed']
@@ -32,11 +32,15 @@ function merge(loaded: JobRow[], live: Map<number, JobRow>) {
   return [...rows.values()].sort((a, b) => b.id - a.id)
 }
 
+const jobLink = (j: JobRow) =>
+  ({ to: '/admin/{-$section}/{-$id}', params: { section: 'jobs', id: String(j.id) } }) as const
+
 const stageText = (j: JobRow) =>
-  j.status === 'failed' ? j.error || 'Failed' : j.status === 'succeeded' ? 'Done' : stageLabel(j)
+  j.status === 'failed' ? j.error || '失敗' : j.status === 'succeeded' ? '完成' : stageLabel(j)
 
 /** Recent jobs, kept live by the job event stream. */
 export function JobsSection() {
+  const navigate = useNavigate()
   const { refresh } = useSession()
   const filterId = useId()
   const [status, setStatus] = useState<Job['status'] | ''>('')
@@ -70,20 +74,20 @@ export function JobsSection() {
 
   return (
     <section>
-      <SectionHead title="Jobs">
+      <SectionHead title="工作">
         <div className="flex items-center gap-2">
           <Label htmlFor={filterId} className="font-normal text-muted-foreground">
-            Status
+            狀態
           </Label>
           <Select value={status || ALL} onValueChange={(v) => setStatus(v === ALL ? '' : (v as Job['status']))}>
             <SelectTrigger id={filterId} className="h-8 w-32">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={ALL}>All</SelectItem>
+              <SelectItem value={ALL}>全部</SelectItem>
               {statuses.map((s) => (
                 <SelectItem key={s} value={s}>
-                  {s}
+                  {statusLabel(s)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -92,7 +96,7 @@ export function JobsSection() {
       </SectionHead>
       <StreamNotice
         state={stream}
-        what="Live updates"
+        what="即時更新"
         onReconnect={() => {
           setStream('retrying')
           setAttempt((a) => a + 1)
@@ -106,12 +110,12 @@ export function JobsSection() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Status</TableHead>
+              <TableHead>狀態</TableHead>
               <TableHead>Repository</TableHead>
-              <TableHead>Kind</TableHead>
-              <TableHead>Stage</TableHead>
-              <TableHead>Attempts</TableHead>
-              <TableHead>Updated</TableHead>
+              <TableHead>類型</TableHead>
+              <TableHead>階段</TableHead>
+              <TableHead>嘗試次數</TableHead>
+              <TableHead>更新於</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -119,17 +123,17 @@ export function JobsSection() {
               <TableRow
                 key={j.id}
                 className="cursor-pointer"
-                onClick={(e) => (e.target as Element).closest('a') || navigate(`/admin/jobs/${j.id}`)}
+                onClick={(e) => (e.target as Element).closest('a') || navigate(jobLink(j))}
               >
                 <TableCell>
                   <StatusBadge status={j.status} />
                 </TableCell>
                 <TableCell className="font-medium">
-                  <Link to={`/admin/jobs/${j.id}`} className="hover:underline">
+                  <Link {...jobLink(j)} className="hover:underline">
                     {j.repoOwner}/{j.repoName}
                   </Link>
                 </TableCell>
-                <TableCell>{j.kind}</TableCell>
+                <TableCell>{kindLabel(j.kind)}</TableCell>
                 <TableCell className="min-w-40">
                   <span
                     className={cn(
@@ -144,7 +148,7 @@ export function JobsSection() {
                     className="mt-1.5"
                     value={Math.round(jobFraction(j) * 100)}
                     tone={isActive(j) ? 'warning' : 'muted'}
-                    aria-label={`${j.repoOwner}/${j.repoName} ${j.kind}`}
+                    aria-label={`${j.repoOwner}/${j.repoName} ${kindLabel(j.kind)}`}
                   />
                 </TableCell>
                 <TableCell>{j.attempts}</TableCell>
@@ -154,7 +158,7 @@ export function JobsSection() {
             {rows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="text-[13px] text-muted-foreground">
-                  No jobs{status && ` ${status}`}.
+                  {status ? `沒有${statusLabel(status)}的工作。` : '沒有工作。'}
                 </TableCell>
               </TableRow>
             )}

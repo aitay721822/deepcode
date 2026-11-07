@@ -84,7 +84,7 @@ func repoFiles(t *testing.T) []string {
 // TestBackendDependencies enforces the README's backend dependency rule:
 // platform <- repo <- knowledge, access on its own, all of them <- app/importer
 // <- app/server <- app <- cmd, never the other way; cmd also uses
-// app/server/webui, platform/storage and access/account directly.
+// app/server/webui, platform/storage and access/account with its store directly.
 func TestBackendDependencies(t *testing.T) {
 	out, err := exec.Command("go", "list", "-f", `{{.ImportPath}} {{join .Imports " "}}`, "deepcode/...").Output()
 	if err != nil {
@@ -99,7 +99,7 @@ func TestBackendDependencies(t *testing.T) {
 		"internal/app/importer": {"internal/platform", "internal/repo", "internal/knowledge", "internal/access"},
 		"internal/app/server":   {"internal/platform", "internal/repo", "internal/knowledge", "internal/access", "internal/app/importer"},
 		"internal/app":          {"internal/platform", "internal/repo", "internal/knowledge", "internal/access", "internal/app/importer", "internal/app/server"},
-		"cmd":                   {"internal/app", "internal/app/server/webui", "internal/platform/storage", "internal/access/account"},
+		"cmd":                   {"internal/app", "internal/app/server/webui", "internal/platform/storage", "internal/access/account", "internal/access/account/store"},
 	}
 	area := func(pkg string) string { // the longest area holding pkg
 		in := ""
@@ -126,6 +126,32 @@ func TestBackendDependencies(t *testing.T) {
 			if ours && area(imp) != from && !slices.Contains(may[from], area(imp)) && !slices.Contains(may[from], imp) {
 				t.Errorf("%s imports %s", pkg, imp)
 			}
+		}
+	}
+}
+
+// TestPersistenceLayer enforces the layering rule: SQL lives only in the
+// persistence layer, a package whose folder is named store (or ends in
+// store), and in platform/storage, which opens, migrates and backs up the
+// database. Business logic and the API layer call those packages; only the
+// composition root (internal/app) and cmd hold the *sql.DB the stores share.
+func TestPersistenceLayer(t *testing.T) {
+	runs := regexp.MustCompile(`\b(?:QueryContext|QueryRowContext|ExecContext|BeginTx|PrepareContext)\(|\b(?:SELECT|INSERT INTO|DELETE FROM)\b`)
+	for _, f := range repoFiles(t) {
+		dir := path.Dir(f)
+		if !strings.HasSuffix(f, ".go") || strings.HasSuffix(f, "_test.go") || strings.HasPrefix(f, "test/") ||
+			strings.HasSuffix(path.Base(dir), "store") || dir == "internal/platform/storage" {
+			continue
+		}
+		b, err := os.ReadFile("../" + f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runs.Match(b) {
+			t.Errorf("%s runs SQL outside the persistence layer", f)
+		}
+		if bytes.Contains(b, []byte(`"database/sql"`)) && dir != "internal/app" && !strings.HasPrefix(dir, "cmd/") {
+			t.Errorf("%s imports database/sql outside the persistence layer", f)
 		}
 	}
 }

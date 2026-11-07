@@ -117,6 +117,6 @@ func (a *API) job(c *gin.Context) {
 // it may quote git, the model's API or paths on the server.
 func jobView(c *gin.Context, j *jobs.Job) {
 	if j != nil && j.Error != "" && !httpx.Principal(c).Can(role.JobsView) {
-		j.Error = "an administrator can find the details in the job console"
+		j.Error = "管理員可在工作主控台查看詳細資訊"
 	}
 }

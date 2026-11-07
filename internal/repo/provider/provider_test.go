@@ -12,6 +12,7 @@ import (
 
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/gitserver"
+	"deepcode/internal/repo/gitserver/store"
 )
 
 // TestAPIs drives both providers against a fake API through servers stored
@@ -52,7 +53,7 @@ func TestAPIs(t *testing.T) {
 	}
 	defer db.Close()
 	box, _ := gitserver.OpenBox(t.TempDir(), "test key")
-	st := &gitserver.Store{DB: db, Box: box}
+	st := &gitserver.Service{Store: &store.Store{DB: db}, Box: box}
 	str := func(s string) *string { return &s }
 	created, err := st.Create(ctx, gitserver.Input{Name: str("Corp"), Kind: str(gitserver.GitLab), BaseURL: str("https://code.example.com"), APIURL: str(api.URL), Token: str("tok")})
 	if err != nil {
@@ -66,7 +67,7 @@ func TestAPIs(t *testing.T) {
 	if err != nil || m.Path != "group/sub/App" || m.SizeKB != 2048 || m.DefaultBranch != "main" || m.Stars != 3 || len([]rune(m.Description)) != maxDescription || !strings.HasSuffix(seen[0], " tok") {
 		t.Fatalf("GitLab meta: %+v %v (requests %q)", m, err, seen)
 	}
-	if detail, err := Check(ctx, gl); err != nil || detail != "Signed in as bot." {
+	if detail, err := Check(ctx, gl); err != nil || detail != "已以 bot 身分登入。" {
 		t.Fatalf("check: %q %v", detail, err)
 	}
 	if _, err := Fetch(ctx, gl, "group/missing"); !errors.Is(err, ErrNotFound) {
@@ -74,7 +75,7 @@ func TestAPIs(t *testing.T) {
 	}
 	created, _ = st.Create(ctx, gitserver.Input{Name: str("GHE"), Kind: str(gitserver.GitHub), BaseURL: str("https://ghe.example.com"), APIURL: str(api.URL), Token: str("tok2")})
 	gh, _ := st.Get(ctx, created.ID)
-	if _, err := Fetch(ctx, gh, "o/r"); !errors.Is(err, ErrUpstream) || !strings.Contains(err.Error(), "rate limit") || seen[len(seen)-1] != "/repos/o/r Bearer tok2" {
+	if _, err := Fetch(ctx, gh, "o/r"); !errors.Is(err, ErrUpstream) || !strings.Contains(err.Error(), "速率限制") || seen[len(seen)-1] != "/repos/o/r Bearer tok2" {
 		t.Fatalf("rate limit: %v (requests %q)", err, seen)
 	}
 	// Redirects are followed on the API's own host only, and an answer over 4 MB is refused.

@@ -1,21 +1,21 @@
+import { createLink } from '@tanstack/react-router'
 import { ArrowRightIcon, StarIcon } from 'lucide-react'
 import { motion } from 'motion/react'
 import { isActive, stageLabel } from '../../components/repo/jobStage'
 import { ProviderBadge } from '../../components/repo/provider/ProviderBadge'
 import { Card } from '../../components/ui/display/card'
 import { formatStars } from '../../lib/format'
-import { Link } from '../../lib/router'
 import { item, lift } from '../../lib/style/motion'
 import type { Repo } from '../../types/repo/repo'
 
-const MotionLink = motion.create(Link)
+const MotionLink = createLink(motion.a)
 
 /** A repository as a catalogue card: where it comes from, its name, what it is, and how it stands. */
 export function RepoCard({ repo }: { repo: Repo }) {
   const failed = repo.job?.status === 'failed' && !repo.snapshot
   return (
     <Card asChild className="group min-h-40 items-start gap-0 px-4 pt-3.5 pb-3 transition-colors hover:border-brand/55">
-      <MotionLink to={`/repos/${repo.id}`} variants={item} {...lift}>
+      <MotionLink to="/repos/$id" params={{ id: repo.id }} variants={item} {...lift}>
         <ProviderBadge repo={repo} />
         <span className="mt-3 font-serif text-[20px] leading-[1.2] tracking-[-0.01em] [overflow-wrap:anywhere]">
           <span className="text-muted-foreground">{repo.owner}/</span>
@@ -30,7 +30,7 @@ export function RepoCard({ repo }: { repo: Repo }) {
               <StarIcon className="size-3 fill-current" /> {formatStars(repo.stars)}
             </span>
             {repo.job && isActive(repo.job) && <span className="min-w-0 truncate">{stageLabel(repo.job)}</span>}
-            {failed && <span className="text-destructive">Indexing failed</span>}
+            {failed && <span className="text-destructive">建立索引失敗</span>}
             <ArrowRightIcon className="ml-auto size-4 flex-none text-foreground transition-transform duration-300 group-hover:translate-x-1" />
           </span>
         </span>

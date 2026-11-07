@@ -20,16 +20,16 @@ export function StreamNotice({
   if (state === 'retrying') {
     return (
       <Status className="mb-3 flex items-center gap-2 text-[12.5px] text-muted-foreground">
-        <Spinner className="size-3" /> {what} interrupted, reconnecting…
+        <Spinner className="size-3" /> {what}已中斷，正在重新連線…
       </Status>
     )
   }
   if (state !== 'closed') return null
   return (
     <Status className="mb-3 flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground">
-      {what} stopped.
+      {what}已停止。
       <Button variant="outline" size="sm" className="h-7" onClick={onReconnect}>
-        <RefreshCwIcon className="size-3.5" /> Reconnect
+        <RefreshCwIcon className="size-3.5" /> 重新連線
       </Button>
     </Status>
   )

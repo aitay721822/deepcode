@@ -2,7 +2,11 @@
 // The SQLite row is the source of truth; events only cut latency.
 package jobs
 
-import "context"
+import (
+	"context"
+
+	"deepcode/internal/platform/jobs/store"
+)
 
 const (
 	KindIndex = "index"
@@ -15,49 +19,22 @@ const (
 	PipelineVersion = 1
 )
 
-// A job's status. SQL in this package spells them out too.
+// A job's status. The store's SQL spells them out too.
 const (
-	StatusQueued    = "queued"
-	StatusRunning   = "running"
-	StatusSucceeded = "succeeded"
-	StatusFailed    = "failed"
+	StatusQueued    = store.StatusQueued
+	StatusRunning   = store.StatusRunning
+	StatusSucceeded = store.StatusSucceeded
+	StatusFailed    = store.StatusFailed
 )
 
 // Statuses lists every status in the order a job passes through them.
 var Statuses = []string{StatusQueued, StatusRunning, StatusSucceeded, StatusFailed}
 
-type Job struct {
-	ID        int64  `json:"id"`
-	Kind      string `json:"kind"`
-	RepoID    int64  `json:"-"` // the row id; Listed carries the public one
-	CommitSHA string `json:"commitSha"`
-	Status    string `json:"status"` // one of Statuses
-	Attempts  int    `json:"attempts"`
-	Stage     string `json:"stage"`
-	Progress  int    `json:"progress"`
-	Total     int    `json:"total"`
-	Error     string `json:"error"` // in full: it may quote git, the model's API or paths, so the API hides it from users without jobs.view
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
-}
-
-// Listed is a job with the public id and name of the repository it works on.
-type Listed struct {
-	Job
-	RepoPublicID string `json:"repoId"`
-	RepoOwner    string `json:"repoOwner"`
-	RepoName     string `json:"repoName"`
-}
-
-// LogLine is one line of a job's output.
-type LogLine struct {
-	ID   int64  `json:"id"`
-	At   string `json:"at"`
-	Line string `json:"line"`
-}
-
-// Finished reports whether the job will not run again unless queued anew.
-func (j Job) Finished() bool { return j.Status == StatusSucceeded || j.Status == StatusFailed }
+type (
+	Job     = store.Job
+	Listed  = store.Listed  // a job with the public id and name of its repository
+	LogLine = store.LogLine // one line of a job's output
+)
 
 type Handler func(ctx context.Context, job Job, progress Progress) error
 

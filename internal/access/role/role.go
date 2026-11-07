@@ -2,112 +2,49 @@ package role
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"sort"
+
+	"deepcode/internal/access/role/store"
 )
 
 // Admin is the built-in role holding every permission on every repository.
-const Admin int64 = 1
+const Admin = store.Admin
 
 // Member is the built-in role for reading and asking about the repositories
 // granted to it; visitors who sign themselves up get it.
-const Member int64 = 2
+const Member = store.Member
 
 // Kinds of failure a caller can act on; the HTTP layer maps each to a status.
 var (
-	ErrNotFound = errors.New("role not found")
-	ErrInvalid  = errors.New("invalid role")
-	ErrConflict = errors.New("role conflict") // a duplicate name, or a built-in role
+	ErrNotFound = store.ErrNotFound
+	ErrInvalid  = errors.New("無效的角色")
+	ErrConflict = errors.New("角色衝突") // a duplicate name, or a built-in role
 )
 
-type Role struct {
-	ID              int64        `json:"id"`
-	Name            string       `json:"name"`
-	Description     string       `json:"description"`
-	Builtin         bool         `json:"builtin"`
-	Permissions     []Permission `json:"permissions"`
-	AllRepositories bool         `json:"allRepositories"`
-	RepositoryIDs   []string     `json:"repositoryIds"` // public ids, when not AllRepositories
-	UserCount       int          `json:"userCount"`
-}
+type Role = store.Role
 
-type Store struct{ DB *sql.DB }
+// Service applies the role rules over the roles in Store.
+type Service struct{ Store *store.Store }
 
 // List returns every role by name, built-in ones first.
-func (s *Store) List(ctx context.Context) ([]Role, error) {
-	return s.roles(ctx, "ORDER BY builtin DESC, name")
+func (s *Service) List(ctx context.Context) ([]Role, error) {
+	list, err := s.Store.List(ctx)
+	for i := range list {
+		inOrder(list[i].Permissions)
+	}
+	return list, err
 }
 
-func (s *Store) Get(ctx context.Context, id int64) (Role, error) {
-	list, err := s.roles(ctx, "WHERE id = ?", id)
-	if err != nil {
-		return Role{}, err
-	}
-	if len(list) == 0 {
-		return Role{}, ErrNotFound
-	}
-	return list[0], nil
+func (s *Service) Get(ctx context.Context, id int64) (Role, error) {
+	r, err := s.Store.Get(ctx, id)
+	inOrder(r.Permissions)
+	return r, err
 }
 
-func (s *Store) roles(ctx context.Context, tail string, args ...any) ([]Role, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, name, description, builtin, all_repositories,
-		(SELECT count(*) FROM user_roles u WHERE u.role_id = roles.id) FROM roles `+tail, args...)
-	if err != nil {
-		return nil, err
-	}
-	out := []Role{}
-	index := map[int64]int{}
-	for rows.Next() {
-		r := Role{Permissions: []Permission{}, RepositoryIDs: []string{}}
-		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Builtin, &r.AllRepositories, &r.UserCount); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		index[r.ID] = len(out)
-		out = append(out, r)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	// ponytail: both link tables are read whole; filter by role once there are thousands of roles.
-	err = scanPairs(ctx, s.DB, `SELECT role_id, permission FROM role_permissions ORDER BY permission`, func(id int64, p Permission) {
-		if i, ok := index[id]; ok {
-			out[i].Permissions = append(out[i].Permissions, p)
-		}
-	})
-	if err != nil {
-		return nil, err
-	}
-	err = scanPairs(ctx, s.DB, `SELECT rr.role_id, r.public_id FROM role_repositories rr JOIN repositories r ON r.id = rr.repository_id
-		ORDER BY rr.repository_id`, func(id int64, repo string) {
-		if i, ok := index[id]; ok {
-			out[i].RepositoryIDs = append(out[i].RepositoryIDs, repo)
-		}
-	})
-	for i := range out {
-		sort.Slice(out[i].Permissions, func(a, b int) bool { return order(out[i].Permissions[a]) < order(out[i].Permissions[b]) })
-	}
-	return out, err
-}
-
-// scanPairs calls add for every (role id, value) row of query.
-func scanPairs[V any](ctx context.Context, db *sql.DB, query string, add func(int64, V), args ...any) error {
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var v V
-		if err := rows.Scan(&id, &v); err != nil {
-			return err
-		}
-		add(id, v)
-	}
-	return rows.Err()
+// inOrder sorts perms into Permissions order.
+func inOrder(perms []Permission) {
+	sort.Slice(perms, func(a, b int) bool { return order(perms[a]) < order(perms[b]) })
 }
 
 // order is a permission's place in Permissions.

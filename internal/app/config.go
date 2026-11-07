@@ -25,6 +25,8 @@ type Config struct {
 	MaxIndexMB int
 
 	WikiLanguage string
+	WikiParallel int    // pages planned or written at a time
+	WikiMaxPages int    // the most pages a wiki gets
 	GitProtocols string // GIT_ALLOW_PROTOCOL: "http:https" in production
 
 	AdminPassword string        // for the first administrator; "" generates one

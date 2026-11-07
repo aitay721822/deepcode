@@ -1,9 +1,9 @@
+import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
-import { getConversation, streamChat } from '../../api/repo/chat'
-import { navigate } from '../../lib/router'
-import type { ConversationRef, Message, Source } from '../../types/repo/chat'
-import type { Citation } from '../../types/repo/code'
-import type { Repo } from '../../types/repo/repo'
+import { getConversation, streamChat } from '../../../api/repo/chat'
+import type { ConversationRef, Message, Source } from '../../../types/repo/chat'
+import type { Citation } from '../../../types/repo/code'
+import type { Repo } from '../../../types/repo/repo'
 
 export type Turn = {
   question: string
@@ -26,7 +26,7 @@ function toTurns(messages: Message[]): Turn[] {
         sources: [],
         rounds: [],
         status: 'error',
-        error: 'This question has no stored answer.',
+        error: '這個問題沒有已儲存的回答。',
       })
     } else if (turns.length) {
       Object.assign(turns[turns.length - 1], {
@@ -42,6 +42,7 @@ function toTurns(messages: Message[]): Turn[] {
 
 /** A conversation about repository repoId: opens a stored one, streams new answers and picks the citation to show. */
 export function useChat(repoId: string, conversationId?: string) {
+  const navigate = useNavigate()
   const [conv, setConv] = useState<ConversationRef | null>(null)
   const [turns, setTurns] = useState<Turn[]>([])
   const [selected, setSelected] = useState<Citation | null>(null)
@@ -63,7 +64,7 @@ export function useChat(repoId: string, conversationId?: string) {
     getConversation(conversationId).then(
       (c) => {
         if (!live) return
-        if (c.repoId !== repoId) return setLoadError('conversation not found') // another repository's: as the server says of one the reader cannot open
+        if (c.repoId !== repoId) return setLoadError('找不到這個對話') // another repository's: as the server says of one the reader cannot open
         setConv({ id: c.id, snapshotId: c.snapshotId, commitSha: c.commitSha })
         setTurns(toTurns(c.messages))
         setSelected(c.messages.find((m) => m.citations?.length)?.citations[0] ?? null)
@@ -105,11 +106,22 @@ export function useChat(repoId: string, conversationId?: string) {
         ({ event, data }) => {
           if (event === 'conversation') {
             setConv(data)
-            if (String(data.id) !== conversationId) navigate(`/repos/${repo.id}/search/${data.id}`, { replace: true })
+            // The same page, now at its own address: no new history entry, and the reader stays where they are.
+            if (String(data.id) !== conversationId)
+              navigate({
+                to: '/repos/$id/search/{-$conversationId}',
+                params: { id: repo.id, conversationId: String(data.id) },
+                replace: true,
+                resetScroll: false,
+              })
           } else if (event === 'search') {
             update((t) => ({ ...t, rounds: [...t.rounds, data.terms] }))
           } else if (event === 'evidence') {
-            update((t) => ({ ...t, sources: data.sources }))
+            // Evidence starts the answer; a second time, after the server turned its draft down, it starts it anew.
+            cancelAnimationFrame(frame)
+            frame = 0
+            text = ''
+            update((t) => ({ ...t, sources: data.sources, answer: '' }))
             select(data.sources[0])
           } else if (event === 'delta') {
             text += data

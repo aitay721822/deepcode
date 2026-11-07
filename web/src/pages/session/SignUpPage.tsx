@@ -1,3 +1,4 @@
+import { Link, useNavigate } from '@tanstack/react-router'
 import { type ReactNode, useEffect, useState } from 'react'
 import { getSignUp, signUp } from '../../api/auth'
 import { Button } from '../../components/ui/controls/button'
@@ -5,13 +6,13 @@ import { SkeletonText } from '../../components/ui/feedback/skeleton'
 import { Spinner } from '../../components/ui/feedback/spinner'
 import { Field } from '../../components/ui/form/field'
 import { Input } from '../../components/ui/form/input'
-import { Link, navigate } from '../../lib/router'
 import { useApi } from '../../lib/useApi'
 import { SessionCard, SessionError } from './SessionCard'
-import { destination, useSession, withNext } from './session'
+import { destination, useSession } from './session'
 
 /** Creating your own account while an administrator has opened sign-up: it gets the member role and is signed in at once. */
-export function SignUpPage({ next }: { next: string | null }) {
+export function SignUpPage({ next }: { next?: string }) {
+  const navigate = useNavigate()
   const { user, refresh } = useSession()
   const { data: state, error: stateError } = useApi('signup', getSignUp)
   const [username, setUsername] = useState('')
@@ -21,18 +22,14 @@ export function SignUpPage({ next }: { next: string | null }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   useEffect(() => {
-    if (user) navigate(destination(next), { replace: true }) // signed up, or already signed in
-  }, [user, next])
+    if (user) navigate({ href: destination(next), replace: true, resetScroll: false }) // signed up, or already signed in
+  }, [user, next, navigate])
 
   let body: ReactNode
   if (!state && !stateError)
     body = <SkeletonText lines={4} /> // not a form that may turn out closed
   else if (state?.open === false)
-    body = (
-      <p className="text-center text-sm text-muted-foreground">
-        Sign-up is closed. Ask an administrator for an account.
-      </p>
-    )
+    body = <p className="text-center text-sm text-muted-foreground">目前不開放註冊。請向管理員申請帳號。</p>
   else
     body = // open, or unknown: the server still refuses a closed sign-up
       (
@@ -42,7 +39,7 @@ export function SignUpPage({ next }: { next: string | null }) {
           onSubmit={async (e) => {
             e.preventDefault()
             if (password !== confirm) {
-              setError('The passwords do not match.')
+              setError('兩次輸入的密碼不一致。')
               return
             }
             setBusy(true)
@@ -57,7 +54,7 @@ export function SignUpPage({ next }: { next: string | null }) {
             }
           }}
         >
-          <Field label="Username" hint="2 to 32 letters, digits, '.', '_' or '-', starting with a letter or digit">
+          <Field label="使用者名稱" hint="2 到 32 個英文字母、數字、「.」、「_」或「-」，須以英文字母或數字開頭">
             <Input
               autoComplete="username"
               autoCapitalize="none"
@@ -68,10 +65,10 @@ export function SignUpPage({ next }: { next: string | null }) {
               onChange={(e) => setUsername(e.target.value)}
             />
           </Field>
-          <Field label="Display name" hint="Optional, up to 64 characters; your username otherwise">
+          <Field label="顯示名稱" hint="選填，最多 64 個字元；未填則使用使用者名稱">
             <Input autoComplete="name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
           </Field>
-          <Field label="Password" hint="8 to 256 characters">
+          <Field label="密碼" hint="8 到 256 個字元">
             <Input
               type="password"
               autoComplete="new-password"
@@ -81,7 +78,7 @@ export function SignUpPage({ next }: { next: string | null }) {
               onChange={(e) => setPassword(e.target.value)}
             />
           </Field>
-          <Field label="Confirm password">
+          <Field label="確認密碼">
             <Input
               type="password"
               autoComplete="new-password"
@@ -92,24 +89,24 @@ export function SignUpPage({ next }: { next: string | null }) {
           </Field>
           <SessionError error={error} />
           <Button type="submit" size="lg" className="mt-1 w-full" busy={busy}>
-            {busy && <Spinner />} Create account
+            {busy && <Spinner />} 建立帳號
           </Button>
         </form>
       )
   return (
     <SessionCard
-      title="Create account"
+      title="建立帳號"
       heading={
         <>
-          Join <em>deepcode</em>
+          加入 <em>deepcode</em>
         </>
       }
     >
       {body}
       <p className="text-center text-sm text-muted-foreground">
-        Have an account?{' '}
-        <Link to={withNext('/login', next)} className="text-brand underline-offset-4 hover:underline">
-          Sign in
+        已經有帳號？
+        <Link to="/login" search={{ next }} className="text-brand underline-offset-4 hover:underline">
+          登入
         </Link>
       </p>
     </SessionCard>

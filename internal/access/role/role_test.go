@@ -10,10 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"deepcode/internal/access/role/store"
 	"deepcode/internal/platform/storage"
 )
 
-func setup(t *testing.T) (*Store, *sql.DB) {
+func setup(t *testing.T) (*Service, *sql.DB) {
 	t.Helper()
 	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "roles.db"))
 	if err != nil {
@@ -23,7 +24,7 @@ func setup(t *testing.T) (*Store, *sql.DB) {
 	for _, id := range []int64{1, 2} {
 		db.Exec(`INSERT INTO repositories(id, public_id, url, owner, name) VALUES (?, ?, ?, 'o', 'r')`, id, fmt.Sprintf("r%d", id), fmt.Sprintf("https://github.com/o/r%d", id))
 	}
-	return &Store{DB: db}, db
+	return &Service{Store: &store.Store{DB: db}}, db
 }
 
 // user adds a user holding roles and returns its id.
@@ -73,7 +74,7 @@ func TestGrants(t *testing.T) {
 
 	// A repository granted in a transaction is there once it commits.
 	tx, _ := db.Begin()
-	if err := Grant(ctx, tx, g.ImportRoles(), 2); err != nil || tx.Commit() != nil {
+	if err := store.Grant(ctx, tx, g.ImportRoles(), 2); err != nil || tx.Commit() != nil {
 		t.Fatalf("grant: %v", err)
 	}
 	if g, _ = st.GrantsOf(ctx, dev); !g.CanOn(RepoRead, 2) {

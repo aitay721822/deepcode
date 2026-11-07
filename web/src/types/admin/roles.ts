@@ -16,5 +16,12 @@ export type Role = {
 
 export type RoleInput = Pick<Role, 'name' | 'description' | 'permissions' | 'allRepositories' | 'repositoryIds'>
 
-/** A repository a role can be limited to. */
-export type RepoRef = { id: string; owner: string; name: string; provider: Provider; serverName: string }
+/** A repository a role can be limited to; updatedAt is when it was last indexed (SQLite UTC), "" if never. */
+export type RepoRef = {
+  id: string
+  owner: string
+  name: string
+  provider: Provider
+  serverName: string
+  updatedAt: string
+}

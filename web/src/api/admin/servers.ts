@@ -12,3 +12,9 @@ export const updateGitServer = (id: number, changes: GitServerChanges) =>
 export const deleteGitServer = (id: number) => del(`/api/admin/servers/${id}`)
 
 export const testGitServer = (id: number) => post<ConnectionTest>(`/api/admin/servers/${id}/test`, {})
+
+/** Where the browser goes to authorize a server through OAuth: the server's consent page, by way of ours. */
+export const gitServerAuthorizeUrl = (id: number) => `/api/admin/servers/${id}/oauth`
+
+/** The redirect URI to register with the OAuth app: where consent pages send the admin back. */
+export const oauthCallbackUrl = () => `${location.origin}/api/admin/oauth/callback`

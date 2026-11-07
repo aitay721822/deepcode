@@ -12,11 +12,14 @@ import (
 	"time"
 
 	"deepcode/internal/access/account"
+	accountstore "deepcode/internal/access/account/store"
 	"deepcode/internal/access/role"
+	rolestore "deepcode/internal/access/role/store"
+	"deepcode/internal/access/session/store"
 	"deepcode/internal/platform/storage"
 )
 
-func setup(t *testing.T) (*Store, *sql.DB) {
+func setup(t *testing.T) (*Service, *sql.DB) {
 	t.Helper()
 	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "sessions.db"))
 	if err != nil {
@@ -26,15 +29,15 @@ func setup(t *testing.T) (*Store, *sql.DB) {
 	for _, id := range []int64{1, 2} {
 		db.Exec(`INSERT INTO repositories(id, public_id, url, owner, name) VALUES (?, ?, ?, 'o', 'r')`, id, "r"+string(rune('0'+id)), "https://github.com/o/r"+string(rune('0'+id)))
 	}
-	accounts := &account.Store{DB: db}
+	accounts := &account.Service{Store: &accountstore.Store{DB: db}}
 	if _, _, err := accounts.Bootstrap(context.Background(), "password-0"); err != nil { // an admin, as after any start
 		t.Fatal(err)
 	}
-	return New(db, accounts, &role.Store{DB: db}, time.Hour), db
+	return New(&store.Store{DB: db}, accounts, &role.Service{Store: &rolestore.Store{DB: db}}, time.Hour), db
 }
 
 // user creates username with password-1 and roles.
-func user(t *testing.T, s *Store, username string, roles ...int64) int64 {
+func user(t *testing.T, s *Service, username string, roles ...int64) int64 {
 	t.Helper()
 	password := "password-1"
 	u, err := s.Accounts.Create(context.Background(), account.Input{Username: &username, Password: &password, RoleIDs: &roles})
@@ -247,7 +250,7 @@ func TestGrantsFollowRoles(t *testing.T) {
 // TestChangePassword: a new password ends the old sessions and starts one;
 // wrong current passwords are throttled like failed sign-ins.
 func TestChangePassword(t *testing.T) {
-	s, db := setup(t)
+	s, _ := setup(t)
 	ctx := context.Background()
 	dev := user(t, s, "dev")
 	old, _, _ := s.Login(ctx, "dev", "password-1", "1.1.1.1")
@@ -259,7 +262,7 @@ func TestChangePassword(t *testing.T) {
 	if _, err := s.ChangePassword(ctx, dev, "password-1", "password-2"); !errors.Is(err, ErrThrottled) {
 		t.Fatalf("after ten wrong passwords: %v", err)
 	}
-	fresh := New(db, s.Accounts, s.Roles, time.Hour) // as after the 15 minutes
+	fresh := New(s.Store, s.Accounts, s.Roles, time.Hour) // as after the 15 minutes
 	token, err := fresh.ChangePassword(ctx, dev, "password-1", "password-2")
 	if err != nil {
 		t.Fatal(err)

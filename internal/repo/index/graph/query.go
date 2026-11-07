@@ -2,11 +2,9 @@ package graph
 
 import (
 	"context"
-	"database/sql"
 	"sort"
 	"strings"
 
-	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/index/analyzer"
 )
 
@@ -16,32 +14,11 @@ import (
 // importer, and its callers say less of how it works than what it imports.
 // ponytail: a barrel file (index.ts re-exporting a folder) brings in all it
 // re-exports; rank by the hits' own imports if that crowds retrieval.
-func Dependencies(ctx context.Context, db *sql.DB, snap int64, paths []string, limit int) ([]string, error) {
+func (g *Graph) Dependencies(ctx context.Context, snap int64, paths []string, limit int) ([]string, error) {
 	if len(paths) == 0 {
 		return nil, nil
 	}
-	in := storage.Placeholders(len(paths))
-	args := []any{snap}
-	for range 2 {
-		for _, p := range paths {
-			args = append(args, p)
-		}
-	}
-	rows, err := db.QueryContext(ctx, `SELECT dst FROM file_edges WHERE snapshot_id = ? AND src IN (`+in+`) AND dst NOT IN (`+in+`)
-		GROUP BY dst ORDER BY count(*) DESC, dst LIMIT ?`, append(args, limit)...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
+	return g.Store.Dependencies(ctx, snap, paths, limit)
 }
 
 // Impact returns the files beyond changed that a change from snapshot base to
@@ -51,12 +28,12 @@ func Dependencies(ctx context.Context, db *sql.DB, snap int64, paths []string, l
 // ponytail: a declaration is compared by its first line, so a struct's new
 // field or a Go interface's new method goes unseen; compare the chunks of
 // declarations if that bites.
-func Impact(ctx context.Context, db *sql.DB, base, snap int64, changed map[string]bool) (map[string]bool, error) {
-	before, err := declarations(ctx, db, base, changed)
+func (g *Graph) Impact(ctx context.Context, base, snap int64, changed map[string]bool) (map[string]bool, error) {
+	before, err := g.declarations(ctx, base, changed)
 	if err != nil {
 		return nil, err
 	}
-	after, err := declarations(ctx, db, snap, changed)
+	after, err := g.declarations(ctx, snap, changed)
 	if err != nil {
 		return nil, err
 	}
@@ -71,13 +48,13 @@ func Impact(ctx context.Context, db *sql.DB, base, snap int64, changed map[strin
 		return out, nil
 	}
 	for _, s := range []int64{base, snap} {
-		edges, err := loadEdges(ctx, db, s)
+		edges, err := g.Store.Edges(ctx, s)
 		if err != nil {
 			return nil, err
 		}
 		for _, e := range edges {
-			if moved[e.dst] && !changed[e.src] {
-				out[e.src] = true
+			if moved[e.Dst] && !changed[e.Src] {
+				out[e.Src] = true
 			}
 		}
 	}
@@ -86,28 +63,13 @@ func Impact(ctx context.Context, db *sql.DB, base, snap int64, changed map[strin
 
 // declarations reads the declarations of the snapshot's files in paths, each
 // file's as one string, in an order that moving them within the file keeps.
-func declarations(ctx context.Context, db *sql.DB, snap int64, paths map[string]bool) (map[string]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT path, kind || ' ' || qualified_name || ' ' || signature AS d FROM symbols
-		WHERE snapshot_id = ? ORDER BY path, d`, snap)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	parts := map[string][]string{}
-	for rows.Next() {
-		var p, d string
-		if err := rows.Scan(&p, &d); err != nil {
-			return nil, err
-		}
-		if paths[p] {
-			parts[p] = append(parts[p], d)
-		}
-	}
+func (g *Graph) declarations(ctx context.Context, snap int64, paths map[string]bool) (map[string]string, error) {
+	parts, err := g.Store.Declarations(ctx, snap, paths)
 	out := make(map[string]string, len(parts))
 	for p, ds := range parts {
 		out[p] = strings.Join(ds, "\n")
 	}
-	return out, rows.Err()
+	return out, err
 }
 
 // DirEdge counts the imports from the files of one directory into another's.
@@ -120,9 +82,63 @@ type DirEdge struct {
 // to its first depth levels ("." for the root; a run of folders that only
 // lead on to one other is one level), most first; tests, examples and docs
 // left out.
-func DirEdges(ctx context.Context, db *sql.DB, snap int64, depth int) ([]DirEdge, error) {
-	edges, err := loadEdges(ctx, db, snap)
+func (g *Graph) DirEdges(ctx context.Context, snap int64, depth int) ([]DirEdge, error) {
+	edges, err := g.Store.Edges(ctx, snap)
 	return group(edges, depth), err
+}
+
+// maxPartDepth is the deepest level Parts cuts files to.
+const maxPartDepth = 6
+
+// Parts cuts each of the snapshot's files, generated ones aside, to its
+// directory's first levels, as DirEdges cuts them but over every file rather
+// than the linked ones: at the least depth, up to maxPartDepth, that gives at
+// least least directories. A test, example or doc file is cut to "". It also
+// returns the imports between the directories, most first: the parts a
+// wiki's sections are made of, and how they depend on each other.
+func (g *Graph) Parts(ctx context.Context, snap int64, least int) (map[string]string, []DirEdge, error) {
+	paths, err := g.Store.HandWritten(ctx, snap)
+	if err != nil {
+		return nil, nil, err
+	}
+	edges, err := g.Store.Edges(ctx, snap)
+	if err != nil {
+		return nil, nil, err
+	}
+	out, deps := parts(paths, edges, least)
+	return out, deps, nil
+}
+
+// parts is Parts for the files paths and their imports edges.
+func parts(paths []string, edges []edge, least int) (map[string]string, []DirEdge) {
+	out := map[string]string{}
+	var code []edge // each file of code once, as both ends: the tree is cut by their folders
+	for _, p := range paths {
+		if out[p] = ""; !secondary(p) {
+			code = append(code, edge{Src: p, Dst: p})
+		}
+	}
+	t := levels(code)
+	depth := 1
+	for ; depth < maxPartDepth; depth++ {
+		dirs := map[string]bool{}
+		for _, e := range code {
+			dirs[t.cut(e.Src, depth)] = true
+		}
+		if len(dirs) >= least {
+			break
+		}
+	}
+	for _, e := range code {
+		out[e.Src] = t.cut(e.Src, depth)
+	}
+	t.pairs = nil
+	for _, e := range edges {
+		if out[e.Src] != "" && out[e.Dst] != "" {
+			t.pairs = append(t.pairs, e.Src, e.Dst)
+		}
+	}
+	return out, t.group(depth)
 }
 
 // NewDirs returns the directories, cut to depth segments, that snapshot snap
@@ -130,56 +146,29 @@ func DirEdges(ctx context.Context, db *sql.DB, snap int64, depth int) ([]DirEdge
 // and docs aside: a subsystem a change added and wired in.
 // ponytail: plain segments, not group's levels, so a new Java package under
 // src/main/java goes unseen here; cut both snapshots by one levels if it matters.
-func NewDirs(ctx context.Context, db *sql.DB, base, snap int64, depth int) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT path FROM source_files WHERE snapshot_id = ?`, base)
+func (g *Graph) NewDirs(ctx context.Context, base, snap int64, depth int) ([]string, error) {
+	paths, err := g.Store.Paths(ctx, base)
 	if err != nil {
 		return nil, err
 	}
 	old := map[string]bool{}
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			rows.Close()
-			return nil, err
-		}
+	for _, p := range paths {
 		old[cut(p, depth)] = true
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	edges, err := loadEdges(ctx, db, snap)
+	edges, err := g.Store.Edges(ctx, snap)
 	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
 	var out []string
 	for _, e := range edges {
-		if d := cut(e.dst, depth); d != "." && !old[d] && !seen[d] && cut(e.src, depth) != d && !secondary(e.src) && !secondary(e.dst) {
+		if d := cut(e.Dst, depth); d != "." && !old[d] && !seen[d] && cut(e.Src, depth) != d && !secondary(e.Src) && !secondary(e.Dst) {
 			seen[d] = true
 			out = append(out, d)
 		}
 	}
 	sort.Strings(out)
 	return out, nil
-}
-
-// loadEdges reads all of a snapshot's edges.
-func loadEdges(ctx context.Context, db *sql.DB, snap int64) ([]edge, error) {
-	rows, err := db.QueryContext(ctx, `SELECT src, dst FROM file_edges WHERE snapshot_id = ?`, snap)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []edge
-	for rows.Next() {
-		var e edge
-		if err := rows.Scan(&e.src, &e.dst); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
 }
 
 // group counts edges between directories cut to depth levels, most first,
@@ -242,8 +231,8 @@ type tree struct {
 func levels(edges []edge) tree {
 	t := tree{holds: map[string]bool{}, below: map[string]map[string]bool{}}
 	for _, e := range edges {
-		if !secondary(e.src) && !secondary(e.dst) {
-			t.pairs = append(t.pairs, e.src, e.dst)
+		if !secondary(e.Src) && !secondary(e.Dst) {
+			t.pairs = append(t.pairs, e.Src, e.Dst)
 		}
 	}
 	for _, f := range t.pairs {

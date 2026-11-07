@@ -81,7 +81,7 @@ async function draw(code: string) {
  * A Mermaid diagram: one a wiki page or answer holds, or the one drawn from the import graph (label names it). Text
  * Mermaid cannot read, or that hides characters, shows as the code it is, those characters marked.
  */
-export function Mermaid({ code, label = 'Diagram' }: { code: string; label?: string }) {
+export function Mermaid({ code, label = '關係圖' }: { code: string; label?: string }) {
   const hides = splitHidden(code).length > 1
   const [svg, setSvg] = useState('')
   const [failed, setFailed] = useState(false)
@@ -122,7 +122,7 @@ export function Mermaid({ code, label = 'Diagram' }: { code: string; label?: str
       </pre>
     )
   }
-  if (!svg) return <div role="status" aria-label="Drawing the diagram" className="diagram min-h-40 animate-pulse" />
+  if (!svg) return <div role="status" aria-label="正在繪製關係圖" className="diagram min-h-40 animate-pulse" />
   // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
   return <div role="img" aria-label={label} className="diagram" dangerouslySetInnerHTML={{ __html: svg }} />
 }

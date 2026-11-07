@@ -38,7 +38,7 @@ export function FileView({
       target="_blank"
       rel="noreferrer"
     >
-      Open on {providerName(repo.provider)} <ExternalLinkIcon className="size-[13px]" />
+      在 {providerName(repo.provider)} 開啟 <ExternalLinkIcon className="size-[13px]" />
     </a>
   )
   return (

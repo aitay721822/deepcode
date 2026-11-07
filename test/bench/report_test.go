@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -34,9 +35,11 @@ type result struct {
 	Pages         int `json:"pages"`
 	PageCitations int `json:"pageCitations"`
 
-	IndexFailed  bool     `json:"indexFailed"`  // the base was not indexed: nothing else was measured
-	IndexSeconds float64  `json:"indexSeconds"` // the first index, at base
-	Wiki         *wikiRun `json:"wiki"`         // the first wiki, at base
+	IndexFailed  bool      `json:"indexFailed"`  // the base was not indexed: nothing else was measured
+	IndexSeconds float64   `json:"indexSeconds"` // the first index, at base
+	Wiki         *wikiRun  `json:"wiki"`         // the first wiki, at base: its last run
+	WikiRuns     []wikiRun `json:"wikiRuns"`     // each run of it, by pages written at a time
+	Tree         []string  `json:"pageTree"`     // head's wiki, as a Markdown list
 	Update       struct {
 		Failed         bool     `json:"failed"` // the head was not indexed: the rest is empty
 		ChangedFiles   int      `json:"changedFiles"`
@@ -54,6 +57,7 @@ type result struct {
 // when it reports none (then the characters stand in). A failed run's
 // numbers are what it did before it stopped.
 type wikiRun struct {
+	Parallel  int     `json:"parallel"` // pages written at a time
 	Failed    bool    `json:"failed"`
 	Seconds   float64 `json:"seconds"`
 	Pages     int     `json:"pages"`
@@ -62,6 +66,8 @@ type wikiRun struct {
 	OutTokens int     `json:"outputTokens"`
 	InChars   int     `json:"inputChars"`
 	OutChars  int     `json:"outputChars"`
+	// CachedTokens are the input tokens the server read from its prompt cache.
+	CachedTokens int `json:"cachedTokens"`
 }
 
 type evalResult struct {
@@ -72,12 +78,15 @@ type evalResult struct {
 }
 
 type answer struct {
-	Question          string  `json:"question"`
-	FirstTokenSeconds float64 `json:"firstTokenSeconds"`
-	Seconds           float64 `json:"seconds"`
-	Citations         int     `json:"citations"`
-	Answer            string  `json:"answer"`
-	Error             string  `json:"error,omitempty"`
+	Question          string   `json:"question"`
+	FirstTokenSeconds float64  `json:"firstTokenSeconds"`
+	Seconds           float64  `json:"seconds"`
+	Citations         int      `json:"citations"`
+	Missing           []string `json:"missingKeywords"` // the words it must hold and does not
+	SelfTalk          bool     `json:"selfTalk"`        // it thinks aloud
+	OtherLanguage     bool     `json:"otherLanguage"`   // not in the question's language
+	Answer            string   `json:"answer"`
+	Error             string   `json:"error,omitempty"`
 }
 
 // write saves the report as latest.json and latest.md in dir, and the JSON
@@ -122,11 +131,19 @@ func (rep report) markdown() string {
 			atHead(r, "languages", r.Languages), atHead(r, "chunks", r.Chunks), atHead(r, "symbols", r.Symbols), atHead(r, "edges", r.Edges),
 			atHead(r, "diagram", r.DiagramEdges), index, len(r.Errors))
 	}
-	p("\n## First wiki (base)\n\n| Repository | Time | Pages | Model calls | Input tokens | Output tokens | Input chars | Output chars | Page citations (head) |\n|---|---|---|---|---|---|---|---|---|")
+	p("\n## First wiki (base)\n\nTime by pages written at a time; the rest is the last run's.\n\n| Repository | Time | Pages | Model calls | Input tokens | Cached input | Output tokens | Input chars | Output chars | Page citations (head) |\n|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
 		if w := r.Wiki; w != nil {
-			p("| %s | %s | %s | %d | %s | %s | %d | %d | %s |", r.Repo, took(w), count(r, "base pages", w.Pages), w.Calls, tokens(w.InTokens), tokens(w.OutTokens),
-				w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations))
+			times := make([]string, len(r.WikiRuns))
+			for i, run := range r.WikiRuns {
+				times[i] = fmt.Sprintf("%d at a time: %s", run.Parallel, took(&run))
+			}
+			cached := "–"
+			if w.InTokens > 0 {
+				cached = fmt.Sprintf("%d (%d%%)", w.CachedTokens, 100*w.CachedTokens/w.InTokens)
+			}
+			p("| %s | %s | %s | %d | %s | %s | %s | %d | %d | %s |", r.Repo, cmp.Or(strings.Join(times, " · "), took(w)), count(r, "base pages", w.Pages), w.Calls,
+				tokens(w.InTokens), cached, tokens(w.OutTokens), w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations))
 		}
 	}
 	p("\n## Update by one commit (base → head)\n\n| Repository | Changed files | Index | Wiki | Pages rewritten | Model calls |\n|---|---|---|---|---|---|")
@@ -151,19 +168,53 @@ func (rep report) markdown() string {
 			p("| %s | %d | %.3f | %.3f |", r.Repo, e.Questions, e.Recall, e.MRR)
 		}
 	}
-	p("\n## Questions (head)\n\n| Repository | Question | First token | Total | Citations |\n|---|---|---|---|---|")
+	var asked, passed, uncited, talking, foreign int
 	for _, r := range rep.Repos {
 		for _, a := range r.Answers {
-			first, total, cites := fmt.Sprintf("%.1f s", a.FirstTokenSeconds), fmt.Sprintf("%.1f s", a.Seconds), fmt.Sprint(a.Citations)
-			if a.Error != "" {
-				first, total, cites = "failed", fmt.Sprintf("failed after %.1f s", a.Seconds), "–"
+			asked++
+			if a.Error == "" && len(a.Missing) == 0 {
+				passed++
 			}
-			p("| %s | %s | %s | %s | %s |", r.Repo, a.Question, first, total, cites)
+			if a.Error == "" && a.Citations == 0 {
+				uncited++
+			}
+			if a.SelfTalk {
+				talking++
+			}
+			if a.OtherLanguage {
+				foreign++
+			}
+		}
+	}
+	p("\n## Questions (head)\n\n%d of %d answers hold their keywords; %d cite nothing; %d think aloud; %d answer in another language.\n", passed, asked, uncited, talking, foreign)
+	p("| Repository | Question | First token | Total | Citations | Keywords | Self-talk | Language |\n|---|---|---|---|---|---|---|---|")
+	for _, r := range rep.Repos {
+		for _, a := range r.Answers {
+			first, total, cites, keys, talk, lang := fmt.Sprintf("%.1f s", a.FirstTokenSeconds), fmt.Sprintf("%.1f s", a.Seconds), fmt.Sprint(a.Citations), "pass", "no", "same"
+			if len(a.Missing) > 0 {
+				keys = "fail: no " + strings.Join(a.Missing, ", ")
+			}
+			if a.SelfTalk {
+				talk = "yes"
+			}
+			if a.OtherLanguage {
+				lang = "other"
+			}
+			if a.Error != "" {
+				first, total, cites, keys, lang = "failed", fmt.Sprintf("failed after %.1f s", a.Seconds), "–", "fail", "–"
+			}
+			p("| %s | %s | %s | %s | %s | %s | %s | %s |", r.Repo, a.Question, first, total, cites, keys, talk, lang)
 		}
 	}
 	for _, r := range rep.Repos {
 		if len(r.Errors) > 0 {
 			p("\n**%s errors:** %s", r.Repo, strings.Join(r.Errors, "; "))
+		}
+	}
+	p("\n## Page tree (head)")
+	for _, r := range rep.Repos {
+		if len(r.Tree) > 0 {
+			p("\n### %s (%d pages)\n\n%s", r.Repo, len(r.Tree), strings.Join(r.Tree, "\n"))
 		}
 	}
 	p("\n## Answers")
@@ -211,16 +262,22 @@ func tokens(n int) string {
 	return fmt.Sprint(n)
 }
 
-// TestMarkdown: failed steps read as failed, never as numbers, and the
-// report lands whole, with no file left aside.
+// TestMarkdown: failed steps read as failed, never as numbers; answers show
+// the keywords they miss and whether they think aloud, the first wiki its time
+// at each number of pages at a time, and head's wiki its tree; the report
+// lands whole, with no file left aside.
 func TestMarkdown(t *testing.T) {
-	ok, broken := result{Repo: "ok", Wiki: &wikiRun{Seconds: 10, Pages: 6}}, result{Repo: "broken", Wiki: &wikiRun{Failed: true, Seconds: 3}}
+	ok, broken := result{Repo: "ok", Wiki: &wikiRun{Seconds: 10, Pages: 6, InTokens: 200, CachedTokens: 150}}, result{Repo: "broken", Wiki: &wikiRun{Failed: true, Seconds: 3}}
 	ok.Update.Wiki, ok.Update.PagesRewritten = &wikiRun{Seconds: 5, Pages: 6}, 1
 	broken.Update.Failed, broken.Errors = true, []string{"update index: boom"}
 	ok.Failed = []string{"symbols", "pages rewritten"} // a count whose query failed
 	broken.Answers = []answer{{Question: "q", Error: "timeout"}}
+	ok.Answers = []answer{{Question: "k", Citations: 2, Missing: []string{"Mount"}, SelfTalk: true, OtherLanguage: true}}
+	ok.WikiRuns, ok.Tree = []wikiRun{{Parallel: 1, Seconds: 20}, {Parallel: 2, Seconds: 12}}, []string{"- 1 Overview", "- 2 Core", "  - 2.1 Mux"}
 	md := report{Repos: []result{ok, broken}}.markdown()
-	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed after 0.0 s | – |", "update index: boom", "Error: timeout"} {
+	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
+		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 0.0 s | 0.0 s | 2 | fail: no Mount | yes | other |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
+		"0 of 2 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language."} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the report lacks %q:\n%s", want, md)
 		}

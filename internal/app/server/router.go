@@ -36,7 +36,7 @@ func Router(auth *authapi.API, repos *repoapi.API, admin *adminapi.API, health g
 
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			httpx.Fail(c, http.StatusNotFound, "not found")
+			httpx.Fail(c, http.StatusNotFound, "找不到")
 			return
 		}
 		c.Status(http.StatusOK) // NoRoute starts at 404; the UI sets its own status

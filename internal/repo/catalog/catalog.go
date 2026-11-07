@@ -5,21 +5,21 @@
 package catalog
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/jobs"
+	"deepcode/internal/repo/catalog/store"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
 )
 
 type Catalog struct {
-	DB         *sql.DB
+	Store      *store.Store
 	Queue      *jobs.Queue
 	Git        *git.Client
-	Servers    *gitserver.Store
+	Servers    *gitserver.Service
 	Cache      *cache.Cache // file lists
 	MaxRepoKB  int64
 	ChatModel  string // "" when no chat model is configured: no wiki
@@ -28,10 +28,10 @@ type Catalog struct {
 
 // Kinds of failure a caller can act on; the HTTP layer maps each to a status.
 var (
-	ErrNotFound = errors.New("not found")
-	ErrInvalid  = errors.New("invalid request")
-	ErrTooLarge = errors.New("too large")
-	ErrUpstream = errors.New("upstream failure") // the git server or its API
+	ErrNotFound = store.ErrNotFound
+	ErrInvalid  = errors.New("無效的請求")
+	ErrTooLarge = errors.New("太大")
+	ErrUpstream = errors.New("上游伺服器錯誤") // the git server or its API
 )
 
 // kinded classifies err as kind: errors.Is(e, kind) holds and the message

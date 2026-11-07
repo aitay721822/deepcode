@@ -52,7 +52,7 @@ export function ConfirmDialog({
           </p>
         )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
           <Button
             variant="destructive"
             busy={busy}

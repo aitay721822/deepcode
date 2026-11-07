@@ -20,10 +20,10 @@ import (
 // API serves the admin console: users, roles, git servers and jobs, each
 // behind its permission.
 type API struct {
-	Sessions *session.Store // the sign-up switch, and checking a long stream's viewer again
-	Accounts *account.Store
-	Roles    *role.Store
-	Servers  *gitserver.Store
+	Sessions *session.Service // the sign-up switch, and checking a long stream's viewer again
+	Accounts *account.Service
+	Roles    *role.Service
+	Servers  *gitserver.Service
 	Catalog  *catalog.Catalog
 	Queue    *jobs.Queue
 	Bus      *events.Bus
@@ -51,6 +51,8 @@ func (a *API) Mount(r gin.IRouter) {
 	servers.PATCH("/:id", a.updateServer)
 	servers.DELETE("/:id", a.deleteServer)
 	servers.POST("/:id/test", a.testServer)
+	servers.GET("/:id/oauth", a.authorizeServer)
+	r.GET("/oauth/callback", httpx.Require(role.ServersManage), a.oauthCallback)
 
 	work := r.Group("/jobs", httpx.Require(role.JobsView))
 	work.GET("", a.listJobs)
@@ -85,7 +87,11 @@ func (a *API) repositories(c *gin.Context) {
 	}
 	out := make([]gin.H, len(list))
 	for i, r := range list {
-		out[i] = gin.H{"id": r.PublicID, "owner": r.Owner, "name": r.Name, "provider": r.Provider, "serverName": r.ServerName}
+		updated := "" // when its published snapshot was indexed; never indexed: none
+		if r.Snapshot != nil {
+			updated = r.Snapshot.IndexedAt
+		}
+		out[i] = gin.H{"id": r.PublicID, "owner": r.Owner, "name": r.Name, "provider": r.Provider, "serverName": r.ServerName, "updatedAt": updated}
 	}
 	c.JSON(http.StatusOK, out)
 }

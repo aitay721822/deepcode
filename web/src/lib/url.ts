@@ -4,6 +4,16 @@ export const isId = (s?: string) => !!s && /^[1-9]\d*$/.test(s) && Number.isSafe
 /** A path segment naming a repository: its CUID2, a letter and 23 more letters or digits. */
 export const isRepoId = (s?: string) => !!s && /^[a-z][0-9a-z]{23}$/.test(s)
 
+/** A route's validateSearch: the named query parameters that are present, as the strings the address holds. */
+export function queryParams<K extends string>(search: Record<string, unknown>, ...keys: K[]) {
+  const params: Partial<Record<K, string>> = {}
+  for (const k of keys) {
+    const v = search[k]
+    if (typeof v === 'string') params[k] = v
+  }
+  return params
+}
+
 /** Percent-encodes each segment of a repository path, keeping the slashes. */
 export const encodePath = (p: string) => p.split('/').map(encodeURIComponent).join('/')
 

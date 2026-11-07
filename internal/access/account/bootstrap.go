@@ -11,9 +11,8 @@ import (
 // Bootstrap creates the first administrator, "admin", while there are no
 // users: with password, or with a generated one it returns when password is
 // "".
-func (s *Store) Bootstrap(ctx context.Context, password string) (created bool, generated string, err error) {
-	var n int
-	if err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM users`).Scan(&n); err != nil || n > 0 {
+func (s *Service) Bootstrap(ctx context.Context, password string) (created bool, generated string, err error) {
+	if n, err := s.Store.Count(ctx); err != nil || n > 0 {
 		return false, "", err
 	}
 	if password == "" {

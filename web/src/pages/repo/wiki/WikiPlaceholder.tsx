@@ -36,7 +36,7 @@ export function WikiPlaceholder({
           {error}
         </p>
         <Button variant="outline" onClick={onReload}>
-          Retry
+          重試
         </Button>
       </Notice>
     )
@@ -51,28 +51,26 @@ export function WikiPlaceholder({
     return (
       <Notice>
         <p className="text-muted-foreground">
-          Set DEEPCODE_CHAT_MODEL to generate the wiki. Files and symbol search already work.
+          請先設定 DEEPCODE_CHAT_MODEL 才能產生 Wiki。檔案與 Symbol 搜尋已可使用。
         </p>
       </Notice>
     )
   }
   const indexing = isActive(repo.job) // an index job: a wiki is written after it
   return (
-    <Notice title="No wiki yet">
-      <p className="text-muted-foreground">
-        {indexing && 'It is written once indexing finishes. '}Files and symbol search already work.
-      </p>
+    <Notice title="還沒有 Wiki">
+      <p className="text-muted-foreground">{indexing && '索引建立完成後就會產生。'}檔案與 Symbol 搜尋已可使用。</p>
       {sync && !indexing && (
         <>
           <Button variant="outline" busy={sync.busy} onClick={sync.run}>
-            {sync.busy ? <Spinner /> : <RefreshCwIcon />} Sync
+            {sync.busy ? <Spinner /> : <RefreshCwIcon />} 同步
           </Button>
           {sync.error && (
             <p className="text-sm text-destructive" role="alert">
               {sync.error}
             </p>
           )}
-          {sync.upToDate && <Status className="text-sm text-muted-foreground">Already at the latest commit</Status>}
+          {sync.upToDate && <Status className="text-sm text-muted-foreground">已是最新的 Commit</Status>}
         </>
       )}
     </Notice>

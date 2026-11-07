@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"deepcode/internal/access/account"
+	"deepcode/internal/access/account/store"
 )
 
 // passwd sets a user's password from the first line of stdin and ends their
@@ -29,7 +30,7 @@ func passwd(args []string) error {
 	}
 	defer db.Close()
 	ctx := context.Background()
-	accounts := &account.Store{DB: db}
+	accounts := &account.Service{Store: &store.Store{DB: db}}
 	u, err := accounts.ByUsername(ctx, fs.Arg(0))
 	if errors.Is(err, account.ErrNotFound) {
 		return fmt.Errorf("there is no user %q", fs.Arg(0))

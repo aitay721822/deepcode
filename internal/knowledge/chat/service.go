@@ -4,13 +4,14 @@ package chat
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
+	"deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/platform/ai"
@@ -19,7 +20,7 @@ import (
 )
 
 type Service struct {
-	DB        *sql.DB
+	Store     *store.Store
 	Catalog   *catalog.Catalog
 	Retriever *retrieval.Retriever
 	Chat      *ai.OpenAI // nil: not configured
@@ -30,12 +31,12 @@ type Service struct {
 
 // What an asker can act on. Explain shows these, and only these, to them.
 var (
-	ErrNotFound = errors.New("conversation not found")
-	errQuestion = errors.New("a question of 1 to 4000 characters is required")
-	errNoModel  = errors.New("no chat model is configured: set DEEPCODE_CHAT_MODEL")
-	errIndexing = errors.New("the repository is still being indexed")
-	errBusy     = fmt.Errorf("at most %d of your answers are written at a time; ask again once one has finished", maxAsking)
-	errModel    = errors.New("the language model did not answer; try again later")
+	ErrNotFound = store.ErrNotFound
+	errQuestion = errors.New("問題長度必須為 1 到 4000 個字元")
+	errNoModel  = errors.New("尚未設定對話模型：請設定 DEEPCODE_CHAT_MODEL")
+	errIndexing = errors.New("Repository 仍在建立索引中")
+	errBusy     = fmt.Errorf("同時最多只能產生 %d 個回答；請等其中一個完成後再提問", maxAsking)
+	errModel    = errors.New("語言模型沒有回應；請稍後再試")
 )
 
 // Explain is what the asker is told about err from Ask: one of the errors
@@ -52,7 +53,7 @@ func Explain(err error) (msg string, logIt bool) {
 	if errors.Is(err, errModel) {
 		return errModel.Error(), true
 	}
-	return "the answer failed; an administrator can find the details in the server log", true
+	return "回答失敗；管理員可在伺服器記錄檔中查看詳細資訊", true
 }
 
 type Request struct {
@@ -76,7 +77,10 @@ const (
 
 // Ask runs one question end to end, emitting: conversation, search* (a deep
 // answer's further rounds), evidence, delta*, then done (the stored,
-// citation-checked message) or error.
+// citation-checked message) or error. A draft that recheck turns down, as
+// may the draft written in its place, is followed by search (its one more
+// round, if it searched), evidence and delta* again: the answer written anew;
+// a rewrite that fails is followed by evidence once more, the standing draft's.
 func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	q := strings.TrimSpace(req.Question)
 	if q == "" || utf8.RuneCountInString(q) > maxQuestion {
@@ -107,7 +111,7 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 		return err
 	}
 	// Stored before the answer, so a question whose answer failed stays in the conversation.
-	if _, err := s.addMessage(ctx, conv.id, "user", q, nil); err != nil {
+	if _, err := s.Store.AddMessage(ctx, conv.id, "user", q, nil); err != nil {
 		return err
 	}
 	repo, asked := r.Owner+"/"+r.Name, retrievalQuery(history, q)
@@ -125,20 +129,55 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 		}
 		budget = deepEvidenceChars
 	}
-	sources, used := evidence.Format(res.Hits, budget)
-	emit("evidence", map[string]any{"sources": sourceList(used), "fts": res.FTS, "vector": res.Vector, "symbol": res.Symbol,
-		"graph": res.Graph, "rounds": rounds})
-
-	answer := noEvidence
-	if len(used) == 0 {
-		emit("delta", answer)
-	} else if answer, err = s.Chat.Stream(ctx, prompt(repo, conv.snap.CommitSHA, history, background, sources, q), func(d string) { emit("delta", d) }); err != nil {
-		return fmt.Errorf("%w: %w", errModel, err)
+	// Each evidence event starts the answer: a second one, after a draft that recheck turned down, starts it anew.
+	show := func(used []retrieval.Hit, res retrieval.Result, rounds int) {
+		emit("evidence", map[string]any{"sources": sourceList(used), "fts": res.FTS, "vector": res.Vector, "symbol": res.Symbol,
+			"graph": res.Graph, "rounds": rounds})
 	}
-	content, cites := evidence.LinkCitations(ai.StripThinking(answer), used, func(c evidence.Citation) string {
+	write := func(res retrieval.Result, rounds int, note string) (answer, sources string, used []retrieval.Hit, err error) {
+		sources, used = evidence.Format(res.Hits, budget)
+		show(used, res, rounds)
+		if len(used) == 0 {
+			emit("delta", noEvidence)
+			return noEvidence, sources, used, nil
+		}
+		answer, err = s.Chat.Stream(ctx, prompt(repo, conv.snap.CommitSHA, history, background, sources, q, note), func(d string) { emit("delta", d) })
+		if err != nil {
+			return "", "", nil, fmt.Errorf("%w: %w", errModel, err)
+		}
+		return ai.StripThinking(answer), sources, used, nil
+	}
+	answer, sources, used, err := write(res, rounds, "")
+	if err != nil {
+		return err
+	}
+	// The check only improves a sound draft: when it fails, the draft stands
+	// (done replaces whatever the rewrite had streamed), unless the asker left.
+	for i := 0; i < maxRechecks && len(used) > 0; i++ {
+		more, n, again, err := s.recheck(ctx, conv.snap.ID, repo, asked, answer, sources, res, rounds, emit)
+		if err == nil && again {
+			var a, src string
+			var u []retrieval.Hit
+			if a, src, u, err = write(more, n, rewriteNote); err == nil {
+				answer, sources, used, res, rounds = a, src, u, more, n
+				continue
+			}
+			show(used, res, rounds) // the rewrite's sources were listed: list the standing draft's again
+		}
+		if err != nil && ctx.Err() != nil {
+			return err
+		} else if err != nil {
+			log.Printf("chat: the draft stands, as checking it failed: %v", err)
+		}
+		break
+	}
+	content, cites := evidence.LinkCitations(answer, used, func(c evidence.Citation) string {
 		return gitserver.SourceURL(r.Provider, r.URL, conv.snap.CommitSHA, c.Path, c.StartLine, c.EndLine)
 	})
-	msg, err := s.addMessage(ctx, conv.id, "assistant", content, cites)
+	if len(cites) == 0 && answer != noEvidence {
+		content += "\n\n" + uncited(answerLanguage(q, history))
+	}
+	msg, err := s.Store.AddMessage(ctx, conv.id, "assistant", content, cites)
 	if err != nil {
 		return err
 	}

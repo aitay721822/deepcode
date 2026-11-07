@@ -30,7 +30,7 @@ export function LoadError({
         {error}
       </p>
       <Button variant="outline" size="sm" onClick={retry}>
-        Retry
+        重試
       </Button>
       {children}
     </div>

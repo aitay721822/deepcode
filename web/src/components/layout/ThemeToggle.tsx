@@ -29,7 +29,7 @@ function Toggle() {
       variant="ghost"
       size="icon-sm"
       className="text-muted-foreground hover:text-foreground"
-      aria-label={`Switch to ${isDarkMode ? 'light' : 'dark'} theme`}
+      aria-label={`切換為${isDarkMode ? '淺色' : '深色'}主題`}
       onClick={toggleSwitchTheme}
     >
       <AnimatePresence mode="wait" initial={false}>

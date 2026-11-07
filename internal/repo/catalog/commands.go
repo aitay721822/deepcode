@@ -2,34 +2,36 @@ package catalog
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log"
 	"strings"
 
 	"deepcode/internal/platform/jobs"
+	"deepcode/internal/repo/catalog/store"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
 	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/provider"
 )
 
+// OnAdd writes in the transaction that adds a repository.
+type OnAdd = store.OnAdd
+
 // Import resolves raw (a repository URL, or a path on git server serverID,
 // 0 for the first server) against the configured git servers, pins the
 // repository's HEAD commit, adds the repository and queues its index job.
 // onAdd, unless nil, writes in the transaction that adds the repository. A
 // repository imported before is returned unchanged, with created false.
-func (c *Catalog) Import(ctx context.Context, raw string, serverID int64, onAdd func(tx *sql.Tx, id int64) error) (repo Repo, created bool, err error) {
+func (c *Catalog) Import(ctx context.Context, raw string, serverID int64, onAdd OnAdd) (repo Repo, created bool, err error) {
 	srv, path, err := c.Servers.Resolve(ctx, raw, serverID)
 	if err != nil {
 		return Repo{}, false, err
 	}
-	var id int64
-	err = c.DB.QueryRowContext(ctx, `SELECT id FROM repositories WHERE lower(url) = lower(?)`, srv.WebURL(path)).Scan(&id)
+	id, err := c.Store.RepoID(ctx, srv.WebURL(path))
 	if err == nil {
 		repo, err = c.Get(ctx, id)
 		return repo, false, err
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	} else if !errors.Is(err, ErrNotFound) {
 		return Repo{}, false, err
 	}
 	meta, err := provider.Fetch(ctx, srv, path)
@@ -44,10 +46,10 @@ func (c *Catalog) Import(ctx context.Context, raw string, serverID int64, onAdd 
 	// The server names the canonical path (a renamed repository's new name);
 	// it is held to the rules of a typed path.
 	if !gitserver.ValidPath(srv.Kind, meta.Path) {
-		return Repo{}, false, failf(ErrUpstream, "%s answered with the repository path %q", srv.Name, meta.Path)
+		return Repo{}, false, failf(ErrUpstream, "%s 回傳了無效的 Repository 路徑 %q", srv.Name, meta.Path)
 	}
 	if meta.SizeKB > c.MaxRepoKB {
-		return Repo{}, false, failf(ErrTooLarge, "%s is %d MB, over the %d MB limit (DEEPCODE_MAX_REPO_MB)",
+		return Repo{}, false, failf(ErrTooLarge, "%s 有 %d MB，超過 %d MB 的上限（DEEPCODE_MAX_REPO_MB）",
 			meta.Path, meta.SizeKB>>10, c.MaxRepoKB>>10)
 	}
 	url := srv.WebURL(meta.Path)
@@ -71,35 +73,14 @@ func (c *Catalog) Import(ctx context.Context, raw string, serverID int64, onAdd 
 // transaction. A repository already at url (imported meanwhile, or under the
 // name the user typed before a rename) is returned with created false, and
 // onAdd does not run for it.
-func (c *Catalog) add(ctx context.Context, srv gitserver.Server, url string, meta provider.Meta, onAdd func(*sql.Tx, int64) error) (id int64, created bool, err error) {
-	tx, err := c.DB.BeginTx(ctx, nil) // BEGIN IMMEDIATE: no other import lands between the check and the insert
-	if err != nil {
-		return 0, false, err
-	}
-	defer tx.Rollback()
-	err = tx.QueryRowContext(ctx, `SELECT id FROM repositories WHERE lower(url) = lower(?)`, url).Scan(&id)
-	if err == nil {
-		return id, false, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return 0, false, err
-	}
+func (c *Catalog) add(ctx context.Context, srv gitserver.Server, url string, meta provider.Meta, onAdd OnAdd) (id int64, created bool, err error) {
 	cut := strings.LastIndex(meta.Path, "/")
-	// Selecting the server keeps a server deleted since it was resolved from
-	// getting a repository.
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO repositories(url, owner, name, description, stars, default_branch, git_server_id)
-		SELECT ?, ?, ?, ?, ?, ?, id FROM git_servers WHERE id = ?
-		RETURNING id`, url, meta.Path[:cut], meta.Path[cut+1:], meta.Description, meta.Stars, meta.DefaultBranch, srv.ID).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, false, failf(ErrInvalid, "the git server %s was removed", srv.Name)
+	id, created, err = c.Store.Add(ctx, store.NewRepo{URL: url, Owner: meta.Path[:cut], Name: meta.Path[cut+1:], Description: meta.Description,
+		Stars: meta.Stars, DefaultBranch: meta.DefaultBranch, ServerID: srv.ID}, onAdd)
+	if errors.Is(err, ErrNotFound) { // the server was deleted since it was resolved
+		return 0, false, failf(ErrInvalid, "Git 伺服器 %s 已被移除", srv.Name)
 	}
-	if err == nil && onAdd != nil {
-		err = onAdd(tx, id)
-	}
-	if err != nil {
-		return 0, false, err
-	}
-	return id, true, tx.Commit()
+	return id, created, err
 }
 
 // Sync queues what brings repository id up to date: an index job when the
@@ -108,13 +89,9 @@ func (c *Catalog) add(ctx context.Context, srv gitserver.Server, url string, met
 // failed. A nil job means it is up to date. Unchanged files and vectors are
 // reused by the indexer.
 func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
-	var sha, model, wikiStatus sql.NullString
-	var read sql.NullInt64
-	err := c.DB.QueryRowContext(ctx, `
-		SELECT s.commit_sha, s.embedding_model, s.wiki_status, s.analyzer
-		FROM repositories r LEFT JOIN snapshots s ON s.id = r.ready_snapshot_id WHERE r.id = ?`, id).Scan(&sha, &model, &wikiStatus, &read)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, failf(ErrNotFound, "repository not found")
+	pub, err := c.Store.Published(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return nil, failf(ErrNotFound, "找不到 Repository")
 	} else if err != nil {
 		return nil, err
 	}
@@ -128,9 +105,9 @@ func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
 	}
 	var job jobs.Job
 	switch {
-	case head != sha.String || model.String != c.EmbedModel || read.Int64 < analyzer.Version:
+	case head != pub.CommitSHA || pub.EmbeddingModel != c.EmbedModel || pub.Analyzer < analyzer.Version:
 		job, err = c.Queue.EnqueueIndex(ctx, id, head, c.EmbedModel)
-	case c.ChatModel != "" && (wikiStatus.String == WikiNone || wikiStatus.String == WikiFailed):
+	case c.ChatModel != "" && (pub.WikiStatus == WikiNone || pub.WikiStatus == WikiFailed):
 		job, err = c.Queue.EnqueueWiki(ctx, id, head)
 	default:
 		return nil, nil
@@ -163,8 +140,7 @@ func (c *Catalog) Poll(ctx context.Context, id int64) (*jobs.Job, error) {
 		return nil, err
 	}
 	if r.Snapshot != nil && r.Snapshot.CommitSHA == head {
-		var read int
-		if err := c.DB.QueryRowContext(ctx, `SELECT analyzer FROM snapshots WHERE id = ?`, r.Snapshot.ID).Scan(&read); err != nil || read >= analyzer.Version {
+		if read, err := c.Store.Analyzer(ctx, r.Snapshot.ID); err != nil || read >= analyzer.Version {
 			return nil, err
 		}
 	}
@@ -190,5 +166,5 @@ func lsRemoteFailed(err error) error {
 		return kinded{ErrInvalid, err}
 	}
 	log.Printf("catalog: %v", err)
-	return failf(ErrUpstream, "git could not read the repository from its server; an administrator can find the details in the server log")
+	return failf(ErrUpstream, "Git 無法從伺服器讀取這個 Repository；管理員可在伺服器記錄檔中查看詳細資訊")
 }

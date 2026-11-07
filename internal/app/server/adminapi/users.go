@@ -42,7 +42,7 @@ func (a *API) setSignUp(c *gin.Context) {
 		return
 	}
 	if body.Open == nil {
-		httpx.Fail(c, http.StatusBadRequest, `"open" (true or false) is required`)
+		httpx.Fail(c, http.StatusBadRequest, `"open" 為必填（true 或 false）`)
 		return
 	}
 	err := a.Sessions.SetSignUpOpen(c.Request.Context(), *body.Open)

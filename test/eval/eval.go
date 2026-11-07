@@ -24,7 +24,7 @@ const Hits = 10
 type Question struct {
 	Ask   string   // as a user asks it
 	Terms string   // for a question none of whose words the code holds: the model's search terms for it, frozen
-	Want  []string // the files that answer it
+	Want  []string // the files that answer it; file#Name wants the chunk of file that holds symbol Name
 }
 
 type Corpus struct {
@@ -44,13 +44,17 @@ type Result struct {
 func Run(ctx context.Context, r *retrieval.Retriever, snap int64, c Corpus) (Result, error) {
 	var res Result
 	for _, q := range c.Questions {
-		files, err := search(ctx, r, snap, q)
+		hits, err := search(ctx, r, snap, q)
 		if err != nil {
 			return res, err
 		}
-		rec, rr := score(files, q.Want)
+		rec, rr := score(hits, q.Want)
 		res.Recall, res.MRR = res.Recall+rec, res.MRR+rr
 		if rec < 1 {
+			files := make([]string, len(hits))
+			for i, h := range hits {
+				files[i] = h.Path
+			}
 			res.Misses = append(res.Misses, fmt.Sprintf("%q: want %v, found %v", q.Ask, q.Want, files))
 		}
 	}
@@ -59,12 +63,12 @@ func Run(ctx context.Context, r *retrieval.Retriever, snap int64, c Corpus) (Res
 	return res, nil
 }
 
-// search returns the files of q's hits in order, searched as chat's search
+// search returns q's hits in order, searched as chat's search
 // does it: the question alone, then, when none of its words match the code,
 // with the model's terms in front.
 // ponytail: a copy of chat.Service.search's rule, without its model; follow
 // it if that rule changes.
-func search(ctx context.Context, r *retrieval.Retriever, snap int64, q Question) ([]string, error) {
+func search(ctx context.Context, r *retrieval.Retriever, snap int64, q Question) ([]retrieval.Hit, error) {
 	res, err := r.Search(ctx, snap, q.Ask, Hits)
 	if err == nil && res.FTS == 0 {
 		if q.Terms == "" {
@@ -73,29 +77,33 @@ func search(ctx context.Context, r *retrieval.Retriever, snap int64, q Question)
 		terms := strings.Fields(q.Terms)
 		res, err = r.Search(ctx, snap, strings.Join(terms[:min(len(terms), 24)], " ")+"\n"+q.Ask, Hits)
 	}
-	if err != nil {
-		return nil, err
-	}
-	files := make([]string, len(res.Hits))
-	for i, h := range res.Hits {
-		files[i] = h.Path
-	}
-	return files, nil
+	return res.Hits, err
 }
 
-// score is the share of want that files hold, and the reciprocal rank of the
-// first of files in want (0 when none is, or want is empty).
-func score(files, want []string) (recall, rr float64) {
+// score is the share of want that hits hold, and the reciprocal rank of the
+// first hit that one of want names (0 when none does, or want is empty).
+func score(hits []retrieval.Hit, want []string) (recall, rr float64) {
 	if len(want) == 0 {
 		return 0, 0
 	}
 	for _, w := range want {
-		if slices.Contains(files, w) {
+		if slices.ContainsFunc(hits, func(h retrieval.Hit) bool { return holds(h, w) }) {
 			recall++
 		}
 	}
-	if i := slices.IndexFunc(files, func(f string) bool { return slices.Contains(want, f) }); i >= 0 {
+	if i := slices.IndexFunc(hits, func(h retrieval.Hit) bool {
+		return slices.ContainsFunc(want, func(w string) bool { return holds(h, w) })
+	}); i >= 0 {
 		rr = 1 / float64(i+1)
 	}
 	return recall / float64(len(want)), rr
+}
+
+// holds reports whether hit h is what want names: its file, or with #Name the
+// chunk of that file holding symbol Name (a method too: Type.Name).
+func holds(h retrieval.Hit, want string) bool {
+	path, name, ok := strings.Cut(want, "#")
+	return h.Path == path && (!ok || slices.ContainsFunc(strings.Split(h.Symbol, ", "), func(s string) bool {
+		return s == name || strings.HasSuffix(s, "."+name)
+	}))
 }

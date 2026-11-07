@@ -20,7 +20,7 @@ const (
 
 // Session makes the principal of a valid session cookie available to the
 // handlers through Principal.
-func Session(sessions *session.Store) gin.HandlerFunc {
+func Session(sessions *session.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if token := SessionToken(c); token != "" {
 			p, err := sessions.Authenticate(c.Request.Context(), token)
@@ -54,7 +54,7 @@ func SignedIn(c *gin.Context) {
 func Require(perm role.Permission) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if p := Principal(c); p == nil || !p.Can(perm) {
-			Fail(c, http.StatusForbidden, "you do not have the "+string(perm)+" permission")
+			Fail(c, http.StatusForbidden, "你沒有 "+string(perm)+" 權限")
 		}
 	}
 }
@@ -85,9 +85,9 @@ func Visible(c *gin.Context, perm role.Permission, id int64) bool {
 	p := Principal(c)
 	switch {
 	case p == nil || !p.CanOn(role.RepoRead, id):
-		Fail(c, http.StatusNotFound, "repository not found")
+		Fail(c, http.StatusNotFound, "找不到 Repository")
 	case !p.CanOn(perm, id):
-		Fail(c, http.StatusForbidden, "you do not have the "+string(perm)+" permission on this repository")
+		Fail(c, http.StatusForbidden, "你沒有這個 Repository 的 "+string(perm)+" 權限")
 	default:
 		return true
 	}

@@ -2,14 +2,14 @@ import type { Job, Repo } from '../../types/repo/repo'
 
 export const STAGES: Record<Job['kind'], [string, string][]> = {
   index: [
-    ['fetch', 'Fetch the commit'],
-    ['parse', 'Parse files and symbols'],
-    ['embed', 'Embed chunks'],
-    ['publish', 'Publish the snapshot'],
+    ['fetch', '取得 Commit'],
+    ['parse', '解析檔案與 Symbol'],
+    ['embed', '建立 Chunk 向量'],
+    ['publish', '發布版本'],
   ],
   wiki: [
-    ['plan', 'Plan the wiki'],
-    ['write', 'Write pages'],
+    ['plan', '規劃 Wiki'],
+    ['write', '撰寫頁面'],
   ],
 }
 
@@ -27,7 +27,7 @@ export const jobFraction = (job: Job) =>
 
 /** The stage a job is at: "Parse files and symbols", or "Wiki queued" before it starts. */
 export function stageName(job: Job) {
-  if (job.status === 'queued') return job.kind === 'wiki' ? 'Wiki queued' : 'Indexing queued'
+  if (job.status === 'queued') return job.kind === 'wiki' ? 'Wiki 排隊中' : '索引排隊中'
   return STAGES[job.kind][stageIndex(job)][1]
 }
 

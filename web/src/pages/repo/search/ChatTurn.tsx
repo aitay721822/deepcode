@@ -1,13 +1,13 @@
 import { motion } from 'motion/react'
 import { memo, useState } from 'react'
-import { linkMarkers } from '../../components/source/citations'
-import { Markdown } from '../../components/source/Markdown'
-import { Card } from '../../components/ui/display/card'
-import { SkeletonText } from '../../components/ui/feedback/skeleton'
-import { Status } from '../../components/ui/feedback/status'
-import { rise } from '../../lib/style/motion'
-import type { Citation } from '../../types/repo/code'
-import type { Repo } from '../../types/repo/repo'
+import { linkMarkers } from '../../../components/source/citations'
+import { Markdown } from '../../../components/source/Markdown'
+import { Card } from '../../../components/ui/display/card'
+import { SkeletonText } from '../../../components/ui/feedback/skeleton'
+import { Status } from '../../../components/ui/feedback/status'
+import { rise } from '../../../lib/style/motion'
+import type { Citation } from '../../../types/repo/code'
+import type { Repo } from '../../../types/repo/repo'
 import type { Turn } from './useChat'
 
 const question = 'mb-4 font-serif leading-[1.15] font-normal [overflow-wrap:anywhere]'
@@ -15,9 +15,9 @@ const question = 'mb-4 font-serif leading-[1.15] font-normal [overflow-wrap:anyw
 // What a screen reader hears while a question asked here is answered: the answer itself streams in
 // too fast to be read out as it comes. Errors and interruptions speak for themselves below.
 const progress: Partial<Record<Turn['status'], string>> = {
-  searching: 'Searching the code…',
-  answering: 'Writing the answer…',
-  done: 'Answer ready.',
+  searching: '正在搜尋程式碼…',
+  answering: '正在撰寫回答…',
+  done: '回答已完成。',
 }
 
 /**
@@ -62,9 +62,7 @@ export const ChatTurn = memo(function ChatTurn({
             {turn.error}
           </p>
         )}
-        {turn.status === 'interrupted' && (
-          <Status className="text-[13px] text-muted-foreground">Answer interrupted.</Status>
-        )}
+        {turn.status === 'interrupted' && <Status className="text-[13px] text-muted-foreground">回答已中斷。</Status>}
       </Card>
     </motion.article>
   )

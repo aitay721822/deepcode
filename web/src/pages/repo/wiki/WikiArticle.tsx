@@ -51,8 +51,8 @@ export function WikiArticle({
       {files.length > 0 && (
         <details className="group mb-9 rounded-lg border bg-card">
           <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 font-mono text-[11.5px] font-medium tracking-[0.12em] uppercase [&::-webkit-details-marker]:hidden">
-            <ChevronRightIcon className="size-3.5 text-brand transition-transform group-open:rotate-90" /> Relevant
-            source files
+            <ChevronRightIcon className="size-3.5 text-brand transition-transform group-open:rotate-90" />{' '}
+            相關原始碼檔案
             <span className="ml-auto text-muted-foreground">{files.length}</span>
           </summary>
           <ul className="border-t border-dashed py-3 pr-4 pl-10 font-mono text-[12.5px] leading-[2]">
@@ -72,9 +72,9 @@ export function WikiArticle({
       )}
       {page.diagram && (
         <figure className="mb-9">
-          <Mermaid code={page.diagram} label="Imports between directories" />
+          <Mermaid code={page.diagram} label="資料夾之間的 import 關係" />
           <figcaption className="-mt-2 text-center font-mono text-[12.5px] text-muted-foreground">
-            Imports between directories, drawn from the code
+            資料夾之間的 import 關係，依程式碼繪製
           </figcaption>
         </figure>
       )}
@@ -88,7 +88,7 @@ export function WikiArticle({
       ) : writing ? (
         <SkeletonText lines={8} />
       ) : (
-        <p className="font-serif text-[17px] text-muted-foreground italic">This page was not written.</p>
+        <p className="font-serif text-[17px] text-muted-foreground italic">這個頁面未能產生。</p>
       )}
     </article>
   )

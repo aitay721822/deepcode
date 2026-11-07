@@ -55,7 +55,9 @@ var defaults = map[string]any{
 	"max_file_kb":  512,
 	"max_index_mb": 200,
 
-	"wiki_language":   "English",
+	"wiki_language":   "Traditional Chinese (Taiwan)",
+	"wiki_parallel":   1,  // pages planned or written at a time
+	"wiki_max_pages":  64, // the most pages a wiki gets
 	"admin_password":  "",
 	"secret_key":      "",
 	"session_ttl":     30 * 24 * time.Hour,
@@ -123,6 +125,8 @@ func Load() (cfg app.Config, addr string, err error) {
 		MaxIndexMB: p.whole("max_index_mb"),
 
 		WikiLanguage: p.str("wiki_language"),
+		WikiParallel: p.whole("wiki_parallel"),
+		WikiMaxPages: p.whole("wiki_max_pages"),
 		GitProtocols: "http:https",
 
 		AdminPassword: p.str("admin_password"),

@@ -3,11 +3,13 @@
 // listed for it.
 package role
 
+import "deepcode/internal/access/role/store"
+
 // Permission names one thing a user may do. The repo.read, repo.chat and
 // repo.sync permissions (repoScoped) apply to a role's repositories. The
 // others are not tied to a role's repositories, though jobs.view shows only
 // the jobs of repositories the user can read.
-type Permission string
+type Permission = store.Permission
 
 // repoScoped are the permissions a role grants on its repositories only.
 var repoScoped = []Permission{RepoRead, RepoChat, RepoSync}
@@ -30,13 +32,13 @@ type Info struct {
 
 // Permissions lists every permission in the order the admin console shows them.
 var Permissions = []Info{
-	{RepoRead, "See the role's repositories: their wiki, files and search"},
-	{RepoChat, "Ask questions about the role's repositories"},
-	{RepoSync, "Sync the role's repositories with their git server"},
-	{RepoImport, "Import repositories from the git servers; a new one is added to the importer's roles that hold this permission"},
-	{JobsView, "See the indexing and wiki jobs of the repositories they can read, with live output"},
-	{UsersManage, "Manage users and roles, which includes granting any permission"},
-	{ServersManage, "Manage git servers and their access tokens"},
+	{RepoRead, "檢視此角色的 Repository：Wiki、檔案與搜尋"},
+	{RepoChat, "針對此角色的 Repository 提問"},
+	{RepoSync, "將此角色的 Repository 與其 Git 伺服器同步"},
+	{RepoImport, "從 Git 伺服器匯入 Repository；新匯入的 Repository 會加入匯入者擁有此權限的角色"},
+	{JobsView, "檢視自己可讀取的 Repository 的索引與 Wiki 工作，以及即時輸出"},
+	{UsersManage, "管理使用者與角色，包括授予任何權限"},
+	{ServersManage, "管理 Git 伺服器及其存取 Token"},
 }
 
 func known(p Permission) bool {

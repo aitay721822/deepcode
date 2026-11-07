@@ -1,3 +1,4 @@
+import { useNavigate } from '@tanstack/react-router'
 import { ArrowRightIcon, PlusIcon, SearchIcon } from 'lucide-react'
 import { motion } from 'motion/react'
 import { useRef, useState } from 'react'
@@ -8,7 +9,6 @@ import { SkeletonText } from '../../components/ui/feedback/skeleton'
 import { Spinner } from '../../components/ui/feedback/spinner'
 import { Input } from '../../components/ui/form/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/form/select'
-import { navigate } from '../../lib/router'
 import { hero, item, lift, list, reveal } from '../../lib/style/motion'
 import { useApi } from '../../lib/useApi'
 import type { Repo } from '../../types/repo/repo'
@@ -24,6 +24,7 @@ const matches = (r: Repo, q: string) =>
   `${r.owner}/${r.name} ${r.url} ${r.serverName} ${r.description}`.toLowerCase().includes(q)
 
 export function HomePage() {
+  const navigate = useNavigate()
   const { can } = useSession()
   const importer = can('repo.import')
   const { data: repos, error: loadError, reload: reloadRepos } = useRepos()
@@ -48,7 +49,7 @@ export function HomePage() {
     setError('')
     try {
       const repo = await importRepo(target, serverId ? +serverId : undefined) // an already imported one comes back as is
-      navigate(`/repos/${repo.id}`)
+      navigate({ to: '/repos/$id', params: { id: repo.id } })
     } catch (e) {
       setError((e as Error).message)
       setBusy(false)
@@ -73,7 +74,7 @@ export function HomePage() {
             variants={reveal}
             className="mx-auto mb-9 max-w-[780px] font-serif text-[clamp(2.15rem,5.6vw,3.7rem)] leading-[1.04] font-normal tracking-[-0.025em]"
           >
-            Which repo would you like to <em className="text-brand">understand</em>?
+            你想<em className="text-brand">讀懂</em>哪個 Repository？
           </motion.h1>
           <motion.form
             variants={reveal}
@@ -81,7 +82,7 @@ export function HomePage() {
             onSubmit={(e) => {
               e.preventDefault()
               if (target) add()
-              else if (shown?.[0]) navigate(`/repos/${shown[0].id}`)
+              else if (shown?.[0]) navigate({ to: '/repos/$id', params: { id: shown[0].id } })
             }}
           >
             <div className="relative max-w-[440px] flex-[1_1_280px]">
@@ -93,8 +94,8 @@ export function HomePage() {
                 autoCapitalize="none"
                 spellCheck={false}
                 className="h-12 pl-11 shadow-raised md:text-[15px]"
-                aria-label={importer ? 'Search repositories, or enter one to add' : 'Search repositories'}
-                placeholder={importer ? 'Search, or paste a repository link' : 'Search repositories'}
+                aria-label={importer ? '搜尋 Repository，或輸入要新增的 Repository' : '搜尋 Repository'}
+                placeholder={importer ? '搜尋，或貼上 Repository 網址' : '搜尋 Repository'}
                 onChange={(e) => {
                   setQuery(e.target.value)
                   setError('')
@@ -103,11 +104,11 @@ export function HomePage() {
             </div>
             {servers && servers.length > 1 && (
               <Select value={serverId || DEFAULT} onValueChange={(v) => setServerId(v === DEFAULT ? '' : v)}>
-                <SelectTrigger aria-label="Git server to add from" className="h-12 w-[200px] max-w-full">
+                <SelectTrigger aria-label="要從哪個 Git 伺服器新增" className="h-12 w-[200px] max-w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={DEFAULT}>Default server</SelectItem>
+                  <SelectItem value={DEFAULT}>預設伺服器</SelectItem>
                   {servers.map((s) => (
                     <SelectItem key={s.id} value={String(s.id)}>
                       {s.name}
@@ -119,12 +120,12 @@ export function HomePage() {
           </motion.form>
           {serverId && (
             <p className="mt-3 text-xs text-muted-foreground">
-              Enter the project path on that server, e.g. group/subgroup/project.
+              請輸入該伺服器上的專案路徑，例如 group/subgroup/project。
             </p>
           )}
           {serversError && (
             <p className="mt-3 text-xs text-muted-foreground">
-              Cannot list the git servers ({serversError}), so new repositories come from the default one.
+              無法列出 Git 伺服器（{serversError}），新的 Repository 會從預設伺服器匯入。
             </p>
           )}
           {error && (
@@ -139,14 +140,14 @@ export function HomePage() {
               {loadError}
             </p>
             <Button variant="outline" size="sm" onClick={reloadRepos}>
-              Retry
+              重試
             </Button>
           </div>
         )}
         <div className="mb-4 flex items-center gap-3">
-          <h2 className="eyebrow text-muted-foreground">Repositories</h2>
+          <h2 className="eyebrow text-muted-foreground">Repository</h2>
           <span className="h-px flex-1 bg-border" />
-          {q && shown && <span className="eyebrow text-muted-foreground">{shown.length} shown</span>}
+          {q && shown && <span className="eyebrow text-muted-foreground">顯示 {shown.length} 個</span>}
         </div>
         <motion.div
           className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-4"
@@ -170,7 +171,7 @@ export function HomePage() {
               >
                 <PlusIcon className="size-5 text-brand" />
                 <span className="font-serif text-[21px] leading-snug tracking-[-0.01em] [overflow-wrap:anywhere]">
-                  {target ? `Add ${target.replace(/^https?:\/\//i, '')}` : 'Add repo'}
+                  {target ? `新增 ${target.replace(/^https?:\/\//i, '')}` : '新增 Repository'}
                 </span>
                 <span className="mt-auto flex w-full pt-2.5">
                   <span className="ml-auto grid size-8 place-items-center rounded-full bg-brand text-brand-foreground transition-transform duration-300 group-hover:translate-x-0.5">
@@ -191,7 +192,7 @@ export function HomePage() {
         </motion.div>
         {shown?.length === 0 && !importer && (
           <p className="my-20 text-center font-serif text-[19px] text-muted-foreground italic">
-            {q ? 'No repository matches.' : 'No repositories yet.'}
+            {q ? '沒有符合的 Repository。' : '還沒有任何 Repository。'}
           </p>
         )}
       </main>

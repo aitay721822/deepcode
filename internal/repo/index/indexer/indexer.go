@@ -5,7 +5,6 @@ package indexer
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log"
 
@@ -16,6 +15,7 @@ import (
 	"deepcode/internal/repo/gitserver"
 	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/index/graph"
+	"deepcode/internal/repo/index/indexer/store"
 	"deepcode/internal/repo/index/vectorstore"
 )
 
@@ -26,10 +26,11 @@ type Limits struct {
 }
 
 type Indexer struct {
-	DB      *sql.DB
+	Store   *store.Store
+	Graph   *graph.Graph // the snapshots' imports
 	Git     *git.Client
-	Servers *gitserver.Store // where each repository is fetched from
-	Embed   *ai.OpenAI       // nil: FTS5 and symbol search only
+	Servers *gitserver.Service // where each repository is fetched from
+	Embed   *ai.OpenAI         // nil: FTS5 and symbol search only
 	Vectors *vectorstore.SQLite
 	Events  *events.Bus // receives snapshot.published
 	Limits  Limits
@@ -40,8 +41,8 @@ type Indexer struct {
 // snapshot are skipped, files unchanged since the previous READY snapshot are
 // copied, and vectors are reused by content.
 func (ix *Indexer) Run(ctx context.Context, repoID int64, sha string, progress jobs.Progress) error {
-	var prev sql.NullInt64
-	if err := ix.DB.QueryRowContext(ctx, `SELECT ready_snapshot_id FROM repositories WHERE id = ?`, repoID).Scan(&prev); err != nil {
+	prev, err := ix.Store.Published(ctx, repoID)
+	if err != nil {
 		return err
 	}
 	remote, err := ix.Servers.Remote(ctx, repoID)
@@ -61,26 +62,23 @@ func (ix *Indexer) Run(ctx context.Context, repoID int64, sha string, progress j
 	// A pruned snapshot of this commit (the branch went back to it) is
 	// indexed again from scratch: first empty it, in case its pruning
 	// stopped midway, since parse skips the files a snapshot already holds.
-	var pruned int64
-	switch err := ix.DB.QueryRowContext(ctx, `SELECT id FROM snapshots WHERE repository_id = ? AND commit_sha = ? AND status = 'pruned'`,
-		repoID, sha).Scan(&pruned); {
-	case err == nil:
+	if pruned, ok, err := ix.Store.Pruned(ctx, repoID, sha); err != nil {
+		return err
+	} else if ok {
 		if err := ix.dropSnapshotData(ctx, pruned); err != nil {
 			return err
 		}
-	case !errors.Is(err, sql.ErrNoRows):
-		return err
 	}
 	snap, status, err := ix.begin(ctx, repoID, sha)
 	if err != nil {
 		return err
 	}
 	if status != "ready" {
-		if err := ix.parse(ctx, dir, sha, snap, prev.Int64, status == "outdated", progress); err != nil {
+		if err := ix.parse(ctx, dir, sha, snap, prev, status == "outdated", progress); err != nil {
 			return err
 		}
 		// After every file is in: an import names files of any batch.
-		n, err := graph.Link(ctx, ix.DB, snap)
+		n, err := ix.Graph.Link(ctx, snap)
 		if err != nil {
 			return err
 		}
@@ -94,7 +92,9 @@ func (ix *Indexer) Run(ctx context.Context, repoID int64, sha string, progress j
 		}
 	}
 	progress.Stage("publish", 0, 0)
-	if err := ix.publish(ctx, repoID, snap, model); err != nil {
+	// One transaction makes the snapshot READY and the repository's current
+	// version, so readers switch atomically.
+	if err := ix.Store.Publish(ctx, repoID, snap, model, analyzer.Version); err != nil {
 		return err
 	}
 	progress.Logf("published snapshot #%d", snap)
@@ -114,13 +114,7 @@ func (ix *Indexer) Run(ctx context.Context, repoID int64, sha string, progress j
 // one begun and stopped midway starts again empty, since parse keeps the rows
 // a snapshot holds.
 func (ix *Indexer) begin(ctx context.Context, repoID int64, sha string) (int64, string, error) {
-	var snap int64
-	var status string
-	var read int
-	err := ix.DB.QueryRowContext(ctx, `
-		INSERT INTO snapshots(repository_id, commit_sha, analyzer) VALUES (?, ?, ?)
-		ON CONFLICT(repository_id, commit_sha) DO UPDATE SET status = CASE status WHEN 'ready' THEN 'ready' ELSE 'indexing' END
-		RETURNING id, status, analyzer`, repoID, sha, analyzer.Version).Scan(&snap, &status, &read)
+	snap, status, read, err := ix.Store.Begin(ctx, repoID, sha, analyzer.Version)
 	switch {
 	case err != nil || read >= analyzer.Version: // a newer one's rows (a binary rolled back) are taken as they are
 		return snap, status, err
@@ -130,27 +124,5 @@ func (ix *Indexer) begin(ctx context.Context, repoID int64, sha string) (int64, 
 	if err := ix.dropSnapshotData(ctx, snap); err != nil {
 		return 0, "", err
 	}
-	_, err = ix.DB.ExecContext(ctx, `UPDATE snapshots SET status = 'indexing', analyzer = ? WHERE id = ?`, analyzer.Version, snap)
-	return snap, "indexing", err
-}
-
-// publish marks the snapshot READY and makes it the repository's current
-// version in one transaction, so readers switch atomically.
-func (ix *Indexer) publish(ctx context.Context, repoID, snap int64, model string) error {
-	tx, err := ix.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE snapshots SET status = 'ready', indexed_at = CURRENT_TIMESTAMP, embedding_model = ?1, analyzer = ?3,
-			file_count = (SELECT count(*) FROM source_files WHERE snapshot_id = ?2),
-			chunk_count = (SELECT count(*) FROM chunks WHERE snapshot_id = ?2)
-		WHERE id = ?2`, model, snap, analyzer.Version); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE repositories SET ready_snapshot_id = ? WHERE id = ?`, snap, repoID); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return snap, "indexing", ix.Store.Indexing(ctx, snap, analyzer.Version)
 }

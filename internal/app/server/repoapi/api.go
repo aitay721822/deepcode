@@ -21,10 +21,10 @@ import (
 // API maps HTTP onto the domain packages: it binds requests, checks the
 // user's permissions, calls them and turns their results into responses.
 type API struct {
-	Sessions  *session.Store // to check the asker of a long answer again
+	Sessions  *session.Service // to check the asker of a long answer again
 	Catalog   *catalog.Catalog
 	Importer  *importer.Service
-	Servers   *gitserver.Store
+	Servers   *gitserver.Service
 	Queue     *jobs.Queue
 	Retriever *retrieval.Retriever
 	Chat      *chat.Service

@@ -9,18 +9,19 @@ import (
 	"strings"
 	"testing"
 
+	"deepcode/internal/access/account/store"
 	"deepcode/internal/access/role"
 	"deepcode/internal/platform/storage"
 )
 
-func setup(t *testing.T) (*Store, *sql.DB) {
+func setup(t *testing.T) (*Service, *sql.DB) {
 	t.Helper()
 	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "accounts.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return &Store{DB: db}, db
+	return &Service{Store: &store.Store{DB: db}}, db
 }
 
 func str(s string) *string    { return &s }

@@ -26,9 +26,10 @@ func (c *OpenAI) Generate(ctx context.Context, messages []Message) (string, erro
 }
 
 // Usage is one answer's size: the characters sent and received, and the
-// tokens the server counted, 0 when it reports none.
+// tokens the server counted, 0 when it reports none. CachedTokens are the
+// input tokens the server read from its prompt cache: the prefix it had seen.
 type Usage struct {
-	InChars, OutChars, InTokens, OutTokens int
+	InChars, OutChars, InTokens, OutTokens, CachedTokens int
 }
 
 // Stream sends a streaming chat completion and relays content fragments.
@@ -87,13 +88,17 @@ func (c *OpenAI) Stream(ctx context.Context, messages []Message, onDelta func(st
 			Usage *struct {
 				PromptTokens     int `json:"prompt_tokens"`
 				CompletionTokens int `json:"completion_tokens"`
+				CacheHit         int `json:"prompt_cache_hit_tokens"` // DeepSeek
+				Details          struct {
+					Cached int `json:"cached_tokens"` // OpenAI, llama.cpp
+				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
 		}
 		if json.Unmarshal([]byte(data), &chunk) != nil {
 			continue
 		}
-		if chunk.Usage != nil {
-			usage.InTokens, usage.OutTokens = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens
+		if u := chunk.Usage; u != nil {
+			usage.InTokens, usage.OutTokens, usage.CachedTokens = u.PromptTokens, u.CompletionTokens, max(u.CacheHit, u.Details.Cached)
 		}
 		if chunk.Error != nil {
 			return out.String(), errors.New(c.quote([]byte(chunk.Error.Message)))

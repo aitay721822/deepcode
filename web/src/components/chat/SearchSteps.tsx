@@ -11,8 +11,8 @@ export function SearchSteps({ sources, rounds }: { sources: Source[]; rounds: st
   return (
     <Card asChild className="gap-4 px-5 py-[18px]">
       <section aria-live="polite">
-        <p className="font-serif text-[20px] leading-tight italic">Searching the codebase</p>
-        <Progress tone="warning" aria-label="Searching the codebase" />
+        <p className="font-serif text-[20px] leading-tight italic">正在搜尋程式碼</p>
+        <Progress tone="warning" aria-label="正在搜尋程式碼" />
         <ul className="font-mono text-[12.5px]">
           {rounds.map((terms, i) => (
             <motion.li
@@ -22,7 +22,7 @@ export function SearchSteps({ sources, rounds }: { sources: Source[]; rounds: st
               initial={{ opacity: 0, x: -6 }}
               animate={{ opacity: 1, x: 0, transition: { duration: 0.2 } }}
             >
-              <span className="[overflow-wrap:anywhere]">Searching again for {terms}</span>
+              <span className="[overflow-wrap:anywhere]">再次搜尋：{terms}</span>
             </motion.li>
           ))}
           {sources.map((s, i) => (
@@ -34,7 +34,7 @@ export function SearchSteps({ sources, rounds }: { sources: Source[]; rounds: st
               animate={{ opacity: 1, x: 0, transition: { delay: Math.min(i, 8) * 0.04, duration: 0.2 } }}
             >
               <span className="[overflow-wrap:anywhere]">
-                Read {s.path.split('/').pop()} (lines {s.startLine}-{s.endLine})
+                已讀 {s.path.split('/').pop()}（第 {s.startLine}-{s.endLine} 行）
               </span>
             </motion.li>
           ))}

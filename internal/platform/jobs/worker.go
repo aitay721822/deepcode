@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -10,12 +9,6 @@ import (
 
 	"deepcode/internal/platform/events"
 )
-
-// runnable is the SQL condition for a queued job that may start now: its
-// backoff has passed and its repository has no job running, so two jobs never
-// touch one repository's clone at once.
-const runnable = `j.status = 'queued' AND j.run_after <= CURRENT_TIMESTAMP
-	AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.repository_id = j.repository_id AND r.status = 'running')`
 
 // sweepEvery is how often Sweep looks for runnable jobs nobody was woken for.
 var sweepEvery = 5 * time.Second
@@ -27,15 +20,11 @@ var sweepEvery = 5 * time.Second
 // lease_until + heartbeats if a second process ever shares the file.
 // Call before any worker runs.
 func (q *Queue) Recover(ctx context.Context) error {
-	res, err := q.DB.ExecContext(ctx, `
-		UPDATE jobs SET updated_at = CURRENT_TIMESTAMP,
-			status = CASE WHEN attempts >= ?1 THEN 'failed' ELSE 'queued' END,
-			error = CASE WHEN attempts >= ?1 THEN 'the server stopped during the last attempt' ELSE error END
-		WHERE status = 'running'`, maxAttempts)
+	n, err := q.Store.Recover(ctx, maxAttempts)
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n > 0 {
+	if n > 0 {
 		log.Printf("jobs: %d were running when the server stopped: queued again, or failed if that was their last attempt", n)
 	}
 	return nil
@@ -81,8 +70,8 @@ func (q *Queue) Sweep(ctx context.Context) {
 }
 
 func (q *Queue) hasRunnable(ctx context.Context) bool {
-	var ok bool
-	if err := q.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM jobs j WHERE `+runnable+`)`).Scan(&ok); err != nil && ctx.Err() == nil {
+	ok, err := q.Store.HasRunnable(ctx)
+	if err != nil && ctx.Err() == nil {
 		log.Printf("jobs: sweep: %v", err)
 	}
 	return ok
@@ -110,14 +99,11 @@ func (q *Queue) drain(ctx context.Context, handlers map[string]Handler) {
 
 // claim atomically marks the oldest runnable job as running.
 func (q *Queue) claim(ctx context.Context) (Job, bool) {
-	j, err := scanJob(q.DB.QueryRowContext(ctx, `
-		UPDATE jobs SET status = 'running', attempts = attempts + 1, error = '', updated_at = CURRENT_TIMESTAMP
-		WHERE id = (SELECT j.id FROM jobs j WHERE `+runnable+` ORDER BY j.id LIMIT 1)
-		RETURNING `+jobColumns))
-	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
-			log.Printf("jobs: claim: %v", err)
-		}
+	j, ok, err := q.Store.Claim(ctx)
+	if err != nil && ctx.Err() == nil {
+		log.Printf("jobs: claim: %v", err)
+	}
+	if !ok {
 		return Job{}, false
 	}
 	q.changed(events.TopicJobUpdated, j.ID)
@@ -131,7 +117,7 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 	jctx, cancel := context.WithTimeoutCause(ctx, q.Timeout, fmt.Errorf("the job ran past DEEPCODE_JOB_TIMEOUT (%s): %w", q.Timeout, context.DeadlineExceeded))
 	defer cancel()
 	start := time.Now()
-	progress := Progress{q, job.ID}
+	progress := Progress{q: q, id: job.ID}
 	progress.Logf("%s %.7s: attempt %d of %d", job.Kind, job.CommitSHA, job.Attempts, maxAttempts)
 	err := fmt.Errorf("no handler for job kind %q", job.Kind)
 	if h != nil {
@@ -146,22 +132,21 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 	case err == nil:
 		log.Printf("jobs: %s #%d (repository %d) succeeded in %s", job.Kind, job.ID, job.RepoID, time.Since(start).Round(time.Second))
 		progress.Logf("succeeded")
-		_, err = q.DB.ExecContext(bg, `UPDATE jobs SET status = 'succeeded', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, job.ID)
+		err = q.Store.Succeed(bg, job.ID)
 	case ctx.Err() != nil:
 		// Shutting down: hand the job back without spending an attempt. Work
 		// already committed is reused when it resumes.
 		progress.Logf("interrupted by shutdown; it resumes on the next start")
-		_, err = q.DB.ExecContext(bg, `UPDATE jobs SET status = 'queued', attempts = attempts - 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, job.ID)
+		err = q.Store.HandBack(bg, job.ID)
 	case errors.As(err, new(permanent)) || job.Attempts >= maxAttempts:
 		log.Printf("jobs: %s #%d (repository %d) failed: %v", job.Kind, job.ID, job.RepoID, err)
 		progress.Logf("failed: %v", err)
-		_, err = q.DB.ExecContext(bg, `UPDATE jobs SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, err.Error(), job.ID)
+		err = q.Store.Fail(bg, job.ID, err.Error())
 	default:
 		backoff := 30 << (job.Attempts - 1) // 30s, 60s, ...
 		log.Printf("jobs: %s #%d (repository %d) attempt %d failed, retrying in %ds: %v", job.Kind, job.ID, job.RepoID, job.Attempts, backoff, err)
 		progress.Logf("attempt failed, retrying in %ds: %v", backoff, err)
-		_, err = q.DB.ExecContext(bg, `UPDATE jobs SET status = 'queued', error = ?, run_after = datetime('now', ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-			err.Error(), fmt.Sprintf("+%d seconds", backoff), job.ID)
+		err = q.Store.Retry(bg, job.ID, err.Error(), backoff)
 	}
 	if err != nil {
 		log.Printf("jobs: update #%d: %v", job.ID, err)
@@ -178,10 +163,7 @@ const keepJobs = "-30 days"
 // growing without one long delete holding the write lock. A repository's
 // newest job stays, however old: its page shows it.
 func (q *Queue) prune(ctx context.Context) {
-	if _, err := q.DB.ExecContext(ctx, `DELETE FROM jobs WHERE id IN (
-		SELECT j.id FROM jobs j WHERE j.status IN ('succeeded', 'failed') AND j.updated_at < datetime('now', ?)
-			AND j.id < (SELECT max(n.id) FROM jobs n WHERE n.repository_id = j.repository_id)
-		LIMIT 20)`, keepJobs); err != nil {
+	if err := q.Store.Prune(ctx, keepJobs); err != nil {
 		log.Printf("jobs: prune: %v", err)
 	}
 }

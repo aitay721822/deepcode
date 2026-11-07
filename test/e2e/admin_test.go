@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -38,7 +40,7 @@ func checkJobConsole(t *testing.T, admin *client, repoID string) {
 	for _, l := range detail.Logs {
 		text.WriteString(l.Line + "\n")
 	}
-	for _, want := range []string{"planned 2 pages: Overview | Web App", "== page 1 of 2: Overview", "It is defined in [", "succeeded"} {
+	for _, want := range []string{"planned 2 pages: Overview | Web App", "[Overview] == page 1 of 2", "It is defined in [", "succeeded"} {
 		if !strings.Contains(text.String(), want) {
 			t.Fatalf("wiki job log lacks %q:\n%s", want, text.String())
 		}
@@ -115,6 +117,72 @@ func checkGitLab(t *testing.T, admin *client, api *fakeAPI, apiURL, sha string) 
 	}
 	if code := admin.delete(fmt.Sprintf("/api/admin/servers/%d", srv.ID)); code != http.StatusConflict {
 		t.Fatalf("deleted a server in use: %d", code)
+	}
+}
+
+// checkOAuth authorizes a GitLab server through OAuth, as a browser would:
+// the console sends it to the server's consent page with a state, the server
+// sends it back to the callback with a code, and the code buys the server's
+// token. The same state does not work twice.
+func checkOAuth(t *testing.T, admin *client) {
+	t.Helper()
+	callback := admin.base + "/api/admin/oauth/callback"
+	gl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		if r.URL.Path != "/oauth/token" || r.PostForm.Get("code") != "granted" || r.PostForm.Get("client_secret") != "cs" || r.PostForm.Get("redirect_uri") != callback {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"invalid_grant"}`)
+			return
+		}
+		fmt.Fprint(w, `{"access_token":"oauth-token","refresh_token":"r","expires_in":7200}`)
+	}))
+	defer gl.Close()
+	var srv struct {
+		ID              int64  `json:"id"`
+		HasToken        bool   `json:"hasToken"`
+		ClientID        string `json:"clientId"`
+		HasClientSecret bool   `json:"hasClientSecret"`
+	}
+	body := fmt.Sprintf(`{"name":"OAuth GitLab","kind":"gitlab","baseUrl":%q,"clientId":"cid","clientSecret":"cs"}`, gl.URL)
+	if code := admin.post("/api/admin/servers", body, &srv); code != http.StatusCreated || srv.HasToken || srv.ClientID != "cid" || !srv.HasClientSecret {
+		t.Fatalf("add an OAuth server: %d %+v", code, srv)
+	}
+	browser := *admin.http // the same cookies, but each redirect is looked at
+	browser.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	location := func(path string) *url.URL {
+		resp, err := browser.Get(admin.base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		u, _ := url.Parse(resp.Header.Get("Location"))
+		if resp.StatusCode != http.StatusFound || u == nil {
+			t.Fatalf("GET %s: %d to %q", path, resp.StatusCode, resp.Header.Get("Location"))
+		}
+		return u
+	}
+	consent := location(fmt.Sprintf("/api/admin/servers/%d/oauth", srv.ID))
+	q := consent.Query()
+	if !strings.HasPrefix(consent.String(), gl.URL+"/oauth/authorize?") || q.Get("redirect_uri") != callback || q.Get("client_id") != "cid" || q.Get("state") == "" {
+		t.Fatalf("consent page: %s", consent)
+	}
+	back := "/api/admin/oauth/callback?code=granted&state=" + url.QueryEscape(q.Get("state"))
+	if done := location(back); done.Path != "/admin/servers" || done.Query().Get("oauth") != "ok" {
+		t.Fatalf("callback went to %s", done)
+	}
+	var list []struct {
+		ID       int64 `json:"id"`
+		HasToken bool  `json:"hasToken"`
+	}
+	admin.get("/api/admin/servers", &list)
+	if last := list[len(list)-1]; last.ID != srv.ID || !last.HasToken {
+		t.Fatalf("servers after authorizing: %+v", list)
+	}
+	if again := location(back); again.Query().Get("oauth") == "ok" || again.Query().Get("oauth") == "" {
+		t.Fatalf("the state worked twice: %s", again)
+	}
+	if code := admin.delete(fmt.Sprintf("/api/admin/servers/%d", srv.ID)); code != http.StatusNoContent {
+		t.Fatalf("delete the OAuth server: %d", code)
 	}
 }
 

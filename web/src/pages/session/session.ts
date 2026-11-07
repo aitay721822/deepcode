@@ -14,7 +14,7 @@ export const SessionContext = createContext<Session | null>(null)
  * Where to go once signed in: a path on this site, never another origin (?next=//evil.example, or /.//evil.example,
  * whose path becomes //evil.example), nor back to signing in or up.
  */
-export function destination(next: string | null) {
+export function destination(next?: string) {
   try {
     const u = new URL(next || '/', location.origin)
     if (u.origin === location.origin && !['/login', '/signup'].includes(u.pathname) && !u.pathname.startsWith('//'))
@@ -24,10 +24,6 @@ export function destination(next: string | null) {
   }
   return '/'
 }
-
-/** path, keeping where to go once signed in: between the sign-in and sign-up pages. */
-export const withNext = (path: string, next: string | null) =>
-  next ? `${path}?next=${encodeURIComponent(next)}` : path
 
 export function useSession() {
   const s = useContext(SessionContext)

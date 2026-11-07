@@ -38,8 +38,8 @@ func TestDefaults(t *testing.T) {
 		cfg.EmbedURL != cfg.ChatURL || cfg.EmbedKey != "k" || cfg.ChatModel != "" || cfg.ReasoningEffort != "" ||
 		cfg.Workers != 2 || cfg.LLMTimeout != 5*time.Minute || cfg.JobTimeout != 2*time.Hour || cfg.SyncEvery != 0 ||
 		cfg.CacheMB != 64 || cfg.MaxRepoMB != 1024 || cfg.MaxFiles != 20000 || cfg.MaxFileKB != 512 || cfg.MaxIndexMB != 200 ||
-		cfg.WikiLanguage != "English" || cfg.SessionTTL != 720*time.Hour || cfg.GitProtocols != "http:https" || len(cfg.TrustedProxies) != 0 ||
-		cfg.MaxOutputTokens != 0 || cfg.LLMRPM != 0 {
+		cfg.WikiLanguage != "Traditional Chinese (Taiwan)" || cfg.SessionTTL != 720*time.Hour || cfg.GitProtocols != "http:https" || len(cfg.TrustedProxies) != 0 ||
+		cfg.MaxOutputTokens != 0 || cfg.LLMRPM != 0 || cfg.WikiParallel != 1 || cfg.WikiMaxPages != 64 {
 		t.Errorf("defaults: addr %q, %+v", addr, cfg)
 	}
 }

@@ -17,8 +17,11 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"deepcode/internal/access/account"
+	accountstore "deepcode/internal/access/account/store"
 	"deepcode/internal/access/role"
+	rolestore "deepcode/internal/access/role/store"
 	"deepcode/internal/access/session"
+	sessionstore "deepcode/internal/access/session/store"
 	"deepcode/internal/app/importer"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/platform/storage"
@@ -37,8 +40,8 @@ func TestWatchEndsWithTheSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	accounts := &account.Store{DB: db}
-	sessions := session.New(db, accounts, &role.Store{DB: db}, time.Hour)
+	accounts := &account.Service{Store: &accountstore.Store{DB: db}}
+	sessions := session.New(&sessionstore.Store{DB: db}, accounts, &role.Service{Store: &rolestore.Store{DB: db}}, time.Hour)
 	accounts.Bootstrap(ctx, "password-0")
 	name, password := "dev", "password-1"
 	dev, err := accounts.Create(ctx, account.Input{Username: &name, Password: &password})

@@ -97,7 +97,7 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply := `{"pages":[{"title":"Overview","query":"main server"},{"title":"Web App","query":"App start helper"}]}`
-	if strings.Contains(body.Messages[0].Content, "Turn the user's question into") {
+	if strings.Contains(body.Messages[0].Content, "Turn its question into") {
 		f.mu.Lock()
 		f.terms++
 		f.mu.Unlock()

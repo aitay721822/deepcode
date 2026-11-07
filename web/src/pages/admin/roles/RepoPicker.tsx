@@ -5,7 +5,13 @@ import { Input } from '../../../components/ui/form/input'
 import { Label } from '../../../components/ui/form/label'
 import type { RepoRef } from '../../../types/admin/roles'
 
-/** A searchable multi-select of repositories. */
+/** How many repositories the picker lists before a search: those updated last. */
+const recent = 5
+
+/**
+ * A multi-select of repositories: the ones updated last and the ones the role grants (those it granted when the
+ * picker opened stay listed while unticked), or, while searching, every match.
+ */
 export function RepoPicker({
   repos,
   value,
@@ -16,19 +22,25 @@ export function RepoPicker({
   onChange: (ids: string[]) => void
 }) {
   const [query, setQuery] = useState('')
+  const [granted] = useState(() => new Set(value))
   const q = query.trim().toLowerCase()
-  const shown = repos.filter((r) => `${r.owner}/${r.name} ${r.serverName}`.toLowerCase().includes(q))
+  const shown = q
+    ? repos.filter((r) => `${r.owner}/${r.name} ${r.serverName}`.toLowerCase().includes(q))
+    : [...repos]
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) // never indexed last
+        .filter((r, i) => i < recent || value.includes(r.id) || granted.has(r.id))
+  const picked = repos.filter((r) => value.includes(r.id)).length // not ids of repositories gone since
   const toggle = (id: string) => onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id])
   return (
     <fieldset>
       <legend className="text-sm font-medium">
-        Repositories <span className="font-normal text-muted-foreground">{value.length} selected</span>
+        Repository <span className="font-normal text-muted-foreground">已選 {picked} 個</span>
       </legend>
       <Input
         className="mt-2"
         type="search"
-        placeholder="Filter repositories"
-        aria-label="Filter repositories"
+        placeholder="搜尋 Repository"
+        aria-label="搜尋 Repository"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && e.preventDefault()}
@@ -45,7 +57,7 @@ export function RepoPicker({
         ))}
         {shown.length === 0 && (
           <p className="text-[13px] text-muted-foreground">
-            {repos.length ? 'No repository matches.' : 'No repositories yet.'}
+            {repos.length ? '沒有符合的 Repository。' : '尚無 Repository。'}
           </p>
         )}
       </div>

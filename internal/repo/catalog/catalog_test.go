@@ -10,9 +10,12 @@ import (
 
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
+	jobstore "deepcode/internal/platform/jobs/store"
 	"deepcode/internal/platform/storage"
+	"deepcode/internal/repo/catalog/store"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
+	serverstore "deepcode/internal/repo/gitserver/store"
 	"deepcode/internal/repo/index/analyzer"
 )
 
@@ -67,8 +70,8 @@ func TestPoll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &Catalog{DB: db, Queue: jobs.New(db, bus, time.Minute), Git: &git.Client{Dir: t.TempDir(), AllowProtocol: "file"},
-		Servers: &gitserver.Store{DB: db, Box: box}, EmbedModel: "fake-embed"}
+	c := &Catalog{Store: &store.Store{DB: db}, Queue: jobs.New(&jobstore.Store{DB: db}, bus, time.Minute), Git: &git.Client{Dir: t.TempDir(), AllowProtocol: "file"},
+		Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}, EmbedModel: "fake-embed"}
 	poll := func() *jobs.Job {
 		t.Helper()
 		j, err := c.Poll(ctx, 1)

@@ -64,7 +64,7 @@ func TestMeasure(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		asked.Store(strings.Contains(string(body), `"include_usage":true`))
 		w.Write([]byte(`data: {"choices":[{"delta":{"content":"héllo"},"finish_reason":"stop"}]}` + "\n\n" +
-			`data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3}}` + "\n\ndata: [DONE]\n\n"))
+			`data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":8}}}` + "\n\ndata: [DONE]\n\n"))
 	}))
 	defer srv.Close()
 	var got []Usage
@@ -72,7 +72,7 @@ func TestMeasure(t *testing.T) {
 	if _, err := c.Generate(context.Background(), []Message{{Role: "user", Content: "größe"}}); err != nil {
 		t.Fatal(err)
 	}
-	if !asked.Load() || len(got) != 1 || got[0] != (Usage{InChars: 5, OutChars: 5, InTokens: 12, OutTokens: 3}) {
+	if !asked.Load() || len(got) != 1 || got[0] != (Usage{InChars: 5, OutChars: 5, InTokens: 12, OutTokens: 3, CachedTokens: 8}) {
 		t.Fatalf("asked %v, measured %+v", asked.Load(), got)
 	}
 	c.Measure = nil

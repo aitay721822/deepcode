@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { ArrowLeftIcon } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { getJob, watchJobOutput } from '../../../api/admin/jobs'
@@ -7,13 +8,12 @@ import { isActive } from '../../../components/repo/jobStage'
 import { LoadError } from '../../../components/ui/feedback/load-error'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
 import { formatTime, shortSha } from '../../../lib/format'
-import { Link } from '../../../lib/router'
 import { useApi } from '../../../lib/useApi'
 import type { JobRow, LogLine } from '../../../types/admin/jobs'
 import { useSession } from '../../session/session'
 import { SectionHead } from '../SectionHead'
 import { JobConsole } from './JobConsole'
-import { StatusBadge } from './StatusBadge'
+import { kindLabel, StatusBadge } from './StatusBadge'
 import { StreamNotice } from './StreamNotice'
 
 /** One job: what it is, its stages, and its output, followed live until it ends. */
@@ -73,10 +73,12 @@ export function JobDetail({ id }: { id: number }) {
 
   const back = (
     <Link
-      to="/admin/jobs"
+      to="/admin/{-$section}/{-$id}"
+      params={{ section: 'jobs', id: undefined }}
+      activeOptions={{ exact: true }} // a way back, never the page the reader is on
       className="inline-flex w-fit items-center gap-1.5 text-muted-foreground hover:text-foreground"
     >
-      <ArrowLeftIcon className="size-3.5" /> Jobs
+      <ArrowLeftIcon className="size-3.5" /> 工作
     </Link>
   )
   if (!data) {
@@ -86,7 +88,7 @@ export function JobDetail({ id }: { id: number }) {
         {back}
         {status === 404 ? (
           <p className="text-sm text-destructive" role="alert">
-            Job not found.
+            找不到這個工作。
           </p>
         ) : (
           <LoadError error={error} onRetry={reload} />
@@ -102,26 +104,26 @@ export function JobDetail({ id }: { id: number }) {
         <StatusBadge status={j.status} />
       </SectionHead>
       <dl className="flex flex-wrap gap-x-8 gap-y-3 border-y border-dashed py-3.5 text-[13.5px]">
-        <Meta term="Job">{j.id}</Meta>
-        <Meta term="Kind">{j.kind}</Meta>
+        <Meta term="工作">{j.id}</Meta>
+        <Meta term="類型">{kindLabel(j.kind)}</Meta>
         <Meta term="Commit">
           <code className="font-mono">{j.commitSha ? shortSha(j.commitSha) : '-'}</code>
         </Meta>
-        <Meta term="Attempts">{j.attempts}</Meta>
-        <Meta term="Created">{formatTime(j.createdAt)}</Meta>
-        <Meta term="Updated">{formatTime(j.updatedAt)}</Meta>
+        <Meta term="嘗試次數">{j.attempts}</Meta>
+        <Meta term="建立於">{formatTime(j.createdAt)}</Meta>
+        <Meta term="更新於">{formatTime(j.updatedAt)}</Meta>
         <Meta term="Repository">
-          <Link to={`/repos/${j.repoId}`} className="text-brand hover:underline">
-            Open repository
+          <Link to="/repos/$id" params={{ id: j.repoId }} className="text-brand hover:underline">
+            開啟 Repository
           </Link>
         </Meta>
       </dl>
-      <JobProgress job={j} title={j.kind === 'wiki' ? 'Wiki generation' : 'Indexing'} />
-      <h2 className="eyebrow mt-3 text-muted-foreground">Output</h2>
+      <JobProgress job={j} title={j.kind === 'wiki' ? '產生 Wiki' : '建立索引'} />
+      <h2 className="eyebrow mt-3 text-muted-foreground">輸出</h2>
       <div>
         <StreamNotice
           state={stream}
-          what="Live output"
+          what="即時輸出"
           onReconnect={() => {
             setStream('retrying')
             setAttempt((a) => a + 1)

@@ -21,15 +21,15 @@ export function PasswordDialog({
   return (
     <FormDialog
       open={open}
-      title="Change password"
-      submit="Change password"
+      title="變更密碼"
+      submit="變更密碼"
       onClose={onClose}
       onSubmit={() =>
-        next === confirm ? onSubmit(current, next) : Promise.reject(new Error('The new passwords do not match.'))
+        next === confirm ? onSubmit(current, next) : Promise.reject(new Error('兩次輸入的新密碼不一致。'))
       }
     >
       <input type="text" name="username" autoComplete="username" value={username} readOnly hidden />
-      <Field label="Current password">
+      <Field label="目前密碼">
         <Input
           type="password"
           autoComplete="current-password"
@@ -38,7 +38,7 @@ export function PasswordDialog({
           onChange={(e) => setCurrent(e.target.value)}
         />
       </Field>
-      <Field label="New password">
+      <Field label="新密碼">
         <Input
           type="password"
           autoComplete="new-password"
@@ -48,7 +48,7 @@ export function PasswordDialog({
           onChange={(e) => setNext(e.target.value)}
         />
       </Field>
-      <Field label="Confirm new password">
+      <Field label="確認新密碼">
         <Input
           type="password"
           autoComplete="new-password"

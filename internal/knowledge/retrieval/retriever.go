@@ -6,32 +6,25 @@ package retrieval
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"log"
 	"slices"
 
+	"deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/cache"
-	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/index/graph"
 	"deepcode/internal/repo/index/vectorstore"
 )
 
 type Retriever struct {
-	DB      *sql.DB
-	Embed   *ai.OpenAI // nil disables vector search
+	Store   *store.Store
+	Graph   *graph.Graph // the imports, for the code the best hits are built on
+	Embed   *ai.OpenAI   // nil disables vector search
 	Vectors *vectorstore.SQLite
 	Cache   *cache.Cache
 }
 
-type Hit struct {
-	ChunkID   int64  `json:"chunkId"`
-	Path      string `json:"path"`
-	Symbol    string `json:"symbol"`
-	StartLine int    `json:"startLine"`
-	EndLine   int    `json:"endLine"`
-	Content   string `json:"content"`
-}
+type Hit = store.Hit // one chunk of code found
 
 type Result struct {
 	Hits   []Hit `json:"hits"`
@@ -85,7 +78,7 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 	}
 	ids, res.Graph = supplement(ids, near, limit)
 	res.FTS, res.Vector, res.Symbol = len(fts), len(vec), len(sym)
-	res.Hits, err = r.load(ctx, ids)
+	res.Hits, err = r.Store.Chunks(ctx, ids)
 	return res, err
 }
 
@@ -93,7 +86,7 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 // the top ranked ids import: the code they are built on, which the query may
 // not name.
 func (r *Retriever) near(ctx context.Context, snapshotID int64, query string, ranked []int64) ([]int64, error) {
-	top, err := r.load(ctx, ranked[:min(nearHits, len(ranked))])
+	top, err := r.Store.Chunks(ctx, ranked[:min(nearHits, len(ranked))])
 	if err != nil || len(top) == 0 {
 		return nil, err
 	}
@@ -101,7 +94,7 @@ func (r *Retriever) near(ctx context.Context, snapshotID int64, query string, ra
 	for i, h := range top {
 		paths[i] = h.Path
 	}
-	files, err := graph.Dependencies(ctx, r.DB, snapshotID, paths, nearFiles)
+	files, err := r.Graph.Dependencies(ctx, snapshotID, paths, nearFiles)
 	if err != nil || len(files) == 0 {
 		return nil, err
 	}
@@ -158,75 +151,5 @@ func fuse(lists ...[]int64) []int64 {
 // Readme returns the first two chunks of the snapshot's top-level README,
 // which the wiki's overview starts from.
 func (r *Retriever) Readme(ctx context.Context, snapshotID int64) ([]Hit, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT `+hitColumns+` FROM chunks
-		WHERE snapshot_id = ? AND path NOT LIKE '%/%' AND lower(path) LIKE 'readme%' ORDER BY start_line LIMIT 2`, snapshotID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var hits []Hit
-	for rows.Next() {
-		h, err := scanHit(rows)
-		if err != nil {
-			return nil, err
-		}
-		hits = append(hits, h)
-	}
-	return hits, rows.Err()
-}
-
-// hitColumns are the chunk columns scanHit reads.
-const hitColumns = `id, path, symbol_name, start_line, end_line, content`
-
-func scanHit(rows *sql.Rows) (Hit, error) {
-	var h Hit
-	err := rows.Scan(&h.ChunkID, &h.Path, &h.Symbol, &h.StartLine, &h.EndLine, &h.Content)
-	return h, err
-}
-
-// load reads the chunks for ids, keeping the order of ids.
-func (r *Retriever) load(ctx context.Context, ids []int64) ([]Hit, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	rows, err := r.DB.QueryContext(ctx, `SELECT `+hitColumns+` FROM chunks WHERE id IN (`+storage.Placeholders(len(ids))+`)`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	byID := map[int64]Hit{}
-	for rows.Next() {
-		h, err := scanHit(rows)
-		if err != nil {
-			return nil, err
-		}
-		byID[h.ChunkID] = h
-	}
-	hits := make([]Hit, 0, len(ids))
-	for _, id := range ids {
-		if h, ok := byID[id]; ok {
-			hits = append(hits, h)
-		}
-	}
-	return hits, rows.Err()
-}
-
-func scanIDs(rows *sql.Rows, err error) ([]int64, error) {
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return r.Store.Readme(ctx, snapshotID)
 }

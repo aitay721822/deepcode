@@ -13,7 +13,7 @@ import (
 )
 
 // API serves /auth: sign-in, sign-up, sign-out and the signed-in user's own account.
-type API struct{ Sessions *session.Store }
+type API struct{ Sessions *session.Service }
 
 // Mount adds sign-in, sign-up and sign-out to public and the account routes to signedIn.
 func (a *API) Mount(public, signedIn gin.IRouter) {

@@ -36,9 +36,9 @@ export function RolesSection() {
   }
   return (
     <section>
-      <SectionHead title="Roles">
+      <SectionHead title="角色">
         <Button disabled={!lists} onClick={() => edit.show('new')}>
-          <PlusIcon /> New role
+          <PlusIcon /> 新增角色
         </Button>
       </SectionHead>
       <LoadError
@@ -55,13 +55,13 @@ export function RolesSection() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Description</TableHead>
-              <TableHead>Permissions</TableHead>
-              <TableHead>Repositories</TableHead>
-              <TableHead>Users</TableHead>
+              <TableHead>名稱</TableHead>
+              <TableHead>說明</TableHead>
+              <TableHead>權限</TableHead>
+              <TableHead>Repository</TableHead>
+              <TableHead>使用者</TableHead>
               <TableHead>
-                <span className="sr-only">Actions</span>
+                <span className="sr-only">操作</span>
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -70,7 +70,7 @@ export function RolesSection() {
               <TableRow key={r.id}>
                 <TableCell className="font-medium">
                   <span className="inline-flex items-center gap-2">
-                    {r.name} {r.builtin && <Badge variant="outline">Built-in</Badge>}
+                    {r.name} {r.builtin && <Badge variant="outline">內建</Badge>}
                   </span>
                 </TableCell>
                 <TableCell>
@@ -78,30 +78,23 @@ export function RolesSection() {
                     {r.description}
                   </span>
                 </TableCell>
-                <TableCell title={r.permissions.join(', ')}>{plural(r.permissions.length, 'permission')}</TableCell>
+                <TableCell title={r.permissions.join(', ')}>{plural(r.permissions.length, '項權限')}</TableCell>
                 <TableCell>
-                  {r.allRepositories
-                    ? 'All repositories'
-                    : plural(r.repositoryIds.length, 'repository', 'repositories')}
+                  {r.allRepositories ? '所有 Repository' : plural(r.repositoryIds.length, '個 Repository')}
                 </TableCell>
                 <TableCell>{r.userCount}</TableCell>
                 <TableCell className="text-right">
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    aria-label={`Edit ${r.name}`}
+                    aria-label={`編輯 ${r.name}`}
                     disabled={!lists}
                     onClick={() => edit.show(r)}
                   >
                     <PencilIcon />
                   </Button>
                   {!r.builtin && (
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Delete ${r.name}`}
-                      onClick={() => remove.show(r)}
-                    >
+                    <Button variant="ghost" size="icon-sm" aria-label={`刪除 ${r.name}`} onClick={() => remove.show(r)}>
                       <Trash2Icon />
                     </Button>
                   )}
@@ -125,9 +118,9 @@ export function RolesSection() {
         <ConfirmDialog
           key={remove.key}
           open={remove.open}
-          title={`Delete the ${removing.name} role?`}
-          confirm="Delete role"
-          description={`${removing.userCount ? `${plural(removing.userCount, 'user')} will lose what this role grants. ` : ''}This cannot be undone.`}
+          title={`刪除角色「${removing.name}」？`}
+          confirm="刪除角色"
+          description={`${removing.userCount ? `${plural(removing.userCount, '位使用者')}將失去這個角色授予的權限。` : ''}此操作無法復原。`}
           onClose={remove.hide}
           onConfirm={() => deleteRole(removing.id).then(changed)}
         />

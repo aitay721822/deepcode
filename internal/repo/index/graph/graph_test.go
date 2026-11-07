@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"deepcode/internal/platform/storage"
+	"deepcode/internal/repo/index/graph/store"
 )
 
 // TestResolve: Go imports name every non-test file of a package through the
@@ -38,7 +39,7 @@ func TestResolve(t *testing.T) {
 		"tools/go.mod": "// tools\nmodule \"example.com/m/tools/v2\"\n\ngo 1.22\n"}
 	var got []string
 	for _, e := range resolve(files, configs) {
-		got = append(got, e.src+" > "+e.dst)
+		got = append(got, e.Src+" > "+e.Dst)
 	}
 	want := []string{
 		"index.js > web/src/util.ts",
@@ -88,6 +89,7 @@ func addFile(t *testing.T, db *sql.DB, snap int64, path, lang, content string) {
 func TestLinkStale(t *testing.T) {
 	ctx := context.Background()
 	db := open(t)
+	g := &Graph{Store: &store.Store{DB: db}}
 	run(t, db, `INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r')`)
 	run(t, db, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'a', 'ready'), (2, 1, 'b', 'pruned')`)
 	for _, snap := range []int64{1, 2} {
@@ -98,7 +100,7 @@ func TestLinkStale(t *testing.T) {
 		addFile(t, db, snap, "web/util.ts", "typescript", "export const u = 1\n")
 		addFile(t, db, snap, "README.md", "markdown", "import x from './x'\n")
 	}
-	n, err := LinkStale(ctx, db)
+	n, err := g.LinkStale(ctx)
 	if err != nil || n != 1 {
 		t.Fatalf("linked %d snapshots (%v), want 1", n, err)
 	}
@@ -115,50 +117,50 @@ func TestLinkStale(t *testing.T) {
 	if unread != 2 { // go.mod and README.md: no grammar reads them
 		t.Fatalf("%d contents unread, want 2", unread)
 	}
-	if n, err := LinkStale(ctx, db); err != nil || n != 0 {
+	if n, err := g.LinkStale(ctx); err != nil || n != 0 {
 		t.Fatalf("linked again: %d (%v)", n, err)
 	}
-	if n, err := Link(ctx, db, 2); err != nil || n != 0 || edges(2) != "" {
+	if n, err := g.Link(ctx, 2); err != nil || n != 0 || edges(2) != "" {
 		t.Fatalf("a pruned snapshot got %d edges (%v)", n, err)
 	}
 	// More edges than one transaction writes all land, and are all replaced.
 	run(t, db, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (3, 1, 'c', 'ready')`)
 	many := make([]edge, storeBatch+1)
 	for i := range many {
-		many[i] = edge{fmt.Sprintf("s%05d.go", i), "d.go"}
+		many[i] = edge{Src: fmt.Sprintf("s%05d.go", i), Dst: "d.go"}
 	}
 	count := func() (n int) {
 		db.QueryRow(`SELECT count(*) FROM file_edges WHERE snapshot_id = 3`).Scan(&n)
 		return n
 	}
-	if n, err := store(ctx, db, 3, many); err != nil || n != len(many) || count() != len(many) {
+	if n, err := g.save(ctx, 3, many); err != nil || n != len(many) || count() != len(many) {
 		t.Fatalf("stored %d, %d in the table (%v)", n, count(), err)
 	}
-	if n, err := store(ctx, db, 3, many[:2]); err != nil || n != 2 || count() != 2 {
+	if n, err := g.save(ctx, 3, many[:2]); err != nil || n != 2 || count() != 2 {
 		t.Fatalf("stored again %d, %d in the table (%v)", n, count(), err)
 	}
-	if n, err := store(ctx, db, 99, many[:2]); err != nil || n != 0 {
+	if n, err := g.save(ctx, 99, many[:2]); err != nil || n != 0 {
 		t.Fatalf("a snapshot deleted meanwhile: %d (%v)", n, err)
 	}
 
 	// What retrieval and the wiki read.
-	if got, err := Dependencies(ctx, db, 1, []string{"main.go", "web/util.ts"}, 10); err != nil || !reflect.DeepEqual(got, []string{"pkg/a.go"}) {
+	if got, err := g.Dependencies(ctx, 1, []string{"main.go", "web/util.ts"}, 10); err != nil || !reflect.DeepEqual(got, []string{"pkg/a.go"}) {
 		t.Errorf("what main.go and web/util.ts import: %v %v", got, err)
 	}
-	if got, _ := Dependencies(ctx, db, 1, []string{"pkg/a.go"}, 10); len(got) != 0 {
+	if got, _ := g.Dependencies(ctx, 1, []string{"pkg/a.go"}, 10); len(got) != 0 {
 		t.Errorf("pkg/a.go imports nothing, its importers aside: %v", got)
 	}
-	if got, _ := Dependencies(ctx, db, 1, []string{"main.go", "pkg/a.go"}, 10); len(got) != 0 {
+	if got, _ := g.Dependencies(ctx, 1, []string{"main.go", "pkg/a.go"}, 10); len(got) != 0 {
 		t.Errorf("the files asked about are not their own dependencies: %v", got)
 	}
-	if got, err := DirEdges(ctx, db, 1, 1); err != nil || !reflect.DeepEqual(got, []DirEdge{{".", "pkg", 1}}) {
+	if got, err := g.DirEdges(ctx, 1, 1); err != nil || !reflect.DeepEqual(got, []DirEdge{{".", "pkg", 1}}) {
 		t.Errorf("directory edges: %+v %v", got, err)
 	}
-	if got, err := Diagram(ctx, db, 1); err != nil || got != "flowchart TD\n  n0[\"(root)\"]\n  n1[\"pkg\"]\n  n0 --> n1\n" {
+	if got, err := g.Diagram(ctx, 1); err != nil || got != "flowchart TD\n  n0[\"(root)\"]\n  n1[\"pkg\"]\n  n0 --> n1\n" {
 		t.Errorf("diagram %q %v", got, err)
 	}
 	run(t, db, `INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'x.go', 'b.go'), (1, 'y.go', 'b.go'), (1, 'x.go', 'a.go')`)
-	if got, _ := Dependencies(ctx, db, 1, []string{"x.go", "y.go"}, 10); !reflect.DeepEqual(got, []string{"b.go", "a.go"}) {
+	if got, _ := g.Dependencies(ctx, 1, []string{"x.go", "y.go"}, 10); !reflect.DeepEqual(got, []string{"b.go", "a.go"}) {
 		t.Errorf("what both import comes first: %v", got)
 	}
 }
@@ -170,6 +172,7 @@ func TestLinkStale(t *testing.T) {
 func TestImpact(t *testing.T) {
 	ctx := context.Background()
 	db := open(t)
+	g := &Graph{Store: &store.Store{DB: db}}
 	run(t, db, `INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r')`)
 	run(t, db, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'a', 'ready'), (2, 1, 'b', 'ready'), (3, 1, 'c', 'ready')`)
 	for _, snap := range []int64{1, 2, 3} {
@@ -185,7 +188,7 @@ func TestImpact(t *testing.T) {
 	addFile(t, db, 3, "internal/extra/y/y.go", "go", "package y\n")
 	addFile(t, db, 3, "test/e2e.go", "go", "package e2e\n\nimport \"m/internal/extra/y\"\n") // a test's import wires nothing in
 	for _, snap := range []int64{1, 2, 3} {
-		if _, err := Link(ctx, db, snap); err != nil {
+		if _, err := g.Link(ctx, snap); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -197,27 +200,27 @@ func TestImpact(t *testing.T) {
 	}
 	declare(1, "func A() {")
 	declare(2, "func A() {")
-	if got, err := Impact(ctx, db, 1, 2, map[string]bool{"internal/pkg/a.go": true}); err != nil || len(got) != 0 {
+	if got, err := g.Impact(ctx, 1, 2, map[string]bool{"internal/pkg/a.go": true}); err != nil || len(got) != 0 {
 		t.Errorf("a body's change reached %v (%v)", got, err)
 	}
 	declare(2, "func A(n int) {")
-	if got, err := Impact(ctx, db, 1, 2, changed); err != nil || !reflect.DeepEqual(got, map[string]bool{"main.go": true}) {
+	if got, err := g.Impact(ctx, 1, 2, changed); err != nil || !reflect.DeepEqual(got, map[string]bool{"main.go": true}) {
 		t.Errorf("a changed signature reached %v (%v), want main.go", got, err)
 	}
-	if got, err := NewDirs(ctx, db, 1, 2, 2); err != nil || !reflect.DeepEqual(got, []string{"internal/tools"}) {
+	if got, err := g.NewDirs(ctx, 1, 2, 2); err != nil || !reflect.DeepEqual(got, []string{"internal/tools"}) {
 		t.Errorf("new directories %v (%v)", got, err)
 	}
-	if got, _ := NewDirs(ctx, db, 2, 2, 2); len(got) != 0 {
+	if got, _ := g.NewDirs(ctx, 2, 2, 2); len(got) != 0 {
 		t.Errorf("against itself: %v", got)
 	}
-	if got, err := Impact(ctx, db, 1, 3, map[string]bool{"internal/pkg/a.go": true}); err != nil || !reflect.DeepEqual(got, map[string]bool{"main.go": true}) {
+	if got, err := g.Impact(ctx, 1, 3, map[string]bool{"internal/pkg/a.go": true}); err != nil || !reflect.DeepEqual(got, map[string]bool{"main.go": true}) {
 		t.Errorf("a removed file reached %v (%v), want main.go", got, err)
 	}
-	if got, _ := NewDirs(ctx, db, 1, 3, 2); len(got) != 0 {
+	if got, _ := g.NewDirs(ctx, 1, 3, 2); len(got) != 0 {
 		t.Errorf("a directory only its own code and tests import: %v", got)
 	}
 	// The diagram cuts directories as deep as fit.
-	if d, err := Diagram(ctx, db, 2); err != nil || !strings.Contains(d, `["internal/tools/gen"]`) {
+	if d, err := g.Diagram(ctx, 2); err != nil || !strings.Contains(d, `["internal/tools/gen"]`) {
 		t.Errorf("diagram %q %v", d, err)
 	}
 }
@@ -228,7 +231,7 @@ func TestImpact(t *testing.T) {
 func TestDiagram(t *testing.T) {
 	var edges []edge
 	for i := range 20 {
-		edges = append(edges, edge{fmt.Sprintf("a/b%02d/c/x.go", i), "z/y.go"})
+		edges = append(edges, edge{Src: fmt.Sprintf("a/b%02d/c/x.go", i), Dst: "z/y.go"})
 	}
 	if got := draw(group(edges, 1)); got != "flowchart TD\n  n0[\"a\"]\n  n1[\"z\"]\n  n0 --> n1\n" {
 		t.Errorf("one segment: %q", got)
@@ -240,18 +243,18 @@ func TestDiagram(t *testing.T) {
 	// Java's folders above its packages are the trunk, no level, and the
 	// labels skip what all share.
 	const pkg = "src/main/java/org/acme/shop/"
-	java := []edge{{pkg + "owner/Owners.java", pkg + "model/Person.java"}, {pkg + "vet/Vets.java", pkg + "model/Entity.java"},
-		{"src/test/java/org/acme/shop/owner/OwnersTests.java", pkg + "owner/Owners.java"}, {pkg + "App.java", pkg + "vet/Vets.java"}}
+	java := []edge{{Src: pkg + "owner/Owners.java", Dst: pkg + "model/Person.java"}, {Src: pkg + "vet/Vets.java", Dst: pkg + "model/Entity.java"},
+		{Src: "src/test/java/org/acme/shop/owner/OwnersTests.java", Dst: pkg + "owner/Owners.java"}, {Src: pkg + "App.java", Dst: pkg + "vet/Vets.java"}}
 	if got := draw(group(java, 1)); got != "flowchart TD\n  n0[\"shop\"]\n  n1[\"shop/vet\"]\n  n2[\"shop/owner\"]\n  n3[\"shop/model\"]\n  n0 --> n1\n  n2 --> n3\n  n1 --> n3\n" {
 		t.Errorf("packages: %q", got)
 	}
 	// So is src/ when all is in it.
-	if got := group([]edge{{"src/a/y.go", "src/b/z.go"}}, 1); !reflect.DeepEqual(got, []DirEdge{{"src/a", "src/b", 1}}) {
+	if got := group([]edge{{Src: "src/a/y.go", Dst: "src/b/z.go"}}, 1); !reflect.DeepEqual(got, []DirEdge{{"src/a", "src/b", 1}}) {
 		t.Errorf("under src: %+v", got)
 	}
 	// A label shows a long run of folded folders by its first and last.
 	const g, x = "gson/src/main/java/com/google/gson", "extras/src/main/java/com/google/gson/typeadapters"
-	modules := levels([]edge{{g + "/internal/A.java", g + "/B.java"}, {x + "/C.java", g + "/B.java"}})
+	modules := levels([]edge{{Src: g + "/internal/A.java", Dst: g + "/B.java"}, {Src: x + "/C.java", Dst: g + "/B.java"}})
 	if a, b := modules.short(g+"/internal"), modules.short(x); a != "gson/…/gson/internal" || b != "extras/…/typeadapters" {
 		t.Errorf("short: %q %q", a, b)
 	}
@@ -259,19 +262,19 @@ func TestDiagram(t *testing.T) {
 		t.Errorf("escaped: %q", got)
 	}
 	// Tests, examples and docs show how the code is used, not how its parts depend on each other.
-	used := []edge{{"_examples/rest/main.go", "mux.go"}, {"middleware/logger_test.go", "mux.go"}, {"web/src/a.test.ts", "web/lib/x.ts"},
-		{"tests/test_x.go", "pkg/y.go"}, {"docs/demo/a.ts", "web/lib/x.ts"}, {"middleware/logger.go", "mux.go"}}
+	used := []edge{{Src: "_examples/rest/main.go", Dst: "mux.go"}, {Src: "middleware/logger_test.go", Dst: "mux.go"}, {Src: "web/src/a.test.ts", Dst: "web/lib/x.ts"},
+		{Src: "tests/test_x.go", Dst: "pkg/y.go"}, {Src: "docs/demo/a.ts", Dst: "web/lib/x.ts"}, {Src: "middleware/logger.go", Dst: "mux.go"}}
 	if got := group(used, 1); !reflect.DeepEqual(got, []DirEdge{{"middleware", ".", 1}}) {
 		t.Errorf("grouped with tests and examples aside: %+v", got)
 	}
-	if got := group([]edge{{"a/x.go", "b/y.go"}, {"c/x.go", "b/y.go"}, {"c/z.go", "b/w.go"}}, 1); !reflect.DeepEqual(got, []DirEdge{{"c", "b", 2}, {"a", "b", 1}}) {
+	if got := group([]edge{{Src: "a/x.go", Dst: "b/y.go"}, {Src: "c/x.go", Dst: "b/y.go"}, {Src: "c/z.go", Dst: "b/w.go"}}, 1); !reflect.DeepEqual(got, []DirEdge{{"c", "b", 2}, {"a", "b", 1}}) {
 		t.Errorf("busiest first: %+v", got)
 	}
 	var full []edge // six directories all importing each other: 30 arrows
 	for i := range 6 {
 		for j := range 6 {
 			if i != j {
-				full = append(full, edge{fmt.Sprintf("d%d/x.go", i), fmt.Sprintf("d%d/y.go", j)})
+				full = append(full, edge{Src: fmt.Sprintf("d%d/x.go", i), Dst: fmt.Sprintf("d%d/y.go", j)})
 			}
 		}
 	}
@@ -280,5 +283,34 @@ func TestDiagram(t *testing.T) {
 	}
 	if draw(nil) != "" {
 		t.Error("no edges, no diagram")
+	}
+}
+
+// TestParts: every file of code is cut to the least depth of levels that
+// gives enough directories, the folders leading to one other folding into
+// one level; tests, examples and docs to ""; and the imports between the
+// directories counted, those of tests aside.
+func TestParts(t *testing.T) {
+	paths := []string{"main.go", "README.md", "src/a/x.go", "src/a/y.go", "src/a/x_test.go", "src/b/z.go", "src/b/c/d/w.go", "examples/e.go"}
+	edges := []edge{{Src: "src/a/x.go", Dst: "src/b/z.go"}, {Src: "src/a/y.go", Dst: "src/b/c/d/w.go"}, {Src: "src/a/x_test.go", Dst: "src/b/z.go"}, {Src: "main.go", Dst: "src/a/x.go"}}
+	for _, c := range []struct {
+		least int
+		want  map[string]string
+		deps  []DirEdge
+	}{
+		{2, map[string]string{"main.go": ".", "src/a/x.go": "src", "src/a/y.go": "src", "src/b/z.go": "src", "src/b/c/d/w.go": "src"},
+			[]DirEdge{{".", "src", 1}}},
+		{4, map[string]string{"main.go": ".", "src/a/x.go": "src/a", "src/a/y.go": "src/a", "src/b/z.go": "src/b", "src/b/c/d/w.go": "src/b/c/d"},
+			[]DirEdge{{".", "src/a", 1}, {"src/a", "src/b", 1}, {"src/a", "src/b/c/d", 1}}},
+		{99, map[string]string{"main.go": ".", "src/a/x.go": "src/a", "src/a/y.go": "src/a", "src/b/z.go": "src/b", "src/b/c/d/w.go": "src/b/c/d"},
+			[]DirEdge{{".", "src/a", 1}, {"src/a", "src/b", 1}, {"src/a", "src/b/c/d", 1}}},
+	} {
+		got, deps := parts(paths, edges, c.least)
+		for _, p := range []string{"README.md", "src/a/x_test.go", "examples/e.go"} {
+			c.want[p] = ""
+		}
+		if !reflect.DeepEqual(got, c.want) || !reflect.DeepEqual(deps, c.deps) {
+			t.Errorf("least %d: %v %+v", c.least, got, deps)
+		}
 	}
 }

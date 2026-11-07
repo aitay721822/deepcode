@@ -31,7 +31,8 @@ export function JobProgress({
       <section>
         <div className="flex items-center gap-2.5" role="status">
           <span className="font-serif text-[20px] leading-tight [overflow-wrap:anywhere]">
-            {failed ? `${title} failed` : title}
+            {/* A space only after a Latin letter or digit: "產生 Wiki 失敗", "建立索引失敗". */}
+            {failed ? `${title}${/[A-Za-z0-9]$/.test(title) ? ' ' : ''}失敗` : title}
           </span>
           {isActive(job) && (
             <span className="eyebrow ml-auto text-muted-foreground">
@@ -71,14 +72,14 @@ export function JobProgress({
               <p className="text-destructive">{job.error}</p>
               {retry?.error && (
                 <p className="text-destructive" role="alert">
-                  Retry failed: {retry.error}
+                  重試失敗：{retry.error}
                 </p>
               )}
-              {retry?.upToDate && <Status className="text-muted-foreground">Already at the latest commit</Status>}
+              {retry?.upToDate && <Status className="text-muted-foreground">已是最新的 Commit</Status>}
             </div>
             {retry && (
               <Button variant="outline" size="sm" busy={retry.busy} onClick={retry.run}>
-                {retry.busy && <Spinner />} Retry
+                {retry.busy && <Spinner />} 重試
               </Button>
             )}
           </div>

@@ -3,6 +3,7 @@ package wiki
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"deepcode/internal/knowledge/evidence"
@@ -10,10 +11,12 @@ import (
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/gitserver"
-	"deepcode/internal/repo/index/graph"
 )
 
-const writePrompt = `You write one page of a technical wiki for the repository %s at commit %s, in %s, as Markdown.
+// writePrompt is the same for every page of every repository, so the model
+// server's prompt cache holds it; what varies follows in the user's message,
+// the wiki's own lines first and the page's last.
+const writePrompt = `You write one page of a technical wiki for a code repository, as Markdown, in the language the user's message names.
 - Open with a short paragraph on what this part of the codebase does and why, then use "##" sections ("###" if needed).
 - Explain how the pieces fit together: responsibilities, main types and functions, control and data flow. Use tables for lists of components.
 - Base every statement on the <source> blocks and cite them as [path:start-end] with the line numbers shown, one range per brackets. Cite only ranges that appear in the sources.
@@ -26,32 +29,62 @@ const writePrompt = `You write one page of a technical wiki for the repository %
 // a diagram, drawn from the import graph.
 const drawnNote = "This page is the overview, and a diagram of the imports between the repository's directories is shown with it: draw no diagram of your own.\n\n"
 
-// write drafts one page from its sources, steered by the repository's notes
-// (a block from steer, or ""). The model's text streams into the job's output
-// as it is written.
-func (g *Generator) write(ctx context.Context, snap int64, repo string, src source, p page, titles []string, notes string, progress jobs.Progress) (string, []evidence.Citation, error) {
-	hits, err := g.sources(ctx, snap, p)
+// write drafts page p, one of pages, from its sources, steered by the
+// repository's notes (a block from steer, or ""): a section's page as its
+// overview, a page under one as one of its parts. The model's text streams
+// into the job's output as it is written.
+//
+// The prompt runs from what every call shares to what only this page has, so
+// the model server's prompt cache reads the start once: the rules, the wiki's
+// own lines, the sources its section's pages share, then this page's request
+// and its own sources.
+func (g *Generator) write(ctx context.Context, snap int64, repo string, src source, p page, pages []page, notes string, progress jobs.Progress) (string, []evidence.Citation, error) {
+	head, inSection := section(p, pages)
+	shared, own, err := g.sources(ctx, snap, p, head, inSection)
 	if err != nil {
 		return "", nil, err
 	}
-	sources, used := evidence.Format(hits, evidenceChars)
+	common, used := evidence.Format(shared, sectionChars)
+	own = slices.DeleteFunc(own, func(h retrieval.Hit) bool { // what the shared blocks hold already
+		return slices.ContainsFunc(used, func(u retrieval.Hit) bool { return u.ChunkID == h.ChunkID })
+	})
+	sources, mine := evidence.Format(own, evidenceChars-len(common))
+	used = append(used, mine...)
 	if len(used) == 0 {
 		return "No indexed code matched this topic, so it cannot be confirmed from the current code.", nil, nil
 	}
-	progress.Logf("%d source blocks from %d search hits", len(used), len(hits))
+	progress.Logf("%d source blocks (%d shared with the section) from %d search hits", len(used), len(used)-len(mine), len(shared)+len(own))
+	if common != "" {
+		common = fmt.Sprintf("Sources the pages of the section %q share:\n\n%s", head.Title, common)
+	}
 	drawn := ""
-	if p.position == 0 {
-		if d, err := graph.Diagram(ctx, g.DB, snap); err != nil {
+	if p.Position == 0 {
+		if d, err := g.Graph.Diagram(ctx, snap); err != nil {
 			return "", nil, err
 		} else if d != "" {
 			drawn = drawnNote
 		}
 	}
+	titles, parts, section := make([]string, len(pages)), []string{}, ""
+	for i, q := range pages {
+		titles[i] = q.Title
+		if q.Parent == p.Position && q.Position != p.Position {
+			parts = append(parts, q.Title)
+		} else if q.Position == p.Parent {
+			section = q.Title
+		}
+	}
+	place := ""
+	if len(parts) > 0 {
+		place = fmt.Sprintf("This page opens a section whose pages are: %s. Give the section's overview: what its part of the code does and how those pages' subjects fit together, leaving each one's details to its page.\n\n", strings.Join(parts, " | "))
+	} else if section != "" {
+		place = fmt.Sprintf("This page is part of the section %q: keep to its own subject, which the section's other pages do not cover.\n\n", section)
+	}
 	write, flush := progress.Lines()
 	out, err := g.Chat.Stream(ctx, []ai.Message{
-		{Role: "system", Content: fmt.Sprintf(writePrompt, repo, src.sha[:min(7, len(src.sha))], g.Language)},
-		{Role: "user", Content: fmt.Sprintf("Pages of this wiki: %s\n\n%s%sWrite the page %q. Focus: %s\n\nSources:\n\n%s",
-			strings.Join(titles, " | "), notes, drawn, p.title, p.query, sources)},
+		{Role: "system", Content: writePrompt},
+		{Role: "user", Content: fmt.Sprintf("Repository: %s at commit %s. Write in %s.\nPages of this wiki: %s\n\n%s%s%s%sWrite the page %q. Focus: %s\n\nSources:\n\n%s",
+			repo, src.sha[:min(7, len(src.sha))], g.Language, strings.Join(titles, " | "), notes, common, drawn, place, p.Title, p.Query, sources)},
 	}, write)
 	flush()
 	if err != nil {
@@ -63,18 +96,49 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 	return content, cites, nil
 }
 
-// sources is the evidence for page p: the search hits for its title and
-// focus, after the README for the overview.
-func (g *Generator) sources(ctx context.Context, snap int64, p page) ([]retrieval.Hit, error) {
-	res, err := g.Retriever.Search(ctx, snap, p.title+"\n"+p.query, pageHits)
-	if err != nil || p.position != 0 {
-		return res.Hits, err
+// sources is the evidence for page p: shared, the search hits for the title
+// and focus of the section it is in (head, when inSection), and own, the hits
+// for its own, after the README for the overview. A section's page searches
+// once: its hits are both.
+func (g *Generator) sources(ctx context.Context, snap int64, p, head page, inSection bool) (shared, own []retrieval.Hit, err error) {
+	if inSection {
+		res, err := g.Retriever.Search(ctx, snap, head.Title+"\n"+head.Query, pageHits)
+		if err != nil {
+			return nil, nil, err
+		}
+		shared = res.Hits
+	}
+	if inSection && head.Position == p.Position {
+		own = slices.Clone(shared)
+	} else {
+		res, err := g.Retriever.Search(ctx, snap, p.Title+"\n"+p.Query, pageHits)
+		if err != nil {
+			return nil, nil, err
+		}
+		own = res.Hits
+	}
+	if p.Position != 0 {
+		return shared, own, nil
 	}
 	readme, err := g.Retriever.Readme(ctx, snap)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return dedupe(append(readme, res.Hits...)), nil
+	return shared, dedupe(append(readme, own...)), nil
+}
+
+// section is the section page p is in: p itself when pages sit under it, or
+// the page it sits under; false for a page in no section.
+func section(p page, pages []page) (page, bool) {
+	for _, q := range pages {
+		if p.Parent >= 0 && q.Position == p.Parent {
+			return q, true
+		}
+		if p.Parent < 0 && q.Parent == p.Position {
+			return p, true
+		}
+	}
+	return page{}, false
 }
 
 // clean drops reasoning blocks, a wrapping code fence and a leading "#" title.

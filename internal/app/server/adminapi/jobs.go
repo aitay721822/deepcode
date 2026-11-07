@@ -22,12 +22,12 @@ const firstLogs = 5000
 func (a *API) listJobs(c *gin.Context) {
 	status := c.Query("status")
 	if status != "" && !slices.Contains(jobs.Statuses, status) {
-		httpx.Fail(c, http.StatusBadRequest, "status must be one of "+strings.Join(jobs.Statuses, ", "))
+		httpx.Fail(c, http.StatusBadRequest, "status 必須是下列其中之一："+strings.Join(jobs.Statuses, ", "))
 		return
 	}
 	limit, err := strconv.Atoi(c.DefaultQuery("limit", "100"))
 	if err != nil || limit < 1 || limit > 500 {
-		httpx.Fail(c, http.StatusBadRequest, "limit must be 1 to 500")
+		httpx.Fail(c, http.StatusBadRequest, "limit 必須介於 1 到 500")
 		return
 	}
 	// A job's output quotes its repository's code and wiki, so a job is as

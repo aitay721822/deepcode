@@ -10,7 +10,6 @@ import (
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/catalog"
-	"deepcode/internal/repo/index/graph"
 	"deepcode/internal/repo/index/indexer"
 )
 
@@ -75,7 +74,7 @@ func (p pipeline) fillTerms(ctx context.Context) {
 // planning and its diagram go without them, and a stop leaves the rest to
 // the next start.
 func (p pipeline) linkStale(ctx context.Context) {
-	n, err := graph.LinkStale(ctx, p.indexer.DB)
+	n, err := p.indexer.Graph.LinkStale(ctx)
 	if n > 0 {
 		log.Printf("indexer: linked the files of %d snapshots by their imports", n)
 	}

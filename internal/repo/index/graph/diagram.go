@@ -2,7 +2,6 @@ package graph
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 )
@@ -21,8 +20,8 @@ const (
 // cuts directories to the most levels, at most maxDepth, that leave at most
 // maxNodes of them linked; one level is drawn trimmed if even that leaves
 // more. Long runs of folders a level folds are shortened in the labels.
-func Diagram(ctx context.Context, db *sql.DB, snap int64) (string, error) {
-	edges, err := loadEdges(ctx, db, snap)
+func (g *Graph) Diagram(ctx context.Context, snap int64) (string, error) {
+	edges, err := g.Store.Edges(ctx, snap)
 	if err != nil || len(edges) == 0 {
 		return "", err
 	}

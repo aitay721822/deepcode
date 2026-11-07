@@ -3,42 +3,34 @@ package retrieval
 import (
 	"context"
 	"strings"
+
+	"deepcode/internal/knowledge/retrieval/store"
 )
 
-type SymbolHit struct {
-	Name          string `json:"name"`
-	QualifiedName string `json:"qualifiedName"`
-	Kind          string `json:"kind"`
-	Path          string `json:"path"`
-	StartLine     int    `json:"startLine"`
-	EndLine       int    `json:"endLine"`
-	Signature     string `json:"signature"`
-}
+type SymbolHit = store.SymbolHit // a symbol the search behind the UI found
 
 // Symbols is the symbol search behind the UI: substring match on names,
 // exact matches first, then prefixes, then shorter names.
 func (r *Retriever) Symbols(ctx context.Context, snapshotID int64, q string, limit int) ([]SymbolHit, error) {
-	out := []SymbolHit{}
 	q = strings.TrimSpace(q)
 	if q == "" {
-		return out, nil
+		return []SymbolHit{}, nil
 	}
-	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
-	rows, err := r.DB.QueryContext(ctx, `
-		SELECT name, qualified_name, kind, path, start_line, end_line, signature FROM symbols
-		WHERE snapshot_id = ?1 AND (name LIKE ?2 ESCAPE '\' OR qualified_name LIKE ?2 ESCAPE '\')
-		ORDER BY name = ?3 COLLATE NOCASE DESC, name LIKE ?4 ESCAPE '\' DESC, length(name), name, path
-		LIMIT ?5`, snapshotID, "%"+esc+"%", q, esc+"%", limit)
+	return r.Store.Symbols(ctx, snapshotID, q, limit)
+}
+
+// Users returns chunks of the files that import a file defining one of names
+// and use that name: the code that calls, handles or builds it, which a search
+// for the name finds only when its words win. Each file gives one chunk, the
+// files using most of names first, tests, docs and generated files aside; at
+// most limit. Names match exactly, case and all, as the code holds them.
+func (r *Retriever) Users(ctx context.Context, snapshotID int64, names []string, limit int) ([]Hit, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	ids, err := r.Store.Users(ctx, snapshotID, names, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var s SymbolHit
-		if err := rows.Scan(&s.Name, &s.QualifiedName, &s.Kind, &s.Path, &s.StartLine, &s.EndLine, &s.Signature); err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
+	return r.Store.Chunks(ctx, ids)
 }

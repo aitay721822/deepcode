@@ -249,7 +249,7 @@ func checkJobErrors(t *testing.T, db *sql.DB, admin, reader *client, repoID stri
 	var seen, full repoView
 	reader.get("/api/repos/"+repoID, &seen)
 	admin.get("/api/repos/"+repoID, &full)
-	if seen.Job == nil || full.Job == nil || seen.Job.Error != "an administrator can find the details in the job console" || full.Job.Error != detail {
+	if seen.Job == nil || full.Job == nil || seen.Job.Error != "管理員可在工作主控台查看詳細資訊" || full.Job.Error != detail {
 		t.Fatalf("job error: the reader sees %+v, the admin %+v", seen.Job, full.Job)
 	}
 	var list []repoView

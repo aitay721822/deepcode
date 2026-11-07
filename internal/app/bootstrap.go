@@ -12,7 +12,7 @@ import (
 // bootstrapAdmin creates the user "admin" on the first start and says how to
 // sign in; the conversations from before there were accounts go to the
 // first administrator.
-func bootstrapAdmin(ctx context.Context, accounts *account.Store, conversations *chat.Service, password string) error {
+func bootstrapAdmin(ctx context.Context, accounts *account.Service, conversations *chat.Service, password string) error {
 	created, generated, err := accounts.Bootstrap(ctx, password)
 	switch {
 	case err != nil:

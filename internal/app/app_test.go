@@ -16,10 +16,13 @@ import (
 
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
+	jobstore "deepcode/internal/platform/jobs/store"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/catalog"
+	catalogstore "deepcode/internal/repo/catalog/store"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
+	serverstore "deepcode/internal/repo/gitserver/store"
 )
 
 // TestPollRound: a git server that stays unreachable is logged once, not
@@ -44,8 +47,8 @@ func TestPollRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Only file: remotes are allowed, so every ls-remote of the https remote fails the same way.
-	cat := &catalog.Catalog{DB: db, Queue: jobs.New(db, bus, time.Minute), Git: &git.Client{Dir: t.TempDir(), AllowProtocol: "file"},
-		Servers: &gitserver.Store{DB: db, Box: box}}
+	cat := &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: jobs.New(&jobstore.Store{DB: db}, bus, time.Minute),
+		Git: &git.Client{Dir: t.TempDir(), AllowProtocol: "file"}, Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}}
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)

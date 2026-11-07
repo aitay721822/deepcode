@@ -46,7 +46,7 @@ function DialogContent({ className, children, ...props }: ComponentProps<typeof 
               <div className="grid min-h-0 gap-4 overflow-y-auto p-6 [overflow-wrap:anywhere]">{children}</div>
               <DialogPrimitive.Close className="absolute top-4 right-4 rounded-md bg-popover p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4">
                 <XIcon />
-                <span className="sr-only">Close</span>
+                <span className="sr-only">關閉</span>
               </DialogPrimitive.Close>
             </motion.div>
           </DialogPrimitive.Content>

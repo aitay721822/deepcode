@@ -13,24 +13,36 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"deepcode/internal/access/account"
+	accountstore "deepcode/internal/access/account/store"
 	"deepcode/internal/access/role"
+	rolestore "deepcode/internal/access/role/store"
 	"deepcode/internal/access/session"
+	sessionstore "deepcode/internal/access/session/store"
 	"deepcode/internal/app/importer"
 	"deepcode/internal/app/server"
 	"deepcode/internal/app/server/adminapi"
 	"deepcode/internal/app/server/authapi"
 	"deepcode/internal/app/server/repoapi"
 	"deepcode/internal/knowledge/chat"
+	chatstore "deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/retrieval"
+	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/knowledge/wiki"
+	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
+	jobstore "deepcode/internal/platform/jobs/store"
 	"deepcode/internal/repo/catalog"
+	catalogstore "deepcode/internal/repo/catalog/store"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
+	serverstore "deepcode/internal/repo/gitserver/store"
+	"deepcode/internal/repo/index/graph"
+	graphstore "deepcode/internal/repo/index/graph/store"
 	"deepcode/internal/repo/index/indexer"
+	indexstore "deepcode/internal/repo/index/indexer/store"
 	"deepcode/internal/repo/index/vectorstore"
 )
 
@@ -61,19 +73,22 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	chatP, embedP := providers(cfg)
 	mem := cache.New(cfg.CacheMB << 20)
 	vectors := &vectorstore.SQLite{DB: db}
-	retriever := &retrieval.Retriever{DB: db, Embed: embedP, Vectors: vectors, Cache: mem}
+	graphs := &graph.Graph{Store: &graphstore.Store{DB: db}}
+	retriever := &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: graphs, Embed: embedP, Vectors: vectors, Cache: mem}
 	gitc := &git.Client{Dir: repos, AllowProtocol: cfg.GitProtocols, MaxBytes: int64(cfg.MaxRepoMB) << 20}
-	servers := &gitserver.Store{DB: db, Box: box}
-	queue := jobs.New(db, bus, cfg.JobTimeout)
-	cat := &catalog.Catalog{DB: db, Queue: queue, Git: gitc, Servers: servers, Cache: mem, MaxRepoKB: int64(cfg.MaxRepoMB) << 10,
-		ChatModel: cfg.ChatModel, EmbedModel: cfg.EmbedModel}
-	conversations := &chat.Service{DB: db, Catalog: cat, Retriever: retriever, Chat: chatP}
-	accounts := &account.Store{DB: db}
-	roles := &role.Store{DB: db}
-	sessions := session.New(db, accounts, roles, cfg.SessionTTL)
+	servers := &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}
+	queue := jobs.New(&jobstore.Store{DB: db}, bus, cfg.JobTimeout)
+	cat := &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: queue, Git: gitc, Servers: servers, Cache: mem,
+		MaxRepoKB: int64(cfg.MaxRepoMB) << 10, ChatModel: cfg.ChatModel, EmbedModel: cfg.EmbedModel}
+	conversations := &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: cat, Retriever: retriever, Chat: chatP}
+	wikis := &wikistore.Store{DB: db}
+	accounts := &account.Service{Store: &accountstore.Store{DB: db}}
+	roles := &role.Service{Store: &rolestore.Store{DB: db}}
+	sessions := session.New(&sessionstore.Store{DB: db}, accounts, roles, cfg.SessionTTL)
 
 	p := pipeline{queue: queue, catalog: cat, syncEvery: cfg.SyncEvery, indexer: &indexer.Indexer{
-		DB: db, Git: gitc, Servers: servers, Embed: embedP, Vectors: vectors, Events: bus,
+		Store: &indexstore.Store{DB: db}, Graph: graphs,
+		Git: gitc, Servers: servers, Embed: embedP, Vectors: vectors, Events: bus,
 		Limits: indexer.Limits{
 			MaxFiles:      cfg.MaxFiles,
 			MaxFileBytes:  int64(cfg.MaxFileKB) << 10,
@@ -81,12 +96,13 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 		},
 	}}
 	if chatP != nil {
-		p.wiki = &wiki.Generator{DB: db, Catalog: cat, Retriever: retriever, Chat: chatP, Language: cfg.WikiLanguage}
+		p.wiki = &wiki.Generator{Store: wikis, Graph: graphs, Catalog: cat, Retriever: retriever, Chat: chatP, Language: cfg.WikiLanguage,
+			Parallel: cfg.WikiParallel, MaxPages: cfg.WikiMaxPages}
 	}
 	handler, err := server.Router(
 		&authapi.API{Sessions: sessions},
 		&repoapi.API{Sessions: sessions, Catalog: cat, Importer: &importer.Service{Catalog: cat}, Servers: servers, Queue: queue,
-			Retriever: retriever, Chat: conversations, Wiki: wiki.Reader{DB: db}},
+			Retriever: retriever, Chat: conversations, Wiki: wiki.Reader{Store: wikis, Graph: graphs}},
 		&adminapi.API{Sessions: sessions, Accounts: accounts, Roles: roles, Servers: servers, Catalog: cat, Queue: queue, Bus: bus},
 		gin.H{"status": "ok", "chatModel": cfg.ChatModel, "embeddingModel": cfg.EmbedModel},
 		ui, loopback, cfg.TrustedProxies)

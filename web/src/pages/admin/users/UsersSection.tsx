@@ -32,9 +32,9 @@ export function UsersSection() {
   }
   return (
     <section>
-      <SectionHead title="Users">
+      <SectionHead title="使用者">
         <Button disabled={!roles} onClick={() => edit.show('new')}>
-          <PlusIcon /> New user
+          <PlusIcon /> 新增使用者
         </Button>
       </SectionHead>
       <SignUpSwitch />
@@ -51,13 +51,13 @@ export function UsersSection() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Username</TableHead>
-              <TableHead>Display name</TableHead>
-              <TableHead>Roles</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Created</TableHead>
+              <TableHead>使用者名稱</TableHead>
+              <TableHead>顯示名稱</TableHead>
+              <TableHead>角色</TableHead>
+              <TableHead>狀態</TableHead>
+              <TableHead>建立於</TableHead>
               <TableHead>
-                <span className="sr-only">Actions</span>
+                <span className="sr-only">操作</span>
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -76,10 +76,10 @@ export function UsersSection() {
                 <TableCell>
                   {u.disabled ? (
                     <Badge variant="outline" className="border-destructive/50 text-destructive">
-                      Disabled
+                      已停用
                     </Badge>
                   ) : (
-                    'Active'
+                    '啟用中'
                   )}
                 </TableCell>
                 <TableCell>{formatDate(u.createdAt)}</TableCell>
@@ -87,7 +87,7 @@ export function UsersSection() {
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    aria-label={`Edit ${u.username}`}
+                    aria-label={`編輯 ${u.username}`}
                     disabled={!roles}
                     onClick={() => edit.show(u)}
                   >
@@ -97,7 +97,7 @@ export function UsersSection() {
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label={`Delete ${u.username}`}
+                      aria-label={`刪除 ${u.username}`}
                       onClick={() => remove.show(u)}
                     >
                       <Trash2Icon />
@@ -124,9 +124,9 @@ export function UsersSection() {
         <ConfirmDialog
           key={remove.key}
           open={remove.open}
-          title={`Delete ${removing.username}?`}
-          confirm="Delete user"
-          description="The account can no longer sign in. This cannot be undone."
+          title={`刪除 ${removing.username}？`}
+          confirm="刪除使用者"
+          description="此帳號將無法再登入。此操作無法復原。"
           onClose={remove.hide}
           onConfirm={() => deleteUser(removing.id).then(reload)}
         />

@@ -1,4 +1,6 @@
-package gitserver
+// Package secret seals the git servers' access tokens and OAuth secrets at
+// rest, so the database alone does not give them away.
+package secret
 
 import (
 	"crypto/aes"
@@ -13,7 +15,7 @@ import (
 )
 
 // ErrSealed is a stored token this secret key cannot decrypt.
-var ErrSealed = errors.New("the token cannot be decrypted with this secret key (was DEEPCODE_SECRET_KEY or data/secret.key changed?); enter it again")
+var ErrSealed = errors.New("無法用目前的加密金鑰解密 Token（DEEPCODE_SECRET_KEY 或 data/secret.key 是否已變更？）；請重新輸入 Token")
 
 // Box seals access tokens with AES-256-GCM, so the database alone does not
 // give them away.

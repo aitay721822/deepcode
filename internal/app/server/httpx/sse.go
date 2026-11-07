@@ -68,7 +68,7 @@ func (s *Stream) write(frame string) {
 // Principal sees role changes; once the session has ended, its user is
 // disabled, or allowed rejects them, it cancels ctx to end the stream. Call
 // stop before the handler returns.
-func (s *Stream) Watch(c *gin.Context, sessions *session.Store, allowed func(*session.Principal) bool) (ctx context.Context, stop func()) {
+func (s *Stream) Watch(c *gin.Context, sessions *session.Service, allowed func(*session.Principal) bool) (ctx context.Context, stop func()) {
 	ctx, cancel := context.WithCancel(c.Request.Context())
 	done := make(chan struct{})
 	token := SessionToken(c)

@@ -21,8 +21,8 @@ type Meta struct {
 
 // Kinds of failure a caller can act on.
 var (
-	ErrNotFound = errors.New("repository not found")
-	ErrUpstream = errors.New("git server API failure") // unreachable, rate limited, token rejected
+	ErrNotFound = errors.New("找不到 Repository")
+	ErrUpstream = errors.New("Git 伺服器 API 錯誤") // unreachable, rate limited, token rejected
 )
 
 type failure struct {
@@ -49,7 +49,7 @@ func Check(ctx context.Context, s gitserver.Server) (string, error) {
 			if err := get(ctx, s, "/projects?per_page=1", &projects); err != nil {
 				return "", err
 			}
-			return "Reachable without a token: only public projects can be imported.", nil
+			return "不需 Token 即可連線：只能匯入公開專案。", nil
 		}
 		var limit struct {
 			Rate struct{ Limit, Remaining int } `json:"rate"`
@@ -57,7 +57,7 @@ func Check(ctx context.Context, s gitserver.Server) (string, error) {
 		if err := get(ctx, s, "/rate_limit", &limit); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Reachable without a token: only public repositories can be imported (%d of %d API requests left this hour).",
+		return fmt.Sprintf("不需 Token 即可連線：只能匯入公開 Repository（這個小時還剩 %d / %d 次 API 請求）。",
 			limit.Rate.Remaining, limit.Rate.Limit), nil
 	}
 	var user struct {
@@ -67,5 +67,5 @@ func Check(ctx context.Context, s gitserver.Server) (string, error) {
 	if err := get(ctx, s, "/user", &user); err != nil {
 		return "", err
 	}
-	return "Signed in as " + user.Login + user.Username + ".", nil
+	return "已以 " + user.Login + user.Username + " 身分登入。", nil
 }

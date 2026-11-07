@@ -15,8 +15,8 @@ var segmentRe = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,254}$`)
 // repository on one of the servers, or a bare path (owner/name, or
 // group/subgroup/name on GitLab) on server id, the first server when id is 0.
 // The server comes with its token unsealed.
-func (st *Store) Resolve(ctx context.Context, raw string, id int64) (Server, string, error) {
-	servers, err := st.List(ctx)
+func (sv *Service) Resolve(ctx context.Context, raw string, id int64) (Server, string, error) {
+	servers, err := sv.List(ctx)
 	if err != nil {
 		return Server{}, "", err
 	}
@@ -24,7 +24,7 @@ func (st *Store) Resolve(ctx context.Context, raw string, id int64) (Server, str
 	if err != nil {
 		return Server{}, "", err
 	}
-	s, err = st.unseal(s)
+	s, err = sv.unseal(ctx, s)
 	return s, path, err
 }
 
@@ -35,7 +35,7 @@ func match(servers []Server, raw string, id int64) (Server, string, error) {
 	if strings.Contains(raw, "://") {
 		u, err := url.Parse(raw)
 		if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return Server{}, "", invalid("enter a repository URL without credentials or a query")
+			return Server{}, "", invalid("請輸入不含帳號密碼或查詢字串的 Repository URL")
 		}
 		for i := range servers { // the longest base wins: https://h/gitlab over https://h
 			if p, ok := under(u, servers[i].BaseURL); ok && (srv == nil || len(servers[i].BaseURL) > len(srv.BaseURL)) {
@@ -43,7 +43,7 @@ func match(servers []Server, raw string, id int64) (Server, string, error) {
 			}
 		}
 		if srv == nil {
-			return Server{}, "", invalid("no git server is configured for %s://%s; an administrator can add it", u.Scheme, u.Host)
+			return Server{}, "", invalid("尚未設定 %s://%s 的 Git 伺服器；管理員可以新增", u.Scheme, u.Host)
 		}
 	} else {
 		for i := range servers {
@@ -53,15 +53,15 @@ func match(servers []Server, raw string, id int64) (Server, string, error) {
 			}
 		}
 		if srv == nil {
-			return Server{}, "", invalid("git server %d does not exist", id)
+			return Server{}, "", invalid("Git 伺服器 %d 不存在", id)
 		}
 	}
 	path, ok := clean(srv.Kind, rest)
 	if !ok {
 		if srv.Kind == GitHub {
-			return Server{}, "", invalid("enter a GitHub repository as owner/name or its https://github.com/owner/name URL")
+			return Server{}, "", invalid("請以 owner/name 或 https://github.com/owner/name 的格式輸入 GitHub Repository")
 		}
-		return Server{}, "", invalid("enter a GitLab project as group/name (subgroups allowed) or its URL")
+		return Server{}, "", invalid("請以 group/name（可含子群組）或其 URL 輸入 GitLab 專案")
 	}
 	return *srv, path, nil
 }

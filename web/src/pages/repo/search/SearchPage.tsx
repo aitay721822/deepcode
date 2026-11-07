@@ -1,25 +1,27 @@
+import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { ArrowLeftIcon } from 'lucide-react'
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
-import { AskBox } from '../../components/chat/AskBox'
-import { SearchSteps } from '../../components/chat/SearchSteps'
-import { RepoNotice } from '../../components/repo/RepoNotice'
-import { SkeletonText } from '../../components/ui/feedback/skeleton'
-import { Link, navigate } from '../../lib/router'
-import type { Citation } from '../../types/repo/code'
-import type { Repo } from '../../types/repo/repo'
-import { Frame } from '../Frame'
-import { useRepo } from '../useRepo'
+import { AskBox } from '../../../components/chat/AskBox'
+import { SearchSteps } from '../../../components/chat/SearchSteps'
+import { RepoNotice } from '../../../components/repo/RepoNotice'
+import { SkeletonText } from '../../../components/ui/feedback/skeleton'
+import type { Citation } from '../../../types/repo/code'
+import type { Repo } from '../../../types/repo/repo'
+import { Frame } from '../../Frame'
+import { useRepo } from '../../useRepo'
 import { ChatTurn } from './ChatTurn'
 import { CitedFile } from './CitedFile'
 import { useChat } from './useChat'
 
 export function SearchPage({ id, conversationId }: { id: string; conversationId?: string }) {
+  const navigate = useNavigate()
   const { data: repo, error, status, reload } = useRepo(id)
   const { conv, turns, selected, loadError, busy, loading, ask, select } = useChat(id, conversationId)
   const started = useRef(false)
   const aside = useRef<HTMLElement>(null)
+  const handed = useLocation({ select: (l) => l.state }) // the question the repository page handed over, if any
   // Read before the hand-over below clears it: a question asked deep keeps the follow-ups deep.
-  const [handedDeep] = useState(() => (history.state as { deep?: boolean } | null)?.deep === true)
+  const [handedDeep] = useState(() => handed.deep === true)
 
   // On one column the cited file sits below every turn: bring it into view. Stable, or every memoised turn would draw again.
   const cite = useCallback(
@@ -38,9 +40,18 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
   // read then, not reasons to look again.
   const handOver = useEffectEvent((repo: Repo) => {
     if (conversationId || started.current) return
-    const { question, deep } = (history.state as { question?: string; deep?: boolean } | null) ?? {}
-    if (!question) return navigate(`/repos/${repo.id}`, { replace: true })
-    history.replaceState(null, '') // asked now: a reload must not ask it again
+    const { question, deep } = handed
+    if (!question) {
+      navigate({ to: '/repos/$id', params: { id: repo.id }, replace: true, resetScroll: false })
+      return
+    }
+    // Asked now: the same address without the question, so a reload does not ask it again.
+    navigate({
+      to: '/repos/$id/search/{-$conversationId}',
+      params: { id: repo.id, conversationId: undefined },
+      replace: true,
+      resetScroll: false,
+    })
     started.current = true
     ask(repo, question, deep === true)
   })
@@ -75,7 +86,9 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
       >
         <section className="min-w-0">
           <Link
-            to={`/repos/${repo.id}`}
+            to="/repos/$id"
+            params={{ id: repo.id }}
+            activeOptions={{ exact: true }} // a way back, never the page the reader is on
             className="inline-flex items-center gap-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere] text-muted-foreground hover:text-foreground"
           >
             <ArrowLeftIcon className="size-3.5 shrink-0" /> {repo.owner}/{repo.name}
@@ -104,7 +117,7 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
       </main>
       {repo.permissions.includes('repo.chat') && (
         <AskBox
-          placeholder="Ask a follow-up question"
+          placeholder="繼續追問"
           busy={busy}
           disabled={loading}
           defaultDeep={handedDeep}

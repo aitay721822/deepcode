@@ -141,8 +141,9 @@ func Generated(p, content string) bool {
 	return goGenerated.MatchString(head)
 }
 
-// SecondaryGlobs match the paths of tests, examples, benchmarks and docs, as
-// SQLite's GLOB does (* spans slashes, case counts): they repeat a question's
+// SecondaryGlobs match the paths of tests, examples, benchmarks, docs and
+// hidden folders (CI and editor settings, such as .github/), as SQLite's GLOB
+// does (* spans slashes, case counts): they repeat a question's
 // words more often than the code that implements them, and what they import
 // shows how the code is used, not how its parts depend on each other. Whole
 // segments only, so latest.go or contest.go stay code.
@@ -153,6 +154,7 @@ var SecondaryGlobs = []string{
 	"test/*", "*/test/*", "tests/*", "*/tests/*", "__tests__/*", "*/__tests__/*", "spec/*", "*/spec/*", "e2e/*", "*/e2e/*",
 	"*Tests/*", "benches/*", "*/benches/*", // .NET test projects (Foo.UnitTests/), Rust benchmarks
 	"docs/*", "*/docs/*", "examples/*", "*/examples/*", "_examples/*", "*/_examples/*", "*.md", "*.mdx",
+	".*/*", "*/.*/*", // hidden folders
 }
 
 // Secondary reports whether path p matches one of SecondaryGlobs.

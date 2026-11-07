@@ -57,25 +57,24 @@ export function AskBox({
           }}
         />
         <div className="flex items-center gap-3 px-3 pt-1 pb-2.5">
-          <span id={hint} className="eyebrow pl-1 text-muted-foreground max-[520px]:hidden">
-            Enter to send · Shift+Enter for a new line
+          <span id={hint} className="sr-only">
+            Enter 送出，Shift+Enter 換行
           </span>
           <label
             className="ml-auto flex cursor-pointer items-center gap-2 font-mono text-[12px] text-muted-foreground has-[[data-state=checked]]:text-foreground"
-            title="Searches up to three rounds and reads the nearest wiki page first: a fuller answer, two to three times slower"
+            title="最多搜尋三輪，並先讀最相關的 Wiki 頁面：回答更完整，但慢兩到三倍"
           >
             <Switch checked={deep} onCheckedChange={setDeep} disabled={disabled} aria-describedby={deepHint} />
             Deep
           </label>
           <span id={deepHint} className="sr-only">
-            Searches up to three rounds and reads the nearest wiki page first: a fuller answer, two to three times
-            slower
+            最多搜尋三輪，並先讀最相關的 Wiki 頁面：回答更完整，但慢兩到三倍
           </span>
           <Button
             type="submit"
             size="icon-sm"
             className="rounded-full bg-brand text-brand-foreground hover:bg-brand/90"
-            aria-label="Send"
+            aria-label="送出"
             disabled={disabled || busy || !text.trim()}
           >
             {busy ? <Spinner /> : <ArrowUpIcon />}

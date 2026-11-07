@@ -3,10 +3,9 @@ package retrieval
 import (
 	"context"
 	"regexp"
+	"slices"
 	"strings"
 
-	"deepcode/internal/platform/storage"
-	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/index/chunker"
 )
 
@@ -58,77 +57,62 @@ func ftsQuery(q string) string {
 	return strings.Join(terms, " OR ")
 }
 
-// secondary is the SQL weight that quarters the BM25 score of tests, docs,
-// examples and generated files: they repeat a question's words more often
-// than the code that implements them, and would otherwise crowd it out.
-var secondary = "CASE WHEN " + globs("c.path", analyzer.SecondaryGlobs...) +
-	" OR EXISTS (SELECT 1 FROM source_files f WHERE f.snapshot_id = c.snapshot_id AND f.path = c.path AND f.generated)" +
-	" THEN 0.25 ELSE 1.0 END"
-
-// globs is the SQL condition that column matches any of patterns.
-func globs(column string, patterns ...string) string {
-	conds := make([]string, len(patterns))
-	for i, p := range patterns {
-		conds[i] = column + " GLOB '" + p + "'"
-	}
-	return strings.Join(conds, " OR ")
-}
-
-// fts ranks the snapshot's chunks by BM25 (porter-stemmed), weighting symbol
-// names above paths and content, the words of compound identifiers (terms)
-// below them, and source code above tests and docs. Given paths, it ranks
-// only the chunks of those files. The weights come from a sweep over
-// test/eval's corpora (README, 檢索評測).
-// ponytail: MATCH spans every snapshot and the join filters afterwards; give
-// chunk_fts a snapshot column once many repositories share one database.
+// fts ranks the snapshot's chunks by BM25 for the words of query
+// (Store.FTS), only those of the files in paths when there are any.
 func (r *Retriever) fts(ctx context.Context, snapshotID int64, query string, paths []string, limit int) ([]int64, error) {
 	m := ftsQuery(query)
 	if m == "" {
 		return nil, nil
 	}
-	in, args := "", []any{m, snapshotID}
-	if len(paths) > 0 {
-		in = " AND c.path IN (" + storage.Placeholders(len(paths)) + ")"
-		for _, p := range paths {
-			args = append(args, p)
-		}
-	}
-	// bm25 is negative (lower is better), so the 0.25 weight moves a chunk down.
-	return scanIDs(r.DB.QueryContext(ctx, `
-		SELECT c.id FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid
-		WHERE chunk_fts MATCH ? AND c.snapshot_id = ?`+in+`
-		ORDER BY bm25(chunk_fts, 1.0, 6.0, 1.0, 0.5) * `+secondary+` LIMIT ?`, append(args, limit)...))
+	return r.Store.FTS(ctx, snapshotID, m, paths, limit)
 }
 
 // symbolChunks finds chunks holding the definition of any of the first 32
-// identifiers named in the query, longest (most specific) names first. Case
-// does not count, except for members named like the nouns of a question (C#'s
-// Items, Order, Status properties) and constructors (their class's name): only
-// a query spelling them as the code does finds those.
+// identifiers named in the query, or a method or function named by one of the
+// first 16 runs of two or three adjacent words joined (route pattern:
+// RoutePattern), longest (most specific) names first; Store.Defining says
+// which symbols count, and when case does.
 func (r *Retriever) symbolChunks(ctx context.Context, snapshotID int64, query string) ([]int64, error) {
-	var names []any
-	seen := map[string]bool{}
-	for _, w := range identRe.FindAllString(query, -1) {
-		lw := strings.ToLower(w)
-		if stopwords[lw] || seen[lw] {
-			continue
-		}
-		seen[lw] = true
-		names = append(names, w)
-		if len(names) == 32 { // a bounded IN list, as ftsQuery bounds its terms
-			break
-		}
-	}
-	if len(names) == 0 {
+	names := bounded(identRe.FindAllString(query, -1), 32, nil)
+	runs := bounded(joined(query), 16, names)
+	if len(names)+len(runs) == 0 {
 		return nil, nil
 	}
-	in := storage.Placeholders(len(names))
-	args := append(append(append([]any{snapshotID}, names...), names...), symbolLimit)
-	return scanIDs(r.DB.QueryContext(ctx, `
-		SELECT c.id FROM symbols s
-		JOIN chunks c ON c.snapshot_id = s.snapshot_id AND c.path = s.path
-			AND c.start_line <= s.start_line AND c.end_line >= s.start_line
-		WHERE s.snapshot_id = ? AND s.name COLLATE NOCASE IN (`+in+`)
-			AND (s.kind NOT IN ('property', 'event', 'indexer', 'constructor') OR s.name IN (`+in+`))
-		GROUP BY c.id ORDER BY max(length(s.name)) DESC, c.id LIMIT ?`, args...))
+	return r.Store.Defining(ctx, snapshotID, names, runs, symbolLimit)
+}
+
+// bounded is the first limit of words that are not stopwords, each once and
+// none already in taken: a bounded IN list, as ftsQuery bounds its terms.
+func bounded(words []string, limit int, taken []string) []string {
+	seen := map[string]bool{}
+	for _, t := range taken {
+		seen[strings.ToLower(t)] = true
+	}
+	var out []string
+	for _, w := range words {
+		if lw := strings.ToLower(w); !stopwords[lw] && !seen[lw] && len(out) < limit {
+			seen[lw] = true
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// joined is the query's runs of two and three adjacent words, no stopword
+// among them, each written as one word: how a question spells an identifier
+// it does not know (matched route pattern: matchedroute, matchedroutepattern,
+// routepattern).
+func joined(query string) []string {
+	words := wordRe.FindAllString(query, -1)
+	var out []string
+	for i := range words {
+		for n := 2; n <= 3 && i+n <= len(words); n++ {
+			run := words[i : i+n]
+			if slices.ContainsFunc(run, func(w string) bool { return stopwords[strings.ToLower(w)] }) {
+				break
+			}
+			out = append(out, strings.Join(run, ""))
+		}
+	}
+	return out
 }

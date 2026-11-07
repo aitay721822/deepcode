@@ -3,13 +3,19 @@ package gitserver
 import (
 	"context"
 	"errors"
-	"os"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"deepcode/internal/platform/storage"
+	"deepcode/internal/repo/gitserver/oauth"
+	"deepcode/internal/repo/gitserver/store"
 )
 
 var servers = []Server{
@@ -118,8 +124,8 @@ func TestStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	box, _ := newBox(make([]byte, 32))
-	st := &Store{DB: db, Box: box}
+	box, _ := OpenBox("", "test key")
+	st := &Service{Store: &store.Store{DB: db}, Box: box}
 	str := func(s string) *string { return &s }
 
 	token := func(id int64) string {
@@ -177,10 +183,7 @@ func TestStore(t *testing.T) {
 	if err := st.Delete(ctx, 99); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("deleted a missing server: %v", err)
 	}
-	other, _ := newBox([]byte(strings.Repeat("k", 32)))
-	if _, err := other.Open(box.Seal("x")); !errors.Is(err, ErrSealed) {
-		t.Fatal("opened a token sealed under another key")
-	}
+	other, _ := OpenBox("", "another key")
 	// Under another key, whatever needs the token says so (the API answers 409), and the console still lists it.
 	sealed, err := st.Create(ctx, Input{Name: str("Sealed"), Kind: str(GitHub), BaseURL: str("https://ghe.example.com"), Token: str("ghp-secret")})
 	if err != nil {
@@ -189,7 +192,7 @@ func TestStore(t *testing.T) {
 	db.Exec(`INSERT INTO repositories(url, owner, name, git_server_id) VALUES ('https://ghe.example.com/o/r', 'o', 'r', ?)`, sealed.ID)
 	var repo int64
 	db.QueryRow(`SELECT id FROM repositories WHERE git_server_id = ?`, sealed.ID).Scan(&repo)
-	rekeyed := &Store{DB: db, Box: other}
+	rekeyed := &Service{Store: st.Store, Box: other}
 	if _, err := rekeyed.Get(ctx, sealed.ID); !errors.Is(err, ErrSealed) {
 		t.Fatalf("get: %v", err)
 	}
@@ -204,31 +207,130 @@ func TestStore(t *testing.T) {
 	}
 }
 
-// TestOpenBox: the first start creates the key file and later starts use
-// it; a damaged one stops the start; a secret overrides the file.
-func TestOpenBox(t *testing.T) {
-	dir := t.TempDir()
-	first, err := OpenBox(dir, "")
+// TestOAuth: a server authorized through OAuth needs its app's secret and
+// takes no pasted token; only the admin who began an authorization finishes
+// it, trading the code for tokens kept sealed; a token about to expire is
+// refreshed before use, once however many need it; a revoked authorization
+// says so; changing the app or going back to a pasted token ends it.
+func TestOAuth(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "o.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := OpenBox(dir, "")
-	if err != nil {
+	defer db.Close()
+	var mu sync.Mutex
+	refreshes := 0
+	gl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		f := r.PostForm
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.URL.Path != "/oauth/token" || f.Get("client_id") != "cid" || f.Get("client_secret") != "cs" || f.Get("redirect_uri") != "https://dc.example/cb":
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":"invalid_client"}`)
+		case f.Get("grant_type") == "authorization_code" && f.Get("code") == "good":
+			fmt.Fprint(w, `{"access_token":"at1","refresh_token":"rt1","expires_in":30}`) // within the minute: the next use refreshes
+		case f.Get("grant_type") == "refresh_token" && f.Get("refresh_token") == "rt1":
+			refreshes++
+			fmt.Fprint(w, `{"access_token":"at2","refresh_token":"rt2","expires_in":7200}`)
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"invalid_grant","error_description":"revoked"}`)
+		}
+	}))
+	defer gl.Close()
+	box, _ := OpenBox("", "test key")
+	sv := &Service{Store: &store.Store{DB: db}, Box: box}
+	str := func(s string) *string { return &s }
+	app := Input{Name: str("GL"), Kind: str(GitLab), BaseURL: str(gl.URL), ClientID: str("cid")}
+	if _, err := sv.Create(ctx, app); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("no secret: %v", err)
+	}
+	app.ClientSecret, app.Token = str("cs"), str("glpat")
+	if _, err := sv.Create(ctx, app); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a pasted token too: %v", err)
+	}
+	app.Token = nil
+	s, err := sv.Create(ctx, app)
+	var sealed string
+	db.QueryRow(`SELECT oauth_client_secret FROM git_servers WHERE id = ?`, s.ID).Scan(&sealed)
+	if err != nil || !s.OAuth() || !s.HasClientSecret || s.HasToken || sealed == "" || sealed == "cs" {
+		t.Fatalf("create: %+v %q %v", s, sealed, err)
+	}
+
+	begin := func() string {
+		u, err := sv.Authorize(ctx, s.ID, 7, "https://dc.example/cb")
+		page, _ := url.Parse(u)
+		if err != nil || page.Path != "/oauth/authorize" || page.Query().Get("client_id") != "cid" {
+			t.Fatalf("authorize: %q %v", u, err)
+		}
+		return page.Query().Get("state")
+	}
+	if err := sv.Finish(ctx, 8, begin(), "good"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("another admin finished: %v", err)
+	}
+	if err := sv.Finish(ctx, 7, begin(), "bad"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a refused code: %v", err)
+	}
+	if err := sv.Finish(ctx, 7, begin(), "good"); err != nil {
 		t.Fatal(err)
 	}
-	if plain, err := second.Open(first.Seal("token")); err != nil || plain != "token" {
-		t.Fatalf("the key changed between starts: %q %v", plain, err)
+	db.Exec(`INSERT INTO repositories(url, owner, name, git_server_id) VALUES (?, 'g', 'r', ?)`, gl.URL+"/g/r", s.ID)
+	var repo int64
+	db.QueryRow(`SELECT id FROM repositories WHERE git_server_id = ?`, s.ID).Scan(&repo)
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Go(func() {
+			if got, err := sv.Get(ctx, s.ID); err != nil || got.Token() != "at2" {
+				t.Errorf("get: %q %v", got.Token(), err)
+			}
+		})
 	}
-	if first.Seal("token") == first.Seal("token") {
-		t.Fatal("two seals of one token match: the nonce repeats")
+	wg.Wait()
+	remote, err := sv.Remote(ctx, repo)
+	if err != nil || refreshes != 1 || remote.Authorization != "Basic b2F1dGgyOmF0Mg==" { // oauth2:at2
+		t.Fatalf("remote %+v after %d refreshes: %v", remote, refreshes, err)
 	}
-	a, _ := OpenBox(dir, "pass phrase")
-	b, _ := OpenBox(t.TempDir(), "pass phrase")
-	if plain, err := b.Open(a.Seal("token")); err != nil || plain != "token" {
-		t.Fatalf("secret: %q %v", plain, err)
+
+	db.Exec(`UPDATE git_servers SET token_expires_at = '2000-01-01T00:00:00Z' WHERE id = ?`, s.ID) // rt2 is refused
+	if _, err := sv.Get(ctx, s.ID); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "重新授權") {
+		t.Fatalf("a revoked authorization: %v", err)
 	}
-	os.WriteFile(filepath.Join(dir, "secret.key"), []byte("short"), 0o600)
-	if _, err := OpenBox(dir, ""); err == nil {
-		t.Fatal("used a 5-byte key file")
+	was, _ := sv.Store.Get(ctx, s.ID)
+	if _, err := sv.Update(ctx, s.ID, Input{Name: str("GL renamed")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sv.keep(ctx, was, oauth.Tokens{Access: "at3", Refresh: "rt2"}, "https://dc.example/cb"); err != nil {
+		t.Fatalf("a rename refused the grant: %v", err)
+	}
+	was, _ = sv.Store.Get(ctx, s.ID) // as a refresh read it, before the admin's edits below
+	if _, err := sv.Update(ctx, s.ID, Input{APIURL: str(gl.URL + "/api")}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("the authorization went to another API without the secret: %v", err)
+	}
+	if _, err := sv.Update(ctx, s.ID, Input{ClearToken: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sv.keep(ctx, was, oauth.Tokens{Access: "late"}, "https://dc.example/cb"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a grant landed after the authorization ended: %v", err)
+	}
+	if err := sv.Decline(7, begin()); err != nil {
+		t.Fatal(err)
+	}
+	if err := sv.Decline(7, "forged"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("declined without a state: %v", err)
+	}
+	if _, err := sv.Update(ctx, s.ID, Input{ClientID: str("cid2")}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("another app without its secret: %v", err)
+	}
+	if s, err = sv.Update(ctx, s.ID, Input{ClientID: str("cid2"), ClientSecret: str("cs2")}); err != nil || s.HasToken {
+		t.Fatalf("another app kept the authorization: %+v %v", s, err)
+	}
+	if s, err = sv.Update(ctx, s.ID, Input{ClientID: str(""), Token: str("glpat")}); err != nil || s.OAuth() || s.HasClientSecret || !s.HasToken {
+		t.Fatalf("back to a pasted token: %+v %v", s, err)
+	}
+	if _, err := sv.Authorize(ctx, s.ID, 7, "https://dc.example/cb"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("authorized a pasted token's server: %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,11 +14,17 @@ import (
 	"strings"
 	"testing"
 
+	"deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/retrieval"
+	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/jobs"
+	jobstore "deepcode/internal/platform/jobs/store"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/catalog"
+	catalogstore "deepcode/internal/repo/catalog/store"
+	"deepcode/internal/repo/index/graph"
+	graphstore "deepcode/internal/repo/index/graph/store"
 )
 
 // TestAskLimit: a user has at most maxAsking answers written at a time, which
@@ -61,6 +68,13 @@ func TestAskLimit(t *testing.T) {
 	}
 }
 
+// service is the chat service on db, asking model (nil: none).
+func service(db *sql.DB, model *ai.OpenAI) *Service {
+	return &Service{Store: &store.Store{DB: db}, Chat: model,
+		Catalog:   &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: &jobs.Queue{Store: &jobstore.Store{DB: db}}},
+		Retriever: &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}}}
+}
+
 // TestAnswers: an answer is written from the evidence, with the model's
 // <think> block dropped; a follow-up is searched together with the previous
 // question and sent after the turns before it; a question no code matches is
@@ -100,7 +114,7 @@ func TestAnswers(t *testing.T) {
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
-	s := &Service{DB: db, Catalog: &catalog.Catalog{DB: db, Queue: &jobs.Queue{DB: db}}, Retriever: &retrieval.Retriever{DB: db}, Chat: &ai.OpenAI{BaseURL: model.URL, ModelName: "m"}}
+	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
 	ask := func(conv int64, q string) (done Message) {
 		err := s.Ask(ctx, Request{RepoID: 1, ConversationID: conv, Question: q, UserID: 1}, func(event string, data any) {
 			if event == "done" {
@@ -173,7 +187,7 @@ func TestDeep(t *testing.T) {
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
-	s := &Service{DB: db, Catalog: &catalog.Catalog{DB: db, Queue: &jobs.Queue{DB: db}}, Retriever: &retrieval.Retriever{DB: db}, Chat: &ai.OpenAI{BaseURL: model.URL, ModelName: "m"}}
+	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
 	var events []string
 	var done Message
 	err = s.Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", Deep: true, UserID: 1}, func(event string, data any) {
@@ -212,6 +226,119 @@ func TestDeep(t *testing.T) {
 	}
 }
 
+// TestRecheck: a draft naming code the repository defines but the sources
+// lack is written again after a search for those names, whose hits go first;
+// one saying code was not shown, after a search for what the model names; one
+// thinking aloud, from the same sources. Each rewrite starts with evidence
+// again, and is read once more. An answer left with no valid citation says
+// so; a sound draft is kept, and so is one whose check fails.
+func TestRecheck(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range []string{
+		`INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x')`,
+		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r')`,
+		`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`,
+		`UPDATE repositories SET ready_snapshot_id = 1`,
+		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
+			(1, 'src/store.ts', 1, 9, 'const subscribe = (fn) => add(fn)', 'h1'), (1, 'src/set.ts', 1, 9, 'const registry = new Set()', 'h2'),
+			(1, 'route.go', 1, 3, 'func RoutePattern() string { return pattern }', 'h3')`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'route.go', 'RoutePattern', 'RoutePattern', 'function', 1, 3)`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drafts := map[string][]string{ // by question, as written in turn
+		"How does subscribe work?": {"It subscribes [src/store.ts:1-1]; see `RoutePattern` and `Other` too.",
+			"It reads the pattern [route.go:1-1]. The registry is not shown in these sources.", "It reads the pattern [route.go:1-1] into a registry [src/set.ts:1-1]."},
+		"Where does subscribe add?": {"It adds [src/store.ts:1-1]. The registry it adds to is not shown in these sources.", "It adds into a registry."},
+		"Does subscribe return?":    {"Wait, it adds. Let me check the sources again. It adds [src/store.ts:1-1].", "It adds [src/store.ts:1-1]."},
+		"Is subscribe sound?":       {"It adds the listener [src/store.ts:1-1]."},
+		"Can subscribe fail?":       {"It adds [src/store.ts:1-1]. Its errors are not shown in these sources."},
+		"Can subscribe stop?":       {"It adds [src/store.ts:1-1]. Its stop is not shown in these sources."}, // the rewrite fails
+	}
+	written := map[string]int{}
+	var asked, rewrites []string // the search terms requests, and the rewrites' questions with their sources
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []ai.Message `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		user, reply := body.Messages[len(body.Messages)-1].Content, "registry"
+		if strings.HasPrefix(body.Messages[0].Content, "You are deepcode") {
+			_, question, _ := strings.Cut(strings.TrimSuffix(user, "\n\nAnswer in English."), "Question: ")
+			question, note, _ := strings.Cut(question, "\n\n")
+			if written[question] == len(drafts[question]) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if reply = drafts[question][written[question]]; note != "" {
+				rewrites = append(rewrites, user)
+			}
+			written[question]++
+		} else if strings.Contains(user, "Can subscribe fail?") { // the check fails: the draft stands
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		} else {
+			asked = append(asked, user)
+		}
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
+	}))
+	defer model.Close()
+	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
+	for q, want := range map[string]struct {
+		events  string
+		content string
+		cites   int
+	}{
+		"How does subscribe work?": {"evidence delta map[round:2 terms:RoutePattern] evidence delta map[round:3 terms:registry] evidence delta",
+			"It reads the pattern [route.go:1-1](", 2},
+		"Where does subscribe add?": {"evidence delta map[round:2 terms:registry] evidence delta", "It adds into a registry.\n\n_This answer cites no indexed source", 0},
+		"Does subscribe return?":    {"evidence delta evidence delta", "It adds [src/store.ts:1-1](", 1},
+		"Is subscribe sound?":       {"evidence delta", "It adds the listener [src/store.ts:1-1](", 1},
+		"Can subscribe fail?":       {"evidence delta", "It adds [src/store.ts:1-1](", 1},
+		"Can subscribe stop?":       {"evidence delta map[round:2 terms:registry] evidence evidence", "It adds [src/store.ts:1-1](", 1},
+	} {
+		var events []string
+		var done Message
+		err := s.Ask(ctx, Request{RepoID: 1, Question: q, UserID: 1}, func(event string, data any) {
+			switch event {
+			case "search":
+				events = append(events, fmt.Sprint(data))
+			case "evidence", "delta":
+				events = append(events, event)
+			case "done":
+				done = data.(Message)
+			}
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		if strings.Join(events, " ") != want.events || !strings.HasPrefix(done.Content, want.content) || len(done.Citations) != want.cites {
+			t.Errorf("%s: events %q, answer %q with %d citations; want %q, %q, %d", q, events, done.Content, len(done.Citations), want.events, want.content, want.cites)
+		}
+	}
+	if len(asked) != 3 || !slices.ContainsFunc(asked, func(u string) bool {
+		return strings.Contains(u, "A draft answer said this code was not shown: The registry it adds to is not shown in these sources.\nName the")
+	}) {
+		t.Errorf("search terms requests: %q", asked)
+	}
+	// The code using a name is searched for only when it joins words: then it is about that name.
+	if got := compound([]string{"RoutePattern", "Order", "payment_done", "API", "RoutePattern", "a_b", "v2Router"}); !slices.Equal(got, []string{"RoutePattern", "payment_done", "v2Router"}) {
+		t.Errorf("compound: %q", got)
+	}
+	named := slices.IndexFunc(rewrites, func(u string) bool { return strings.Contains(u, "route.go") })
+	if len(rewrites) != 4 || named < 0 || strings.Index(rewrites[named], "route.go") > strings.Index(rewrites[named], "src/store.ts") {
+		t.Errorf("rewrites: %q", rewrites)
+	}
+}
+
 // TestNearest: the page sharing most of the question's words wins, a title
 // counting thrice and Chinese read in pairs of characters; a word all pages
 // hold decides nothing, and no shared word means no page.
@@ -247,7 +374,7 @@ func TestOpenOwnConversation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s := &Service{DB: db, Catalog: &catalog.Catalog{DB: db}}
+	s := service(db, nil)
 	at := catalog.Ref{ID: 1}
 	if b, err := s.open(ctx, Request{UserID: 1, RepoID: 1, ConversationID: 1}, at, "q"); err != nil || b.id != 1 {
 		t.Fatalf("the owner: %+v %v", b, err)
@@ -256,5 +383,58 @@ func TestOpenOwnConversation(t *testing.T) {
 		if _, err := s.open(ctx, req, at, "q"); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("%+v: %v", req, err)
 		}
+	}
+	// The history keeps its first message while it grows to 11, then drops 6 at once.
+	for n, first := range map[int]string{0: "", 5: "m1", 11: "m1", 12: "m7", 17: "m7"} {
+		db.ExecContext(ctx, `DELETE FROM messages`)
+		for i := 1; i <= n; i++ {
+			s.Store.AddMessage(ctx, 1, "user", fmt.Sprintf("m%d", i), nil)
+		}
+		h, err := s.history(ctx, 1)
+		if got := ""; err != nil || len(h) > 0 && h[0].Content != first || len(h) == 0 && first != "" || len(h) > 0 && h[len(h)-1].Content != fmt.Sprintf("m%d", n) {
+			if len(h) > 0 {
+				got = h[0].Content
+			}
+			t.Errorf("%d messages: history starts at %q, want %q (%v)", n, got, first, err)
+		}
+	}
+}
+
+// TestLanguage: the prompt names the question's language last, whatever the
+// sources are written in: Han makes it Chinese however much English code it
+// names, quoted strings say nothing, English words make it English, and a
+// question whose words tell nothing follows the last that did.
+func TestLanguage(t *testing.T) {
+	for q, want := range map[string]string{"How does Mount work?": "English", "Mount 如何運作？": chinese,
+		"Mount はどう動きますか": "Japanese", "Как работает Mount?": own, "마운트는 어떻게 동작하나요": own, "？": own,
+		"Wie funktioniert der Router?": own, "Is the café example in the docs current?": "English",
+		"What does the 「錯誤」 message in handler.go mean?": "English", "What does `無法從目前程式碼確認` mean?": "English",
+		"What is 路由?": chinese, // unquoted: the known limit
+		"為何 PaymentSucceededEventHandler 會觸發 InvoiceProjection": chinese, "src/app/server.go 的 Route 在哪裡": chinese,
+		"請看這個錯誤 panic: runtime error: index out of range [3] with length 3 goroutine 1 running main.go 怎麼修":      chinese,
+		"請解釋 the router matching algorithm in detail please":                                                     chinese,
+		"這段為何失敗：```go\nfunc (r *Router) Mount(pattern string, h http.Handler) { r.mux.Handle(pattern, h) }\n```": chinese,
+	} {
+		for _, note := range []string{"", rewriteNote} { // the rewrite's English note leaves the language alone
+			msgs := prompt("go-chi/chi", "abc", nil, "", "", q, note)
+			if got := msgs[len(msgs)-1].Content; !strings.HasSuffix(got, note+"\n\nAnswer in "+want+".") {
+				t.Errorf("%q: %q", q, got)
+			}
+		}
+	}
+	history := []ai.Message{{Role: "user", Content: "Mount 如何運作？"}, {Role: "assistant", Content: "It mounts a router."}}
+	for _, q := range []string{"？", "Route?", "src/a/main.go?", "x_on_y?"} {
+		if msgs := prompt("go-chi/chi", "abc", history, "", "", q, ""); msgs[0].Content != systemPrompt || msgs[1] != history[0] ||
+			!strings.HasSuffix(msgs[3].Content, "Answer in "+chinese+".") {
+			t.Errorf("a follow-up whose words tell nothing: %q", msgs)
+		}
+	}
+	for _, q := range []string{"Do we validate tokens?", "Isn't Route mounted?"} { // English, though the conversation was not
+		if got := answerLanguage(q, history); got != "English" {
+			t.Errorf("%q: %s", q, got)
+		}
+	}
+	if uncited(answerLanguage("Route?", history)) != uncited(chinese) || uncited("English") == uncited(chinese) {
+		t.Error("the footer is not in the answer's language")
 	}
 }

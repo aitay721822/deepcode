@@ -1,6 +1,6 @@
+import { Link } from '@tanstack/react-router'
 import { KeyRoundIcon, LogOutIcon, ShieldIcon, UserIcon } from 'lucide-react'
 import { useRef, useState } from 'react'
-import { Link } from '../../lib/router'
 import { Button } from '../ui/controls/button'
 import {
   DropdownMenu,
@@ -32,7 +32,7 @@ export function AccountMenu({
           variant="outline"
           size="sm"
           className="max-w-56 text-muted-foreground hover:text-foreground data-[state=open]:text-foreground"
-          aria-label={`Account: ${name}`}
+          aria-label={`帳號：${name}`}
         >
           <UserIcon />
           <span className="hidden truncate sm:inline" dir="auto">
@@ -49,18 +49,21 @@ export function AccountMenu({
         }}
       >
         <DropdownMenuItem onSelect={() => (afterClose.current = onPassword)}>
-          <KeyRoundIcon /> Change password
+          <KeyRoundIcon /> 變更密碼
         </DropdownMenuItem>
         {admin && (
           <DropdownMenuItem asChild>
-            <Link to="/admin">
-              <ShieldIcon /> Admin console
+            <Link
+              to="/admin/{-$section}/{-$id}"
+              params={{ section: undefined, id: undefined }} // both named, or a repository page's id would be taken for a job's
+            >
+              <ShieldIcon /> 管理後台
             </Link>
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onSignOut}>
-          <LogOutIcon /> Sign out
+          <LogOutIcon /> 登出
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

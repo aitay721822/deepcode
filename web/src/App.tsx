@@ -1,52 +1,33 @@
-import { AnimatePresence, MotionConfig, motion } from 'motion/react'
-import type { ReactNode } from 'react'
-import { useLocation } from './lib/router'
-import { rise } from './lib/style/motion'
-import { decode, isId, isRepoId } from './lib/url'
-import { AdminPage } from './pages/admin/AdminPage'
-import { ErrorBoundary } from './pages/ErrorBoundary'
-import { HomePage } from './pages/home/HomePage'
-import { NotFoundPage } from './pages/NotFoundPage'
-import { RepoPage } from './pages/repo/RepoPage'
-import { SearchPage } from './pages/search/SearchPage'
-import { LoginPage } from './pages/session/LoginPage'
-import { SessionProvider } from './pages/session/SessionProvider'
-import { SignUpPage } from './pages/session/SignUpPage'
+import { createRouter, RouterProvider, stringifySearchWith } from '@tanstack/react-router'
+import { MotionConfig } from 'motion/react'
+import { routeTree } from './routeTree.gen'
 
-/**
- * Routes, as { key, page }: the key changes only when the page should animate in anew
- * (not between wiki pages, not when a new conversation gets its id, not between admin sections).
- *   /  ·  /login  ·  /signup  ·  /repos/:id[?page=|?file=&L=&s=]  ·  /repos/:id/search[/:conversationId]  ·  /admin[/:section[/:id]]
- */
-function route(path: string[], query: URLSearchParams): { key: string; page: ReactNode } {
-  const [a, b, c, d, ...rest] = path
-  if (rest.length) return { key: '404', page: <NotFoundPage /> }
-  if (!a) return { key: 'home', page: <HomePage /> }
-  if (a === 'login' && !b) return { key: 'login', page: <LoginPage next={query.get('next')} /> }
-  if (a === 'signup' && !b) return { key: 'signup', page: <SignUpPage next={query.get('next')} /> }
-  if (a === 'repos' && isRepoId(b) && !c) return { key: `repo:${b}`, page: <RepoPage id={b} params={query} /> }
-  if (a === 'repos' && isRepoId(b) && c === 'search' && (!d || isId(d))) {
-    return { key: `search:${b}`, page: <SearchPage id={b} conversationId={d} /> }
+/** The routes are the files in pages/routes; the Vite plugin writes routeTree.gen.ts from them. */
+const router = createRouter({
+  routeTree,
+  caseSensitive: true, // /Login is not /login
+  // A new page starts at the top (a replace, or resetScroll: false, stays put); Back and Forward return where the reader was.
+  scrollRestoration: true,
+  // Query values stay the strings the address holds: the default reads them as JSON, and would write ?page="123".
+  parseSearch: (search) => Object.fromEntries(new URLSearchParams(search)),
+  stringifySearch: stringifySearchWith(String),
+})
+
+declare module '@tanstack/react-router' {
+  interface Register {
+    router: typeof router
   }
-  if (a === 'admin' && !d) return { key: 'admin', page: <AdminPage section={b} id={c} /> }
-  return { key: '404', page: <NotFoundPage /> }
+  /** What the repository page hands the search page in the history entry: a question to ask. */
+  interface HistoryState {
+    question?: string
+    deep?: boolean
+  }
 }
 
 export function App() {
-  const at = useLocation()
-  const url = new URL(location.origin + at) // never read "//host" paths as protocol-relative
-  const { key, page } = route(url.pathname.split('/').filter(Boolean).map(decode), url.searchParams)
   return (
     <MotionConfig reducedMotion="user">
-      <ErrorBoundary at={at}>
-        <SessionProvider>
-          <AnimatePresence mode="wait">
-            <motion.div key={key} {...rise}>
-              {page}
-            </motion.div>
-          </AnimatePresence>
-        </SessionProvider>
-      </ErrorBoundary>
+      <RouterProvider router={router} />
     </MotionConfig>
   )
 }

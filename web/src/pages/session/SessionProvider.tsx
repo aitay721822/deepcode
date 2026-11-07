@@ -1,10 +1,10 @@
+import { useLocation, useNavigate } from '@tanstack/react-router'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getMe, logout as signOut } from '../../api/auth'
 import { setUnauthorizedHandler } from '../../api/client'
 import { Notice } from '../../components/layout/Notice'
 import { Button } from '../../components/ui/controls/button'
 import { SkeletonText } from '../../components/ui/feedback/skeleton'
-import { navigate, useLocation } from '../../lib/router'
 import type { Me, Permission } from '../../types/auth'
 import { SessionContext } from './session'
 
@@ -14,8 +14,9 @@ import { SessionContext } from './session'
  * Only the first load's failure stands in for the app: a later one keeps the user the app shows.
  */
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const path = useLocation()
-  const publicPage = ['/login', '/signup'].includes(path.split('?')[0]) // pages for the signed out
+  const navigate = useNavigate()
+  const { pathname, searchStr } = useLocation()
+  const publicPage = ['/login', '/signup'].includes(pathname) // pages for the signed out
   const [user, setUser] = useState<Me | null>() // undefined while loading
   const [error, setError] = useState('') // the first load failed
   // Signing out is counted: a refresh that started before it cannot put the user back when its answer comes.
@@ -50,8 +51,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [load, refresh])
   useEffect(() => {
-    if (user === null && !publicPage) navigate(`/login?next=${encodeURIComponent(path)}`, { replace: true })
-  }, [user, publicPage, path])
+    if (user === null && !publicPage)
+      navigate({ to: '/login', search: { next: pathname + searchStr }, replace: true, resetScroll: false })
+  }, [user, publicPage, pathname, searchStr, navigate])
   const session = useMemo(
     () => ({
       user: user ?? null,
@@ -61,10 +63,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         await signOut().catch(() => {}) // signed out here either way
         signOuts.current++
         setUser(null)
-        navigate('/login')
+        navigate({ to: '/login' })
       },
     }),
-    [user, refresh],
+    [user, refresh, navigate],
   )
 
   let body = children
@@ -80,7 +82,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                   {error}
                 </p>
                 <Button variant="outline" onClick={load}>
-                  Retry
+                  重試
                 </Button>
               </>
             ) : (

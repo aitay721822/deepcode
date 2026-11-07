@@ -39,13 +39,13 @@ export function UserDialog({
   return (
     <FormDialog
       open={open}
-      title={user ? `Edit ${user.username}` : 'New user'}
-      submit={user ? 'Save' : 'Create user'}
+      title={user ? `編輯 ${user.username}` : '新增使用者'}
+      submit={user ? '儲存' : '建立使用者'}
       onClose={onClose}
       onSubmit={save}
     >
       {!user && (
-        <Field label="Username">
+        <Field label="使用者名稱">
           <Input
             required
             autoComplete="off"
@@ -56,22 +56,22 @@ export function UserDialog({
           />
         </Field>
       )}
-      <Field label="Display name">
+      <Field label="顯示名稱">
         <Input autoComplete="off" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
       </Field>
-      <Field label={user ? 'New password' : 'Password'}>
+      <Field label={user ? '新密碼' : '密碼'}>
         <Input
           type="password"
           autoComplete="new-password"
           required={!user}
           minLength={8}
           value={password}
-          placeholder={user ? 'Leave blank to keep the current password' : undefined}
+          placeholder={user ? '留空則保留目前的密碼' : undefined}
           onChange={(e) => setPassword(e.target.value)}
         />
       </Field>
       <fieldset>
-        <legend className="text-sm font-medium">Roles</legend>
+        <legend className="text-sm font-medium">角色</legend>
         <div className="mt-2 grid gap-2.5">
           {roles.map((r) => (
             <Label key={r.id} className="items-start leading-snug font-normal">
@@ -87,7 +87,7 @@ export function UserDialog({
       {user && !self && (
         <Label className="font-normal">
           <Switch checked={disabled} onCheckedChange={setDisabled} />
-          Disabled: cannot sign in
+          停用：無法登入
         </Label>
       )}
     </FormDialog>

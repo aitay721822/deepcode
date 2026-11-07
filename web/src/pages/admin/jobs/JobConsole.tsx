@@ -17,7 +17,7 @@ export function JobConsole({ lines, liveAfter }: { lines: LogLine[]; liveAfter: 
     <div
       ref={box}
       role="log"
-      aria-label="Job output"
+      aria-label="工作輸出"
       // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling log takes focus, so the keyboard can scroll it
       tabIndex={0}
       className="max-h-[60dvh] min-h-40 overflow-auto overscroll-contain rounded-lg border bg-code px-4 py-3 font-mono text-[12.5px] leading-relaxed"
@@ -26,7 +26,7 @@ export function JobConsole({ lines, liveAfter }: { lines: LogLine[]; liveAfter: 
         follow.current = b.scrollHeight - b.scrollTop - b.clientHeight < 24
       }}
     >
-      {lines.length === 0 && <p className="text-muted-foreground">No output yet.</p>}
+      {lines.length === 0 && <p className="text-muted-foreground">尚無輸出。</p>}
       {lines.map((l) => {
         const text = (
           <>

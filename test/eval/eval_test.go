@@ -10,12 +10,17 @@ import (
 	"testing"
 
 	"deepcode/internal/knowledge/retrieval"
+	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
+	serverstore "deepcode/internal/repo/gitserver/store"
+	"deepcode/internal/repo/index/graph"
+	graphstore "deepcode/internal/repo/index/graph/store"
 	"deepcode/internal/repo/index/indexer"
+	indexstore "deepcode/internal/repo/index/indexer/store"
 )
 
 func TestRetrieval(t *testing.T) {
@@ -23,7 +28,8 @@ func TestRetrieval(t *testing.T) {
 		t.Run(c.Name, func(t *testing.T) {
 			t.Parallel()
 			db, snap := index(t, source(t, c), c.SHA)
-			res, err := Run(context.Background(), &retrieval.Retriever{DB: db}, snap, c)
+			ret := &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}}
+			res, err := Run(context.Background(), ret, snap, c)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -83,8 +89,8 @@ func index(t *testing.T, dir, sha string) (*sql.DB, int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ix := &indexer.Indexer{DB: db, Git: &git.Client{Dir: tmp, AllowProtocol: "file"},
-		Servers: &gitserver.Store{DB: db, Box: box}, Events: bus,
+	ix := &indexer.Indexer{Store: &indexstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}},
+		Git: &git.Client{Dir: tmp, AllowProtocol: "file"}, Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}, Events: bus,
 		Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
 	if err := ix.Run(ctx, 1, sha, jobs.Progress{}); err != nil {
 		t.Fatal(err)
@@ -97,10 +103,25 @@ func index(t *testing.T, dir, sha string) (*sql.DB, int64) {
 }
 
 func TestScore(t *testing.T) {
-	if recall, rr := score([]string{"a", "b", "a", "c"}, []string{"c", "x"}); recall != 0.5 || rr != 0.25 {
+	hits := func(paths ...string) []retrieval.Hit {
+		out := make([]retrieval.Hit, len(paths))
+		for i, p := range paths {
+			out[i] = retrieval.Hit{Path: p}
+		}
+		return out
+	}
+	if recall, rr := score(hits("a", "b", "a", "c"), []string{"c", "x"}); recall != 0.5 || rr != 0.25 {
 		t.Errorf("recall %v, reciprocal rank %v; want 0.5 and 0.25", recall, rr)
 	}
-	if recall, rr := score([]string{"a"}, []string{"x"}); recall != 0 || rr != 0 {
+	if recall, rr := score(hits("a"), []string{"x"}); recall != 0 || rr != 0 {
 		t.Errorf("nothing found: %v %v", recall, rr)
+	}
+	// file#Name wants the chunk holding the symbol, not just the file.
+	chunks := []retrieval.Hit{{Path: "c.go", Symbol: "Context, Context.Reset"}, {Path: "c.go", Symbol: "Context.RoutePattern, RouteParams"}}
+	if recall, rr := score(chunks, []string{"c.go#RoutePattern"}); recall != 1 || rr != 0.5 {
+		t.Errorf("by symbol: %v %v", recall, rr)
+	}
+	if recall, _ := score(chunks[:1], []string{"c.go#RoutePattern"}); recall != 0 {
+		t.Errorf("the file's other chunk counted: %v", recall)
 	}
 }

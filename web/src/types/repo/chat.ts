@@ -16,7 +16,8 @@ export type ConversationRef = Pick<Conversation, 'id' | 'snapshotId' | 'commitSh
 
 /**
  * One server-sent event of a streamed answer: conversation, search (each further round of a deep answer), evidence,
- * delta…, done (or error at any point).
+ * delta…, done (or error at any point). A draft the server turns down is followed by search (its one more round, if
+ * any), evidence and delta… again: the answer written anew.
  */
 export type ChatEvent =
   | { event: 'conversation'; data: ConversationRef }

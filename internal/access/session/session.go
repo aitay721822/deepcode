@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -16,11 +15,12 @@ import (
 
 	"deepcode/internal/access/account"
 	"deepcode/internal/access/role"
+	"deepcode/internal/access/session/store"
 )
 
 var (
-	ErrNoSession = errors.New("sign in first")
-	ErrThrottled = errors.New("too many failed attempts; try again in 15 minutes")
+	ErrNoSession = store.ErrNoSession
+	ErrThrottled = errors.New("失敗次數過多；請在 15 分鐘後再試")
 )
 
 // Principal is a signed-in user and what their roles allow.
@@ -31,20 +31,20 @@ type Principal struct {
 	role.Grants
 }
 
-// Store keeps sessions in SQLite. Only a token's SHA-256 is stored, so the
-// database alone signs nobody in.
-type Store struct {
-	DB        *sql.DB
-	Accounts  *account.Store
-	Roles     *role.Store
+// Service signs users in and keeps their sessions in Store. Only a token's
+// SHA-256 is stored, so the database alone signs nobody in.
+type Service struct {
+	Store     *store.Store
+	Accounts  *account.Service
+	Roles     *role.Service
 	TTL       time.Duration
 	byUser    limiter // failed sign-ins per username and address; wrong current passwords per user
 	byAddress limiter // failed sign-ins per address, whatever the username
 	signups   limiter // sign-ups per address
 }
 
-func New(db *sql.DB, accounts *account.Store, roles *role.Store, ttl time.Duration) *Store {
-	return &Store{DB: db, Accounts: accounts, Roles: roles, TTL: ttl,
+func New(st *store.Store, accounts *account.Service, roles *role.Service, ttl time.Duration) *Service {
+	return &Service{Store: st, Accounts: accounts, Roles: roles, TTL: ttl,
 		byUser: limiter{max: 10, window: 15 * time.Minute}, byAddress: limiter{max: 50, window: 15 * time.Minute},
 		signups: limiter{max: 10, window: 15 * time.Minute}}
 }
@@ -59,7 +59,7 @@ const maxUsername = 64
 // fifty failures in fifteen minutes, across any usernames, is refused too.
 // Attempts count from the start, so parallel guesses get no more tries.
 // ponytail: an attacker with many addresses is slowed only by PBKDF2.
-func (s *Store) Login(ctx context.Context, username, password, client string) (string, *Principal, error) {
+func (s *Service) Login(ctx context.Context, username, password, client string) (string, *Principal, error) {
 	if len(username) > maxUsername {
 		return "", nil, account.ErrBadLogin
 	}
@@ -86,7 +86,7 @@ func (s *Store) Login(ctx context.Context, username, password, client string) (s
 
 // signIn starts a session for user id, whose password was just checked
 // against the hash checked, and returns its token and principal.
-func (s *Store) signIn(ctx context.Context, id int64, checked string) (string, *Principal, error) {
+func (s *Service) signIn(ctx context.Context, id int64, checked string) (string, *Principal, error) {
 	token, err := s.start(ctx, id, checked)
 	if errors.Is(err, ErrNoSession) { // disabled or given a new password meanwhile
 		err = account.ErrBadLogin
@@ -102,7 +102,7 @@ func (s *Store) signIn(ctx context.Context, id int64, checked string) (string, *
 // which ends all their sessions, and returns a new session for this browser.
 // Wrong current passwords count like failed sign-ins, so a stolen session
 // cannot guess the password either.
-func (s *Store) ChangePassword(ctx context.Context, id int64, current, next string) (string, error) {
+func (s *Service) ChangePassword(ctx context.Context, id int64, current, next string) (string, error) {
 	key := fmt.Sprintf("user %d", id) // sign-in keys hold a "|"
 	c := s.byUser.take(key)
 	if c == nil {
@@ -121,37 +121,29 @@ func (s *Store) ChangePassword(ctx context.Context, id int64, current, next stri
 // start opens a session for user id and returns its token, while the user is
 // enabled and still has the password hash checked: a disable or a password
 // change committed meanwhile ended their sessions, and must end this one too.
-func (s *Store) start(ctx context.Context, id int64, checked string) (string, error) {
+func (s *Service) start(ctx context.Context, id int64, checked string) (string, error) {
 	raw := make([]byte, 32)
 	rand.Read(raw)
 	token := base64.RawURLEncoding.EncodeToString(raw)
 	// Expired sessions are swept here rather than by a timer.
-	if _, err := s.DB.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP`); err != nil {
+	if err := s.Store.Sweep(ctx); err != nil {
 		return "", err
 	}
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO sessions(token_hash, user_id, expires_at)
-		SELECT ?, id, datetime('now', ?) FROM users WHERE id = ? AND disabled = 0 AND password_hash = ?`,
-		digest(token), fmt.Sprintf("+%d seconds", int(s.TTL.Seconds())), id, checked)
-	if err != nil {
+	if err := s.Store.Start(ctx, digest(token), id, checked, s.TTL); err != nil {
 		return "", err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return "", ErrNoSession
 	}
 	return token, nil
 }
 
 // Authenticate returns who token signs in: an enabled user with an unexpired session.
-func (s *Store) Authenticate(ctx context.Context, token string) (*Principal, error) {
+func (s *Service) Authenticate(ctx context.Context, token string) (*Principal, error) {
 	if token == "" {
 		return nil, ErrNoSession
 	}
 	p := &Principal{}
-	err := s.DB.QueryRowContext(ctx, `SELECT u.id, u.username, u.display_name FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP AND u.disabled = 0`, digest(token)).Scan(&p.UserID, &p.Username, &p.DisplayName)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNoSession
-	} else if err != nil {
+	var err error
+	p.UserID, p.Username, p.DisplayName, err = s.Store.User(ctx, digest(token))
+	if err != nil {
 		return nil, err
 	}
 	p.Grants, err = s.Roles.GrantsOf(ctx, p.UserID)
@@ -159,9 +151,8 @@ func (s *Store) Authenticate(ctx context.Context, token string) (*Principal, err
 }
 
 // Logout ends the session of token.
-func (s *Store) Logout(ctx context.Context, token string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, digest(token))
-	return err
+func (s *Service) Logout(ctx context.Context, token string) error {
+	return s.Store.End(ctx, digest(token))
 }
 
 func digest(token string) string {

@@ -38,8 +38,8 @@ export function FilesPanel({
         autoCapitalize="none"
         spellCheck={false}
         value={query}
-        placeholder="Search symbols"
-        aria-label="Search symbols"
+        placeholder="搜尋 Symbol"
+        aria-label="搜尋 Symbol"
         onChange={(e) => setQuery(e.target.value)}
       />
       {term && symbols?.length ? (
@@ -65,7 +65,7 @@ export function FilesPanel({
         </ul>
       ) : term ? (
         symbols ? (
-          <p className="text-[13px] text-muted-foreground">No symbols match.</p>
+          <p className="text-[13px] text-muted-foreground">沒有符合的 Symbol。</p>
         ) : symbolError ? (
           <LoadError className="mb-0" error={symbolError} onRetry={reloadSymbols} />
         ) : (
@@ -74,7 +74,7 @@ export function FilesPanel({
       ) : files?.length ? (
         <FileTree files={files} active={active} onOpen={onOpen} />
       ) : files ? (
-        <p className="text-[13px] text-muted-foreground">No files were indexed.</p>
+        <p className="text-[13px] text-muted-foreground">尚未索引任何檔案。</p>
       ) : error ? (
         <LoadError className="mb-0" error={error} onRetry={reload} />
       ) : (

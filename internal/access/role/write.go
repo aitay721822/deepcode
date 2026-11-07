@@ -2,11 +2,12 @@ package role
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"deepcode/internal/access/role/store"
 )
 
 // Input creates or changes a role; nil fields keep their value.
@@ -26,51 +27,33 @@ type failure struct {
 func (f failure) Error() string        { return f.msg }
 func (f failure) Is(target error) bool { return target == f.kind }
 
-func (s *Store) Create(ctx context.Context, in Input) (Role, error) {
+func (s *Service) Create(ctx context.Context, in Input) (Role, error) {
 	var r Role
 	if err := fill(&r, in); err != nil {
 		return Role{}, err
 	}
-	err := s.write(ctx, func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(ctx, `INSERT INTO roles(name, description, all_repositories) VALUES (?, ?, ?) RETURNING id`,
-			r.Name, r.Description, r.AllRepositories).Scan(&r.ID); err != nil {
-			return err
-		}
-		return links(ctx, tx, r, in)
-	})
+	id, err := s.Store.Create(ctx, r, in.Permissions, in.RepositoryIDs)
 	if err != nil {
-		return Role{}, err
+		return Role{}, explain(err)
 	}
-	return s.Get(ctx, r.ID)
+	return s.Get(ctx, id)
 }
 
 // Update changes role id. Built-in roles keep their names, and the admin role
 // keeps every permission on every repository.
-func (s *Store) Update(ctx context.Context, id int64, in Input) (Role, error) {
-	err := s.write(ctx, func(tx *sql.Tx) error {
-		// Read while this transaction holds the write lock (BEGIN IMMEDIATE),
-		// so no other edit lands between the read and the write.
-		r, err := s.Get(ctx, id)
-		if err != nil {
-			return err
-		}
+func (s *Service) Update(ctx context.Context, id int64, in Input) (Role, error) {
+	// Checked within the store's transaction, against the role as it is then.
+	err := s.Store.Update(ctx, id, func(r *Role) error {
 		if r.Builtin && in.Name != nil && strings.TrimSpace(*in.Name) != r.Name {
-			return failure{ErrConflict, "built-in roles cannot be renamed"}
+			return failure{ErrConflict, "內建角色不能重新命名"}
 		}
 		if id == Admin && !unchangedAdmin(in) {
-			return failure{ErrConflict, "the admin role always holds every permission on every repository"}
+			return failure{ErrConflict, "admin 角色永遠擁有所有 Repository 的所有權限"}
 		}
-		if err := fill(&r, in); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE roles SET name = ?, description = ?, all_repositories = ? WHERE id = ?`,
-			r.Name, r.Description, r.AllRepositories, id); err != nil {
-			return err
-		}
-		return links(ctx, tx, r, in)
-	})
+		return fill(r, in)
+	}, in.Permissions, in.RepositoryIDs)
 	if err != nil {
-		return Role{}, err
+		return Role{}, explain(err)
 	}
 	return s.Get(ctx, id)
 }
@@ -97,16 +80,15 @@ func unchangedAdmin(in Input) bool {
 }
 
 // Delete removes role id; built-in roles stay.
-func (s *Store) Delete(ctx context.Context, id int64) error {
+func (s *Service) Delete(ctx context.Context, id int64) error {
 	r, err := s.Get(ctx, id)
 	if err != nil {
 		return err
 	}
 	if r.Builtin {
-		return failure{ErrConflict, "built-in roles cannot be deleted"}
+		return failure{ErrConflict, "內建角色不能刪除"}
 	}
-	_, err = s.DB.ExecContext(ctx, `DELETE FROM roles WHERE id = ?`, id)
-	return err
+	return s.Store.Delete(ctx, id)
 }
 
 // fill validates in and applies its fields to r.
@@ -122,79 +104,27 @@ func fill(r *Role, in Input) error {
 	}
 	switch {
 	case r.Name == "" || utf8.RuneCountInString(r.Name) > 64: // characters, not bytes
-		return failure{ErrInvalid, "a name of 1 to 64 characters is required"}
+		return failure{ErrInvalid, "名稱必須為 1 到 64 個字元"}
 	case utf8.RuneCountInString(r.Description) > 500:
-		return failure{ErrInvalid, "the description is longer than 500 characters"}
+		return failure{ErrInvalid, "描述超過 500 個字元"}
 	}
 	if in.Permissions != nil {
 		for _, p := range *in.Permissions {
 			if !known(p) {
-				return failure{ErrInvalid, fmt.Sprintf("unknown permission %q", p)}
+				return failure{ErrInvalid, fmt.Sprintf("未知的權限 %q", p)}
 			}
 		}
 	}
 	return nil
 }
 
-// links replaces the permissions and repositories of r that in sets; a role
-// on every repository lists none.
-func links(ctx context.Context, tx *sql.Tx, r Role, in Input) error {
-	if in.Permissions != nil {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM role_permissions WHERE role_id = ?`, r.ID); err != nil {
-			return err
-		}
-		for _, p := range *in.Permissions {
-			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO role_permissions(role_id, permission) VALUES (?, ?)`, r.ID, p); err != nil {
-				return err
-			}
-		}
-	}
-	if in.RepositoryIDs == nil && !r.AllRepositories {
-		return nil
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM role_repositories WHERE role_id = ?`, r.ID); err != nil {
-		return err
-	}
-	if r.AllRepositories {
-		return nil
-	}
-	for _, repo := range *in.RepositoryIDs {
-		var id int64
-		err := tx.QueryRowContext(ctx, `SELECT id FROM repositories WHERE public_id = ?`, repo).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return failure{ErrInvalid, "unknown repository"}
-		}
-		if err == nil {
-			_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO role_repositories(role_id, repository_id) VALUES (?, ?)`, r.ID, id)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Store) write(ctx context.Context, f func(*sql.Tx) error) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := f(tx); err != nil {
-		return explain(err)
-	}
-	return explain(tx.Commit())
-}
-
-// explain turns constraint failures into errors a caller can act on.
+// explain words the store's refusals as errors a caller can act on.
 func explain(err error) error {
 	switch {
-	case err == nil:
-		return nil
-	case strings.Contains(err.Error(), "UNIQUE constraint failed"):
-		return failure{ErrConflict, "a role with this name already exists"}
-	case strings.Contains(err.Error(), "FOREIGN KEY constraint failed"):
-		return failure{ErrInvalid, "unknown repository"}
+	case errors.Is(err, store.ErrDuplicate):
+		return failure{ErrConflict, "已有同名的角色"}
+	case errors.Is(err, store.ErrNoRepository):
+		return failure{ErrInvalid, "Repository 不存在"}
 	}
 	return err
 }

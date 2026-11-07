@@ -3,11 +3,9 @@ package indexer
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -55,12 +53,11 @@ func (ix *Indexer) parse(ctx context.Context, dir, sha string, snap, prev int64,
 		return err
 	}
 	// An older analyzer's rows are not copied: it read some files otherwise.
-	prevSHA, err := pathMap(ctx, ix.DB, `SELECT f.path, f.content_hash FROM source_files f JOIN snapshots s ON s.id = f.snapshot_id
-		WHERE f.snapshot_id = ? AND s.analyzer = `+strconv.Itoa(analyzer.Version), prev)
+	prevSHA, err := ix.Store.Hashes(ctx, prev, analyzer.Version)
 	if err != nil {
 		return err
 	}
-	done, err := pathMap(ctx, ix.DB, `SELECT path, '' FROM source_files WHERE snapshot_id = ?`, snap)
+	done, err := ix.Store.Paths(ctx, snap)
 	if err != nil {
 		return err
 	}
@@ -111,7 +108,7 @@ func (ix *Indexer) parse(ctx context.Context, dir, sha string, snap, prev int64,
 	progress.Logf("parsed %d files, copied %d unchanged since the last snapshot, skipped %d (stored before, binary or minified)", parsedN, copiedN, skippedN)
 	if len(stale) > 0 {
 		progress.Logf("dropped %d files this version does not index", len(stale))
-		return ix.forget(ctx, snap, slices.Collect(maps.Keys(stale)))
+		return ix.Store.Forget(ctx, snap, slices.Collect(maps.Keys(stale)))
 	}
 	return nil
 }
@@ -180,26 +177,4 @@ func parseFile(p *analyzer.Parser, f file, raw []byte) (parsedFile, bool) {
 	}
 	return parsedFile{file: f, content: content, lines: len(lines), generated: generated, symbols: parsed.Symbols,
 		imports: parsed.Imports, chunks: chunker.Chunks(lines, parsed.Symbols)}, true
-}
-
-// pathMap runs a two-column query (path, value) for one snapshot; snapshot 0
-// (none) yields an empty map.
-func pathMap(ctx context.Context, db *sql.DB, query string, snap int64) (map[string]string, error) {
-	m := map[string]string{}
-	if snap == 0 {
-		return m, nil
-	}
-	rows, err := db.QueryContext(ctx, query, snap)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return nil, err
-		}
-		m[k] = v
-	}
-	return m, rows.Err()
 }

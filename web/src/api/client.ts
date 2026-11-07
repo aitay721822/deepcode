@@ -17,9 +17,8 @@ export async function httpError(res: Response) {
  * error", "signal timed out", …) as a sentence the reader can act on. An abort the caller asked for goes on as it is.
  */
 export function unreachable(e: unknown): never {
-  if (e instanceof TypeError) throw new Error('Cannot reach the server. Check the connection and try again.')
-  if (e instanceof DOMException && e.name === 'TimeoutError')
-    throw new Error('The server took too long to answer. Try again.')
+  if (e instanceof TypeError) throw new Error('無法連線到伺服器。請檢查網路連線後再試一次。')
+  if (e instanceof DOMException && e.name === 'TimeoutError') throw new Error('伺服器回應逾時。請再試一次。')
   throw e
 }
 

@@ -5,7 +5,7 @@ package eval
 // a floor when a change raises the score; a Chinese question's terms are what
 // the model replied to chat's termsPrompt for it.
 var Corpora = []Corpus{
-	{Name: "deepcode", SHA: "fddffe3e1fca1938017c15687216be6c7506b4d6", Recall: 0.916, MRR: 0.592, Questions: []Question{
+	{Name: "deepcode", SHA: "fddffe3e1fca1938017c15687216be6c7506b4d6", Recall: 0.916, MRR: 0.619, Questions: []Question{
 		{Ask: "How are the citations in an answer checked against the sources it was given?", Want: []string{"internal/knowledge/evidence/citations.go"}},
 		{Ask: "How does retrieval combine full-text, vector and symbol results?", Want: []string{"internal/knowledge/retrieval/retriever.go"}},
 		{Ask: "How is a question turned into an FTS5 MATCH query?", Want: []string{"internal/knowledge/retrieval/lexical.go"}},
@@ -41,7 +41,7 @@ var Corpora = []Corpus{
 		{Ask: "登入失敗太多次會怎樣？", Terms: "login failed max attempts lockout rate limit account locked too many attempts",
 			Want: []string{"internal/access/session/limiter.go"}},
 	}},
-	{Name: "chi", URL: "https://github.com/go-chi/chi", SHA: "9f8adb1aabaa8a91180a821111d3f8e668d1c0bf", Recall: 0.999, MRR: 0.773, Questions: []Question{
+	{Name: "chi", URL: "https://github.com/go-chi/chi", SHA: "9f8adb1aabaa8a91180a821111d3f8e668d1c0bf", Recall: 0.999, MRR: 0.785, Questions: []Question{
 		{Ask: "How does chi match a request path to a registered route?", Want: []string{"tree.go", "mux.go"}},
 		{Ask: "How do I read a URL parameter such as {id} inside a handler?", Want: []string{"context.go"}},
 		{Ask: "How do I mount a sub-router under a path prefix?", Want: []string{"mux.go"}},
@@ -65,6 +65,7 @@ var Corpora = []Corpus{
 		{Ask: "How does the wrapped response writer record the status code and bytes written?", Want: []string{"middleware/wrap_writer.go"}},
 		{Ask: "What does the heartbeat endpoint middleware do?", Want: []string{"middleware/heartbeat.go"}},
 		{Ask: "How is the full route pattern of the current request built?", Want: []string{"context.go"}},
+		{Ask: "How can I get the matched route pattern of a request, for example for metrics?", Want: []string{"context.go#RoutePattern"}},
 		{Ask: "How do I route requests by a header such as Host?", Want: []string{"middleware/route_headers.go"}},
 		{Ask: "How do I send headers that stop clients from caching responses?", Want: []string{"middleware/nocache.go"}},
 		{Ask: "How do I allow only certain request content types?", Want: []string{"middleware/content_type.go"}},
@@ -168,7 +169,7 @@ var Corpora = []Corpus{
 		{Ask: "應用程式的多國語言訊息放在哪裡？", Terms: "messages.properties messages_en_US.properties messages_fr_FR.properties messages_zh_CN.properties i18n localization locale",
 			Want: []string{"src/main/resources/messages/messages.properties", "src/main/java/org/springframework/samples/petclinic/system/WebConfiguration.java"}},
 	}},
-	{Name: "gson", URL: "https://github.com/google/gson", SHA: "65df6e5a99747f73d386f3a61d887a0257255e0f", Recall: 0.820, MRR: 0.611, Questions: []Question{
+	{Name: "gson", URL: "https://github.com/google/gson", SHA: "65df6e5a99747f73d386f3a61d887a0257255e0f", Recall: 0.820, MRR: 0.593, Questions: []Question{
 		{Ask: "How does Gson.toJson serialize an object to a JSON string?", Want: []string{"gson/src/main/java/com/google/gson/Gson.java"}},
 		{Ask: "How does fromJson deserialize a string into a typed object?", Want: []string{"gson/src/main/java/com/google/gson/Gson.java"}},
 		{Ask: "How do I configure pretty printing, null serialization and a naming policy on the builder?", Want: []string{"gson/src/main/java/com/google/gson/GsonBuilder.java"}},

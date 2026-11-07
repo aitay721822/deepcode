@@ -17,9 +17,13 @@ type Citation struct {
 }
 
 var (
-	// groupRe matches one bracket group, optionally already turned into a
-	// markdown link by the model (whose target is discarded).
-	groupRe = regexp.MustCompile(`\[([^\[\]\n]+)\](\([^)\s]*\))?`)
+	// citeRe matches one bracket group, optionally already turned into a
+	// markdown link by the model (whose target is discarded), or else one bare
+	// reference, path:10-20 or `path:10-20` (its third group), its path in ASCII,
+	// so that text running up to it (見a.go:3) stays out.
+	citeRe = regexp.MustCompile("\\[([^\\[\\]\\n]+)\\](\\([^)\\s]*\\))?|(`[\\w./@+~$-]+?:L?\\d+(?:-L?\\d+)?`|[\\w./@+~$-]+?:L?\\d+(?:-L?\\d+)?)")
+	// inlineRe matches an inline code span, outside code blocks.
+	inlineRe = regexp.MustCompile("`[^`\n]+`")
 	// refRe matches one reference inside a group: path:10-20, path:10 or
 	// path:L10-L20, optionally in backticks.
 	refRe = regexp.MustCompile("^`?([^\\s`]+?):L?(\\d+)(?:-L?(\\d+))?`?$")
@@ -44,38 +48,73 @@ type ref struct {
 // references (clamped to the evidence range) become links to where link
 // points, the lines at the answer's commit on the git server; anything else
 // in a citation group is removed, so an answer can only cite code it was
-// given. Brackets that are not citations are left alone.
+// given. Brackets that are not citations are left alone. A bare reference
+// outside brackets, a.go:10-20, is linked too when it is valid, and else left
+// as written; one in a code block or inside an inline code span, where a link
+// would not render, is listed as a link after the text.
 func LinkCitations(text string, used []retrieval.Hit, link func(Citation) string) (string, []Citation) {
 	cites := []Citation{}
 	seen := map[Citation]bool{}
-	fences := fenceRe.FindAllStringIndex(text, -1)
-	var b strings.Builder
-	last := 0
-	for _, m := range groupRe.FindAllStringSubmatchIndex(text, -1) {
-		if inside(fences, m[0]) {
-			continue // code, where a link would not render
+	cite := func(c Citation) string {
+		if !seen[c] {
+			seen[c] = true
+			cites = append(cites, c)
 		}
-		refs, ok := parseRefs(text[m[2]:m[3]])
+		return fmt.Sprintf("[%s:%d-%d](%s)", linkText.Replace(c.Path), c.StartLine, c.EndLine, link(c))
+	}
+	fences := fenceRe.FindAllStringIndex(text, -1)
+	prose := []byte(text) // the code blocks blanked, so that their backticks pair with none outside
+	for _, f := range fences {
+		for i := f[0]; i < f[1]; i++ {
+			prose[i] = ' '
+		}
+	}
+	spans := inlineRe.FindAllIndex(prose, -1)
+	var b strings.Builder
+	var coded []Citation
+	last := 0
+	for _, m := range citeRe.FindAllStringSubmatchIndex(text, -1) {
+		group, bare := m[2:4], m[6] >= 0
+		if bare {
+			group = m[6:8]
+		}
+		refs, ok := parseRefs(text[group[0]:group[1]])
 		if !ok {
 			continue // ordinary brackets or a markdown link: keep as written
 		}
+		var shown []Citation
+		for _, r := range refs {
+			if c, ok := verify(r, used); ok {
+				shown = append(shown, c)
+			}
+		}
+		if inside(fences, m[0]) || text[m[0]] != '`' && inside(spans, m[0]) { // in code, but for a whole span of it
+			coded = append(coded, shown...)
+			continue
+		} else if bare && (len(shown) == 0 || m[0] > 0 && text[m[0]-1] == '\\') {
+			continue // no source shown, or one of a Windows path: perhaps no reference at all, as in host:8080
+		}
 		b.WriteString(text[last:m[0]])
 		last = m[1]
-		var links []string
-		for _, r := range refs {
-			c, ok := verify(r, used)
-			if !ok {
-				continue
-			}
-			links = append(links, fmt.Sprintf("[%s:%d-%d](%s)", linkText.Replace(c.Path), c.StartLine, c.EndLine, link(c)))
-			if !seen[c] {
-				seen[c] = true
-				cites = append(cites, c)
-			}
+		links := make([]string, len(shown))
+		for i, c := range shown {
+			links[i] = cite(c)
 		}
 		b.WriteString(strings.Join(links, " "))
 	}
 	b.WriteString(text[last:])
+	var links []string
+	for _, c := range coded {
+		if !seen[c] {
+			links = append(links, cite(c))
+		}
+	}
+	if len(links) > 0 {
+		if strings.Count(text, "```")%2 == 1 {
+			b.WriteString("\n```") // close the code block left open, or the links land in it
+		}
+		b.WriteString("\n\n來源：" + strings.Join(links, " "))
+	}
 	return b.String(), cites
 }
 

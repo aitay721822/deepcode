@@ -1,4 +1,4 @@
-import { Link } from '../../lib/router'
+import { Link } from '@tanstack/react-router'
 import { Notice } from '../layout/Notice'
 import { Button } from '../ui/controls/button'
 import { SkeletonText } from '../ui/feedback/skeleton'
@@ -13,16 +13,16 @@ export function RepoNotice({ error, status, onRetry }: { error?: string; status?
     )
   const missing = status === 404
   return (
-    <Notice title={missing ? 'Repository not found' : 'Cannot open this repository'}>
+    <Notice title={missing ? '找不到 Repository' : '無法開啟這個 Repository'}>
       {missing ? (
-        <p className="text-muted-foreground">It does not exist, or you do not have access to it.</p>
+        <p className="text-muted-foreground">它不存在，或你沒有存取權限。</p>
       ) : (
         <>
           <p className="[overflow-wrap:anywhere] text-destructive" role="alert">
             {error}
           </p>
           <Button variant="outline" onClick={onRetry}>
-            Retry
+            重試
           </Button>
         </>
       )}
@@ -30,7 +30,7 @@ export function RepoNotice({ error, status, onRetry }: { error?: string; status?
         to="/"
         className="mx-auto block w-fit text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
       >
-        Back to repositories
+        回到 Repository 列表
       </Link>
     </Notice>
   )

@@ -19,7 +19,7 @@ import (
 )
 
 // ErrEmpty is a repository whose default branch has no commit to index.
-var ErrEmpty = errors.New("the repository's default branch has no commits")
+var ErrEmpty = errors.New("Repository 的預設 Branch 沒有任何 Commit")
 
 // Client runs the system git with fixed arguments (never through a shell).
 // Each repository is a bare, shallow clone: files are read from the object

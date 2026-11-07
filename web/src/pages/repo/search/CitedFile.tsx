@@ -1,16 +1,16 @@
 import { CheckIcon, CopyIcon, XIcon } from 'lucide-react'
 import { memo, useEffect, useState } from 'react'
-import { getFile } from '../../api/repo/code'
-import { providerName } from '../../components/repo/provider/providerName'
-import { sourceUrl } from '../../components/repo/sourceLinks'
-import { CodeView } from '../../components/source/CodeView'
-import { Button } from '../../components/ui/controls/button'
-import { LoadError } from '../../components/ui/feedback/load-error'
-import { SkeletonText } from '../../components/ui/feedback/skeleton'
-import { useApi } from '../../lib/useApi'
-import type { ConversationRef } from '../../types/repo/chat'
-import type { Citation } from '../../types/repo/code'
-import type { Repo } from '../../types/repo/repo'
+import { getFile } from '../../../api/repo/code'
+import { providerName } from '../../../components/repo/provider/providerName'
+import { sourceUrl } from '../../../components/repo/sourceLinks'
+import { CodeView } from '../../../components/source/CodeView'
+import { Button } from '../../../components/ui/controls/button'
+import { LoadError } from '../../../components/ui/feedback/load-error'
+import { SkeletonText } from '../../../components/ui/feedback/skeleton'
+import { useApi } from '../../../lib/useApi'
+import type { ConversationRef } from '../../../types/repo/chat'
+import type { Citation } from '../../../types/repo/code'
+import type { Repo } from '../../../types/repo/repo'
 
 /**
  * The cited lines in their file, at the snapshot the conversation is pinned to.
@@ -28,7 +28,7 @@ export const CitedFile = memo(function CitedFile({
   const { data, error, reload } = useApi(`${repo.id}:${conv.snapshotId}:${citation.path}`, () =>
     getFile(repo.id, citation.path, conv.snapshotId),
   )
-  const [copy, setCopy] = useState<'' | 'Copied' | 'Copy failed'>('')
+  const [copy, setCopy] = useState<'' | '已複製' | '複製失敗'>('')
   useEffect(() => {
     if (!copy) return
     const t = setTimeout(() => setCopy(''), 1500) // a transient tick, or cross
@@ -45,17 +45,17 @@ export const CitedFile = memo(function CitedFile({
           variant="ghost"
           size="icon-sm"
           className="text-muted-foreground"
-          aria-label="Copy path"
+          aria-label="複製路徑"
           onClick={async () => {
             try {
               await navigator.clipboard.writeText(citation.path) // no clipboard outside https or localhost, or permission denied
-              setCopy('Copied')
+              setCopy('已複製')
             } catch {
-              setCopy('Copy failed')
+              setCopy('複製失敗')
             }
           }}
         >
-          {copy === 'Copied' ? (
+          {copy === '已複製' ? (
             <CheckIcon className="size-3.5" />
           ) : copy ? (
             <XIcon className="size-3.5" />
@@ -75,7 +75,7 @@ export const CitedFile = memo(function CitedFile({
             target="_blank"
             rel="noreferrer"
           >
-            Open on {providerName(repo.provider)}
+            在 {providerName(repo.provider)} 開啟
           </a>
         </LoadError>
       ) : data ? (

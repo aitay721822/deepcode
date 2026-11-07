@@ -1,3 +1,4 @@
+import { useNavigate } from '@tanstack/react-router'
 import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useRef, useState } from 'react'
 import { getHealth } from '../../api/repo/repos'
@@ -9,7 +10,6 @@ import { RepoNotice } from '../../components/repo/RepoNotice'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/display/tabs'
 import { LoadError } from '../../components/ui/feedback/load-error'
 import { formatDate, shortSha } from '../../lib/format'
-import { navigate } from '../../lib/router'
 import { rise } from '../../lib/style/motion'
 import { useApi } from '../../lib/useApi'
 import { Frame } from '../Frame'
@@ -25,7 +25,11 @@ import { WikiPlaceholder } from './wiki/WikiPlaceholder'
 
 type Tab = 'wiki' | 'files'
 
-export function RepoPage({ id, params }: { id: string; params: URLSearchParams }) {
+/** ?page= a wiki page; or ?file= a file, L= its lines (5-9), s= the snapshot it is read at. */
+type RepoSearch = { page?: string; file?: string; L?: string; s?: string }
+
+export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
+  const navigate = useNavigate()
   const { data: repo, error, status, reload } = useRepo(id)
   const { data: health, error: healthError } = useApi('health', getHealth)
   const sync = useSync(id, reload) // Retry of a failed job, Sync when there is no wiki
@@ -47,14 +51,12 @@ export function RepoPage({ id, params }: { id: string; params: URLSearchParams }
     wasBusy.current = wikiBusy
   }, [wikiBusy, reloadWiki])
 
-  const file = params.get('file')
-  const lines = params
-    .get('L')
-    ?.split('-')
+  const file = search.file ?? null
+  const lines = search.L?.split('-')
     .map(Number)
     .filter(Boolean)
     .sort((a, b) => a - b) // "5-" → [5], "9-3" → [3, 9]
-  const fileSnapshot = params.get('s')
+  const fileSnapshot = search.s ?? null
   const [tab, setTab] = useState<Tab>(file ? 'files' : 'wiki')
   useEffect(() => setTab(file ? 'files' : 'wiki'), [file]) // follow back/forward too
   const [toc, setToc] = useState<TocItem[]>([])
@@ -69,17 +71,22 @@ export function RepoPage({ id, params }: { id: string; params: URLSearchParams }
     )
   }
 
-  const base = `/repos/${repo.id}`
-  const page = wiki?.pages.find((p) => p.slug === params.get('page')) ?? wiki?.pages[0]
+  const here = { to: '/repos/$id', params: { id: repo.id } } as const
+  const page = wiki?.pages.find((p) => p.slug === search.page) ?? wiki?.pages[0]
   const canSync = repo.permissions.includes('repo.sync')
   // The wiki job's card: once it failed (above any pages written before), or while it runs before the first page exists.
   const job = repo.job
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
   // The file tree and symbol search list the published snapshot, so their files open there.
   const openFile = (path: string, start?: number, end?: number, snapshot?: number) =>
-    navigate(
-      `${base}?file=${encodeURIComponent(path)}${start ? `&L=${start}-${end ?? start}` : ''}${snapshot ? `&s=${snapshot}` : ''}`,
-    )
+    navigate({
+      ...here,
+      search: {
+        file: path,
+        L: start ? `${start}-${end ?? start}` : undefined,
+        s: snapshot ? String(snapshot) : undefined,
+      },
+    })
   // A wiki citation points into the wiki's snapshot, which trails the published one while the next wiki is written.
   const openCitation = (path: string, start?: number, end?: number) =>
     openFile(path, start, end, wiki && ready && wiki.snapshotId !== ready.id ? wiki.snapshotId : undefined)
@@ -97,28 +104,28 @@ export function RepoPage({ id, params }: { id: string; params: URLSearchParams }
     <Frame repo={repo}>
       <div className="grid grid-cols-1 min-[900px]:grid-cols-[260px_minmax(0,1fr)] min-[1240px]:grid-cols-[300px_minmax(0,1fr)_300px]">
         <aside
-          aria-label="Wiki pages and files"
+          aria-label="Wiki 頁面與檔案"
           className="max-h-[45dvh] print:hidden overflow-y-auto overscroll-contain border-b px-4 pt-7 pb-4 min-[900px]:sticky min-[900px]:top-16 min-[900px]:h-[calc(100dvh-4rem)] min-[900px]:max-h-none min-[900px]:border-r min-[900px]:border-b-0 min-[900px]:pr-[18px] min-[900px]:pb-36 min-[900px]:pl-6"
         >
           {ready && (
             <p className="mb-5 font-mono text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
-              Indexed {formatDate(ready.indexedAt)} ·{' '}
+              索引於 {formatDate(ready.indexedAt)} ·{' '}
               <span className="text-foreground normal-case">{shortSha(ready.commitSha)}</span>
             </p>
           )}
           {/* Sync lives in the rail; once the rail is hidden, here. */}
           {syncCard && <div className="mb-4 min-[1240px]:hidden">{syncCard}</div>}
           {ready && (
-            <Tabs value={tab} onValueChange={(t) => (t === 'wiki' && file ? navigate(base) : setTab(t as Tab))}>
-              <TabsList aria-label="Browse the repository">
+            <Tabs value={tab} onValueChange={(t) => (t === 'wiki' && file ? navigate(here) : setTab(t as Tab))}>
+              <TabsList aria-label="瀏覽 Repository">
                 <TabsTrigger value="wiki">Wiki</TabsTrigger>
-                <TabsTrigger value="files">Files</TabsTrigger>
+                <TabsTrigger value="files">檔案</TabsTrigger>
               </TabsList>
               <TabsContent value="wiki">
                 <WikiNav
                   pages={wiki?.pages ?? []}
                   active={file ? undefined : page?.slug}
-                  base={base}
+                  repoId={repo.id}
                   writing={wikiBusy}
                 />
               </TabsContent>
@@ -145,19 +152,17 @@ export function RepoPage({ id, params }: { id: string; params: URLSearchParams }
                 repo.job ? (
                   <JobProgress
                     job={repo.job}
-                    title={`Indexing ${repo.owner}/${repo.name}`}
+                    title={`為 ${repo.owner}/${repo.name} 建立索引`}
                     retry={canSync ? sync : undefined}
                   />
                 ) : (
-                  <p className="text-muted-foreground">Not indexed yet.</p>
+                  <p className="text-muted-foreground">尚未建立索引。</p>
                 ) // its first job was never queued, or is gone: Sync queues it
               ) : file ? (
                 <FileView repo={repo} path={file} lines={lines} snapshot={fileSnapshot} sha={fileSha} />
               ) : (
                 <>
-                  {wikiJob && (
-                    <JobProgress job={wikiJob} title="Generating the wiki" retry={canSync ? sync : undefined} />
-                  )}
+                  {wikiJob && <JobProgress job={wikiJob} title="產生 Wiki" retry={canSync ? sync : undefined} />}
                   {page ? (
                     <WikiArticle page={page} repo={repo} writing={wikiBusy} onToc={setToc} onCite={openCitation} />
                   ) : (
@@ -179,7 +184,7 @@ export function RepoPage({ id, params }: { id: string; params: URLSearchParams }
         </main>
 
         <aside
-          aria-label="Sync and outline"
+          aria-label="同步與本頁內容"
           className="sticky top-16 hidden print:hidden h-[calc(100dvh-4rem)] overflow-y-auto px-6 pt-7 pb-36 min-[1240px]:block"
         >
           {syncCard && <div className="mb-7">{syncCard}</div>}
@@ -190,13 +195,19 @@ export function RepoPage({ id, params }: { id: string; params: URLSearchParams }
         <AskBox
           placeholder={
             healthError
-              ? `Questions are unavailable: ${healthError}`
+              ? `目前無法提問：${healthError}`
               : health && !health.chatModel
-                ? 'Set DEEPCODE_CHAT_MODEL to ask questions'
-                : `Ask about ${repo.owner}/${repo.name}`
+                ? '請先設定 DEEPCODE_CHAT_MODEL 才能提問'
+                : `針對 ${repo.owner}/${repo.name} 提問`
           }
           disabled={!ready || !health?.chatModel}
-          onAsk={(q, deep) => navigate(`${base}/search`, { state: { question: q, deep } })}
+          onAsk={(q, deep) =>
+            navigate({
+              to: '/repos/$id/search/{-$conversationId}',
+              params: { id: repo.id, conversationId: undefined },
+              state: { question: q, deep }, // the search page asks it
+            })
+          }
         />
       )}
     </Frame>

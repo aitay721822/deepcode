@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"deepcode/internal/platform/events"
+	"deepcode/internal/platform/jobs/store"
 	"deepcode/internal/platform/storage"
 )
 
@@ -32,7 +33,7 @@ func setup(t *testing.T) (*Queue, *sql.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(db, bus, time.Minute), db
+	return New(&store.Store{DB: db}, bus, time.Minute), db
 }
 
 func TestEnqueueIsIdempotent(t *testing.T) {
@@ -150,7 +151,7 @@ func TestPrune(t *testing.T) {
 		ids = append(ids, j.ID)
 	}
 	only, _ := q.EnqueueIndex(ctx, 2, "only", "")
-	Progress{q, ids[0]}.Logf("output")
+	Progress{q: q, id: ids[0]}.Logf("output")
 	db.Exec(`UPDATE jobs SET status = 'succeeded', updated_at = datetime('now', '-31 days') WHERE id IN (?, ?)`, ids[0], only.ID)
 	db.Exec(`UPDATE jobs SET status = 'running', updated_at = datetime('now', '-31 days') WHERE id = ?`, ids[1])
 	db.Exec(`UPDATE jobs SET status = 'succeeded', updated_at = datetime('now', '-29 days') WHERE id = ?`, ids[2])
@@ -299,18 +300,19 @@ func TestRecoverFailsLastAttempt(t *testing.T) {
 	}
 }
 
-// TestOutput: streamed text lands in the job's log line by line, in order;
-// the admin listing names the repository; re-queuing clears the old output.
+// TestOutput: streamed text lands in the job's log line by line, in order,
+// each starting with the prefixes it was given; the admin listing names the
+// repository; re-queuing clears the old output.
 func TestOutput(t *testing.T) {
 	q, db := setup(t)
 	ctx := context.Background()
 	j, _ := q.EnqueueIndex(ctx, 1, "sha", "")
-	write, flush := Progress{q, j.ID}.Lines()
+	write, flush := Progress{q: q, id: j.ID}.With("[a] ").With("[b] ").Lines()
 	write("first line\nsec")
 	write("ond\nthird")
 	flush()
 	lines, _ := q.Logs(ctx, j.ID, 0, 10)
-	if len(lines) != 3 || lines[0].Line != "first line" || lines[1].Line != "second" || lines[2].Line != "third" {
+	if len(lines) != 3 || lines[0].Line != "[a] [b] first line" || lines[1].Line != "[a] [b] second" || lines[2].Line != "[a] [b] third" {
 		t.Fatalf("lines: %+v", lines)
 	}
 	if after, _ := q.Logs(ctx, j.ID, lines[0].ID, 10); len(after) != 2 {
@@ -342,7 +344,7 @@ func TestOutputCapped(t *testing.T) {
 	q, _ := setup(t)
 	ctx := context.Background()
 	j, _ := q.EnqueueIndex(ctx, 1, "sha", "")
-	write, flush := Progress{q, j.ID}.Lines()
+	write, flush := Progress{q: q, id: j.ID}.Lines()
 	write(strings.Repeat("line\n", maxLines))
 	write("one more")
 	write(" and more\nand more\n")
@@ -352,7 +354,7 @@ func TestOutputCapped(t *testing.T) {
 		t.Fatalf("%d lines, ending %+v", n, lines[max(0, n-2):])
 	}
 	// A line past maxLine bytes is cut, on a character's boundary.
-	Progress{q, j.ID}.Logf("%s", strings.Repeat("長", maxLine))
+	Progress{q: q, id: j.ID}.Logf("%s", strings.Repeat("長", maxLine))
 	if long, _ := q.Logs(ctx, j.ID, lines[len(lines)-1].ID, 1); len(long) != 1 || len(long[0].Line) > maxLine+len("…") || !utf8.ValidString(long[0].Line) {
 		t.Fatalf("a long line: %+v", long)
 	}
@@ -365,7 +367,7 @@ func TestFollow(t *testing.T) {
 	q, db := setup(t)
 	ctx := context.Background()
 	j, _ := q.EnqueueIndex(ctx, 1, "sha", "")
-	p := Progress{q, j.ID}
+	p := Progress{q: q, id: j.ID}
 	p.Logf("one")
 	p.Logf("two")
 	first, _ := q.Logs(ctx, j.ID, 0, 1)
