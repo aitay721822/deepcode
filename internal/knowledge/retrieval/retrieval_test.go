@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -89,7 +90,7 @@ func TestFTSRanksCodeFirst(t *testing.T) {
 			VALUES (1, 'src/store.ts', 1, 9, 'const setState = (next) => { state = next; listeners.forEach((l) => l(state)) }
 			const subscribe = (listener) => { listeners.add(listener) }', 'h2')`,
 	)
-	ids, err := (&Retriever{DB: db}).fts(context.Background(), 1, "How does setState notify subscribers?")
+	ids, err := (&Retriever{DB: db}).fts(context.Background(), 1, "How does setState notify subscribers?", nil, ftsLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestFTSRanksCodeFirst(t *testing.T) {
 	if want := []string{"src/store.ts", "tests/store.test.ts"}; !reflect.DeepEqual(paths, want) {
 		t.Fatalf("got %v, want %v", paths, want)
 	}
-	if ids, _ := (&Retriever{DB: db}).fts(context.Background(), 1, "subscribers"); len(ids) != 2 {
+	if ids, _ := (&Retriever{DB: db}).fts(context.Background(), 1, "subscribers", nil, ftsLimit); len(ids) != 2 {
 		t.Fatalf("\"subscribers\" matched %d chunks, want both (stemmed to subscrib)", len(ids))
 	}
 }
@@ -119,7 +120,7 @@ func TestFTSFindsWordsOfIdentifiers(t *testing.T) {
 			(1, 'cart/cart.go', 1, 9, 'func checkout() {}', 'h3', '')`,
 	)
 	for _, q := range []string{"Where is the token renewed?", "Who calls userToken?"} {
-		if ids, err := (&Retriever{DB: db}).fts(context.Background(), 1, q); err != nil || !reflect.DeepEqual(ids, []int64{1, 2}) {
+		if ids, err := (&Retriever{DB: db}).fts(context.Background(), 1, q, nil, ftsLimit); err != nil || !reflect.DeepEqual(ids, []int64{1, 2}) {
 			t.Errorf("%q found chunks %v %v, want refreshUserToken's (1), then the prose (2)", q, ids, err)
 		}
 	}
@@ -168,6 +169,63 @@ func TestSymbolChunks(t *testing.T) {
 	}
 	if ids, err := r.symbolChunks(context.Background(), 1, "target or targethandler"); err != nil || !reflect.DeepEqual(ids, []int64{2, 1}) {
 		t.Fatalf("got chunks %v %v, want TargetHandler's (2) before Target's (1)", ids, err)
+	}
+}
+
+// TestSearchImports: a chunk of a file the top hits import takes a place of
+// the last nearSlots, behind the best hits, though better matches elsewhere
+// would fill the limit; without the imports it is left out.
+func TestSearchImports(t *testing.T) {
+	db := seeded(t,
+		`INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash) VALUES
+			(1, 'a.go', 'route', 1, 9, 'func route() {}', 'h0'),
+			(1, 'f1.go', '', 1, 9, 'route route route', 'h1'), (1, 'f2.go', '', 1, 9, 'route route route', 'h2'),
+			(1, 'f3.go', '', 1, 9, 'route route route', 'h3'), (1, 'f4.go', '', 1, 9, 'route route route', 'h4'),
+			(1, 'f5.go', '', 1, 9, 'route route route', 'h5'), (1, 'c.go', '', 1, 9, 'route route', 'h6'),
+			(1, 'b.go', '', 1, 9, 'route', 'h7')`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'a.go', 'route', 'route', 'function', 1, 1)`,
+		// Not the top hit's: those ranked after it.
+		`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'f1.go', 'b.go'), (1, 'f2.go', 'b.go'), (1, 'f3.go', 'b.go'), (1, 'f4.go', 'b.go'), (1, 'f5.go', 'b.go')`,
+	)
+	r := &Retriever{DB: db}
+	paths := func() ([]string, int) {
+		res, err := r.Search(context.Background(), 1, "route", 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, h := range res.Hits {
+			out = append(out, h.Path)
+		}
+		return out, res.Graph
+	}
+	if got, n := paths(); n != 1 || len(got) != 4 || got[0] != "a.go" || got[2] != "b.go" || slices.Contains(got, "c.go") {
+		t.Fatalf("with the import: %v (%d from imported files), want b.go third", got, n)
+	}
+	if _, err := db.Exec(`DELETE FROM file_edges`); err != nil {
+		t.Fatal(err)
+	}
+	if got, n := paths(); n != 0 || len(got) != 4 || slices.Contains(got, "b.go") {
+		t.Fatalf("without it: %v (%d from imported files), want no b.go", got, n)
+	}
+	// The imported code fills only what the best hits leave, the best one always kept, and never twice.
+	for _, c := range []struct {
+		ranked, near []int64
+		limit        int
+		want         []int64
+		took         int // places of near
+	}{
+		{[]int64{1, 2, 3, 4, 5}, []int64{9, 8, 7}, 4, []int64{1, 2, 9, 8}, 2},
+		{[]int64{1, 2, 3, 4, 5}, []int64{2, 9}, 4, []int64{1, 2, 9, 3}, 1},
+		{[]int64{1, 2}, []int64{9}, 4, []int64{1, 2, 9}, 1},
+		{[]int64{1, 2}, []int64{9, 8, 7}, 6, []int64{1, 2, 9, 8}, 2},
+		{[]int64{1, 2, 3}, nil, 2, []int64{1, 2}, 0},
+		{[]int64{1, 2, 3}, []int64{9, 8}, 2, []int64{1, 9}, 1},
+		{[]int64{1, 2, 3}, []int64{9, 8}, 1, []int64{1}, 0},
+	} {
+		if got, took := supplement(c.ranked, c.near, c.limit); !slices.Equal(got, c.want) || took != c.took {
+			t.Errorf("supplement(%v, %v, %d) = %v, %d; want %v, %d", c.ranked, c.near, c.limit, got, took, c.want, c.took)
+		}
 	}
 }
 

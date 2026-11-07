@@ -3,9 +3,12 @@ import { api, httpError, unreachable } from '../client'
 
 export const getConversation = (id: string) => api<Conversation>(`/api/conversations/${id}`)
 
-/** POSTs a question (conversationId 0 starts one) and reports each server-sent event (EventSource cannot POST). */
+/**
+ * POSTs a question (conversationId 0 starts one; deep searches more rounds and reads the wiki first) and reports each
+ * server-sent event (EventSource cannot POST).
+ */
 export async function streamChat(
-  body: { repoId: number; conversationId: number; question: string },
+  body: { repoId: number; conversationId: number; question: string; deep: boolean },
   on: (e: ChatEvent) => void,
   signal: AbortSignal,
 ) {

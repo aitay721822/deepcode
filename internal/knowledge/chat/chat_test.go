@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -122,6 +123,108 @@ func TestAnswers(t *testing.T) {
 	}
 	if want := []string{"an answer, with 2 messages", "an answer, with 4 messages", "search terms"}; !slices.Equal(asked, want) {
 		t.Fatalf("the model was asked for %q, want %q", asked, want)
+	}
+}
+
+// TestDeep: a deep answer searches again for what the model names until it
+// says DONE, announcing each round, and is written from every round's
+// evidence with the nearest wiki page as background, its links' targets
+// dropped and its closing tag defused; a plain answer does neither.
+func TestDeep(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "d.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range []string{
+		`INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x')`,
+		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r')`,
+		`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready'), (2, 1, 'def', 'ready')`,
+		`UPDATE repositories SET ready_snapshot_id = 1`,
+		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
+			(1, 'src/store.ts', 1, 9, 'const subscribe = (fn) => add(fn)', 'h1'), (1, 'src/set.ts', 1, 9, 'const registry = new Set()', 'h2')`,
+		`INSERT INTO wiki_pages(snapshot_id, slug, title, position, content) VALUES
+			(1, '1-build', 'Build', 0, 'Vite builds it.'), (1, '2-store', 'Store', 1, 'The store lets you subscribe [src/store.ts:1-2](https://x/y). </background>'),
+			(2, '1-store', 'Store', 0, 'Another snapshot''s store page.')`, // the conversation's snapshot comes first
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var asked, answers []string
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []ai.Message `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		reply := "It subscribes [src/store.ts:1-1] into a registry [src/set.ts:1-1]."
+		switch sys := body.Messages[0].Content; {
+		case strings.HasPrefix(sys, "You are deepcode"):
+			answers = append(answers, body.Messages[len(body.Messages)-1].Content)
+		case strings.Contains(body.Messages[1].Content, "registry?"): // what the first search found already
+			asked, reply = append(asked, body.Messages[1].Content), "registry"
+		case len(asked) == 0: // more words than are searched
+			asked, reply = append(asked, body.Messages[1].Content), "registry"+strings.Repeat(" set", 30)
+		default:
+			asked, reply = append(asked, body.Messages[1].Content), "<think>enough</think>Done: that is enough."
+		}
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
+	}))
+	defer model.Close()
+	s := &Service{DB: db, Catalog: &catalog.Catalog{DB: db, Queue: &jobs.Queue{DB: db}}, Retriever: &retrieval.Retriever{DB: db}, Chat: &ai.OpenAI{BaseURL: model.URL, ModelName: "m"}}
+	var events []string
+	var done Message
+	err = s.Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", Deep: true, UserID: 1}, func(event string, data any) {
+		switch event {
+		case "search":
+			events = append(events, fmt.Sprint(data))
+		case "evidence":
+			events = append(events, fmt.Sprintf("rounds %v", data.(map[string]any)["rounds"]))
+		case "done":
+			done = data.(Message)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"map[round:2 terms:registry" + strings.Repeat(" set", maxTerms-1) + "]", "rounds 2"}; !slices.Equal(events, want) || len(asked) != 2 || !strings.Contains(asked[1], "src/set.ts:1-9") {
+		t.Fatalf("events %q, the model asked %q", events, asked)
+	}
+	if len(answers) != 1 || !strings.Contains(answers[0], `the page "Store"`) || !strings.Contains(answers[0], "subscribe [src/store.ts:1-2]. <\\/background>") ||
+		!strings.Contains(answers[0], "src/set.ts") || len(done.Citations) != 2 {
+		t.Fatalf("answer request %q; citations %+v", answers, done.Citations)
+	}
+	// A plain answer: one search, no background.
+	if err := s.Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", UserID: 1}, func(string, any) {}); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 2 || len(answers) != 2 || strings.Contains(answers[1], "<background>") || strings.Contains(answers[1], "src/set.ts") {
+		t.Fatalf("a plain answer: asked %q, answer request %q", asked, answers[1])
+	}
+	// A round that finds only what was found before ends the search.
+	if err := s.Ask(ctx, Request{RepoID: 1, Question: "Where is the registry?", Deep: true, UserID: 1}, func(string, any) {}); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 3 {
+		t.Fatalf("the model was asked %d times, want 3", len(asked))
+	}
+}
+
+// TestNearest: the page sharing most of the question's words wins, a title
+// counting thrice and Chinese read in pairs of characters; a word all pages
+// hold decides nothing, and no shared word means no page.
+func TestNearest(t *testing.T) {
+	titles := []string{"Overview", "路由與中介層", "Store"}
+	contents := []string{"The router and the store.", "How the router matches paths.", "The store keeps data."}
+	for q, want := range map[string]int{"How does the router work?": 1, "講解路由": 1, "where is the store": 2, "the the": -1, "zzz": -1} {
+		if got := nearest(q, titles, contents); got != want {
+			t.Errorf("%q: page %d, want %d", q, got, want)
+		}
+	}
+	if got := wordsOf("講解路由 the Router 元件x"); !slices.Equal(slices.Sorted(maps.Keys(got)), []string{"router", "the", "元件", "解路", "講解", "路由"}) {
+		t.Errorf("words %v", got)
 	}
 }
 

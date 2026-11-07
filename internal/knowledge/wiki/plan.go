@@ -12,6 +12,7 @@ import (
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/catalog"
+	"deepcode/internal/repo/index/graph"
 )
 
 type planned struct {
@@ -97,7 +98,7 @@ func parseSteering(s string) (steering, error) {
 
 const planPrompt = `You plan a concise technical wiki for a code repository. Reply with JSON only, no prose:
 {"pages":[{"title":"Overview","query":"keywords, paths and identifiers to search the code for this page"}]}
-Plan 4 to 8 pages. The first page is the overview. Every later page covers one subsystem, layer, workflow or key concept that really exists in this repository. Queries name concrete directories, files, types or functions taken from the layout below.`
+Plan 4 to 8 pages. The first page is the overview. Every later page covers one subsystem, layer, workflow or key concept that really exists in this repository; the imports between directories, when listed, show which parts depend on which. Queries name concrete directories, files, types or functions taken from the layout below.`
 
 // plannedPages returns the snapshot's pages. When there are none yet, it
 // stores them first: carried over from the previous wiki, else the pages
@@ -196,7 +197,8 @@ func clip(s string, n int) string {
 }
 
 // layout summarises the snapshot for planning: directory sizes two levels
-// deep, root files, the README and root manifests.
+// deep, root files, the imports between those directories, the README and
+// root manifests.
 func (g *Generator) layout(ctx context.Context, snap int64) (string, error) {
 	rows, err := g.DB.QueryContext(ctx, `SELECT path FROM source_files WHERE snapshot_id = ? ORDER BY path`, snap)
 	if err != nil {
@@ -240,6 +242,20 @@ func (g *Generator) layout(ctx context.Context, snap int64) (string, error) {
 		fmt.Fprintf(&b, "%s%s (%d)\n", indent, d, counts[d])
 	}
 	fmt.Fprintf(&b, "\nRoot files: %s\n", strings.Join(rootFiles, ", "))
+	deps, err := graph.DirEdges(ctx, g.DB, snap, 2)
+	if err != nil {
+		return "", err
+	}
+	if len(deps) > 0 {
+		b.WriteString("\nImports between directories (how many imports, most first):\n")
+		for i, e := range deps {
+			if i == 40 {
+				b.WriteString("  …\n")
+				break
+			}
+			fmt.Fprintf(&b, "  %s/ → %s/ (%d)\n", e.From, e.To, e.Count)
+		}
+	}
 
 	frows, err := g.DB.QueryContext(ctx, `
 		SELECT f.path, c.content FROM source_files f JOIN file_contents c ON c.hash = f.content_hash

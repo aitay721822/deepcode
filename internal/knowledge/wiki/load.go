@@ -7,6 +7,7 @@ import (
 
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/repo/catalog"
+	"deepcode/internal/repo/index/graph"
 )
 
 type Page struct {
@@ -14,6 +15,10 @@ type Page struct {
 	Title     string              `json:"title"`
 	Content   string              `json:"content"`
 	Citations []evidence.Citation `json:"citations"`
+	// Diagram is a Mermaid flowchart of the imports between the snapshot's
+	// directories, drawn from its graph rather than by the model: on the
+	// overview, the first page, when its files import each other's.
+	Diagram string `json:"diagram,omitempty"`
 }
 
 type Wiki struct {
@@ -64,7 +69,13 @@ func (r Reader) Load(ctx context.Context, repoID int64) (Wiki, error) {
 		p.Citations = append([]evidence.Citation{}, cites[id]...) // [] rather than null in JSON
 		w.Pages = append(w.Pages, p)
 	}
-	return w, rows.Err()
+	if err := rows.Err(); err != nil || len(w.Pages) == 0 {
+		return w, err
+	}
+	// ponytail: drawn on every read, from all of the snapshot's edges; store it
+	// with the snapshot if large repositories make wiki reads slow.
+	w.Pages[0].Diagram, err = graph.Diagram(ctx, db, w.SnapshotID)
+	return w, err
 }
 
 // citations reads the citations of snapshot snap's wiki, by page id.

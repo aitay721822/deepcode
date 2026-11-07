@@ -1,5 +1,6 @@
 import { ChevronRightIcon } from 'lucide-react'
 import { useLayoutEffect, useRef } from 'react'
+import { Mermaid } from '../../../components/source/diagram/Mermaid'
 import { Markdown } from '../../../components/source/Markdown'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
 import { headingId } from '../../../lib/url'
@@ -53,6 +54,12 @@ export function WikiArticle({ page, repo, writing, onToc, onCite }: {
             ))}
           </ul>
         </details>
+      )}
+      {page.diagram && (
+        <figure className="mb-9">
+          <Mermaid code={page.diagram} label="Imports between directories" />
+          <figcaption className="-mt-2 text-center font-mono text-[12.5px] text-muted-foreground">Imports between directories, drawn from the code</figcaption>
+        </figure>
       )}
       {page.content ? (
         <Markdown text={page.content} citations={page.citations} repo={repo} onCite={(c) => onCite(c.path, c.startLine, c.endLine)} />

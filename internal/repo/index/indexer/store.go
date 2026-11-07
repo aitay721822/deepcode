@@ -10,6 +10,7 @@ import (
 
 	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/index/chunker"
+	"deepcode/internal/repo/index/graph"
 )
 
 // termsBatch is how many chunks FillTerms splits in one transaction.
@@ -38,7 +39,13 @@ func (ix *Indexer) write(ctx context.Context, snap, prev int64, parsed []parsedF
 		}
 	}
 	for _, p := range parsed {
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO file_contents(hash, content) VALUES (?, ?)`, p.sha, p.content); err != nil {
+		var imports any // NULL: no grammar reads the language
+		if analyzer.HasGrammar(p.lang) {
+			imports = graph.Imports(p.imports)
+		}
+		// A content an older version stored has its imports NULL: they are filled in here.
+		if _, err := tx.ExecContext(ctx, `INSERT INTO file_contents(hash, content, imports) VALUES (?, ?, ?)
+			ON CONFLICT(hash) DO UPDATE SET imports = coalesce(file_contents.imports, excluded.imports)`, p.sha, p.content, imports); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -179,6 +186,9 @@ func (ix *Indexer) prune(ctx context.Context, repoID, current int64) error {
 // files go last, which is how prune tells a snapshot that still holds data.
 func (ix *Indexer) dropSnapshotData(ctx context.Context, id int64) error {
 	if _, err := ix.DB.ExecContext(ctx, `UPDATE snapshots SET status = 'pruned' WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if err := graph.Unlink(ctx, ix.DB, id); err != nil {
 		return err
 	}
 	for _, table := range []string{"chunks", "symbols", "source_files"} {

@@ -253,7 +253,7 @@ func TestEndToEnd(t *testing.T) {
 	// Incremental sync, followed live: only chunks of changed files are embedded again.
 	before := llm.chunkInputs()
 	sha2 := commit(t, remote, map[string]string{
-		"web/app.ts":  strings.Replace(tsSrc, "  start() {", "  stop() {}\n\n  start() {", 1),
+		"web/app.ts":  "import { add } from \"./util\";\n\n" + strings.Replace(tsSrc, "  start() {", "  stop() {}\n\n  start() {", 1),
 		"web/util.ts": "export function add(a: number, b: number) {\n  return a + b;\n}\n",
 	})
 	if code := admin.post(repoPath+"/sync", `{}`, &synced); code != http.StatusAccepted || synced.Job == nil {
@@ -274,6 +274,11 @@ func TestEndToEnd(t *testing.T) {
 	db.QueryRow(`SELECT count(*) FROM symbols WHERE snapshot_id = ? AND path = 'main.go'`, repo.Snapshot.ID).Scan(&mainSymbols)
 	if mainSymbols != 3 {
 		t.Fatalf("unchanged main.go carried %d symbols into the new snapshot, want 3", mainSymbols)
+	}
+	var linked int
+	db.QueryRow(`SELECT count(*) FROM file_edges WHERE snapshot_id = ? AND src = 'web/app.ts' AND dst = 'web/util.ts'`, repo.Snapshot.ID).Scan(&linked)
+	if linked != 1 {
+		t.Fatal("the new snapshot's import of web/util.ts was not linked")
 	}
 
 	// A follow-up stays on its conversation's commit while that is indexed.

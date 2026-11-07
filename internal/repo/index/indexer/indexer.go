@@ -1,5 +1,6 @@
 // Package indexer turns one pinned commit into a READY snapshot: files, symbols,
-// symbol-aware chunks (with FTS5 kept in sync by triggers) and embeddings.
+// symbol-aware chunks (with FTS5 kept in sync by triggers), the import graph
+// and embeddings.
 package indexer
 
 import (
@@ -13,6 +14,7 @@ import (
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/gitserver"
+	"deepcode/internal/repo/index/graph"
 	"deepcode/internal/repo/index/vectorstore"
 )
 
@@ -81,6 +83,12 @@ func (ix *Indexer) Run(ctx context.Context, repoID int64, sha string, progress j
 		if err := ix.parse(ctx, dir, sha, snap, prev.Int64, progress); err != nil {
 			return err
 		}
+		// After every file is in: an import names files of any batch.
+		n, err := graph.Link(ctx, ix.DB, snap)
+		if err != nil {
+			return err
+		}
+		progress.Logf("linked the files by %d imports", n)
 	}
 	model := ""
 	if ix.Embed != nil {

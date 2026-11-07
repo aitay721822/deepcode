@@ -138,7 +138,7 @@ export function RepoPage({ id, params }: { id: number; params: URLSearchParams }
         <AskBox
           placeholder={healthError ? `Questions are unavailable: ${healthError}` : health && !health.chatModel ? 'Set DEEPCODE_CHAT_MODEL to ask questions' : `Ask about ${repo.owner}/${repo.name}`}
           disabled={!ready || !health?.chatModel}
-          onAsk={(q) => navigate(`${base}/search`, { state: { question: q } })}
+          onAsk={(q, deep) => navigate(`${base}/search`, { state: { question: q, deep } })}
         />
       )}
     </Frame>

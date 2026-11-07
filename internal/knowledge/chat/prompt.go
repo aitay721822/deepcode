@@ -22,11 +22,12 @@ func termsRequest(repo, query string) []ai.Message {
 	return []ai.Message{{Role: "system", Content: fmt.Sprintf(termsPrompt, repo)}, {Role: "user", Content: query}}
 }
 
-// prompt assembles the rules, the recent turns, and the question with its sources.
-func prompt(repo, sha string, history []ai.Message, sources, question string) []ai.Message {
+// prompt assembles the rules, the recent turns, and the question with its
+// sources, after a deep answer's background block ("" for none).
+func prompt(repo, sha string, history []ai.Message, background, sources, question string) []ai.Message {
 	msgs := []ai.Message{{Role: "system", Content: fmt.Sprintf(systemPrompt, repo, sha)}}
 	msgs = append(msgs, history...)
-	return append(msgs, ai.Message{Role: "user", Content: "Sources:\n\n" + sources + "Question: " + question})
+	return append(msgs, ai.Message{Role: "user", Content: background + "Sources:\n\n" + sources + "Question: " + question})
 }
 
 // retrievalQuery is what a question is searched with.

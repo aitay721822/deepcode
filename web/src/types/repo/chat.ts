@@ -7,10 +7,14 @@ export type Source = { path: string; symbol: string; startLine: number; endLine:
 /** The conversation an answer belongs to, and the snapshot it is pinned to. */
 export type ConversationRef = Pick<Conversation, 'id' | 'snapshotId' | 'commitSha'>
 
-/** One server-sent event of a streamed answer: conversation, evidence, delta…, done (or error at any point). */
+/**
+ * One server-sent event of a streamed answer: conversation, search (each further round of a deep answer), evidence,
+ * delta…, done (or error at any point).
+ */
 export type ChatEvent =
   | { event: 'conversation'; data: ConversationRef }
-  | { event: 'evidence'; data: { sources: Source[] } }
+  | { event: 'search'; data: { round: number; terms: string } }
+  | { event: 'evidence'; data: { sources: Source[]; rounds: number } }
   | { event: 'delta'; data: string }
   | { event: 'done'; data: Message }
   | { event: 'error'; data: { message: string } }

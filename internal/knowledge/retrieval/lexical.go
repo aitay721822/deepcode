@@ -79,19 +79,27 @@ func globs(column string, patterns ...string) string {
 
 // fts ranks the snapshot's chunks by BM25 (porter-stemmed), weighting symbol
 // names and paths above the words of compound identifiers (terms), those above
-// the rest of the content, and source code above tests and docs.
+// the rest of the content, and source code above tests and docs. Given paths,
+// it ranks only the chunks of those files.
 // ponytail: MATCH spans every snapshot and the join filters afterwards; give
 // chunk_fts a snapshot column once many repositories share one database.
-func (r *Retriever) fts(ctx context.Context, snapshotID int64, query string) ([]int64, error) {
+func (r *Retriever) fts(ctx context.Context, snapshotID int64, query string, paths []string, limit int) ([]int64, error) {
 	m := ftsQuery(query)
 	if m == "" {
 		return nil, nil
 	}
+	in, args := "", []any{m, snapshotID}
+	if len(paths) > 0 {
+		in = " AND c.path IN (" + storage.Placeholders(len(paths)) + ")"
+		for _, p := range paths {
+			args = append(args, p)
+		}
+	}
 	// bm25 is negative (lower is better), so the 0.5 weight moves a chunk down.
 	return scanIDs(r.DB.QueryContext(ctx, `
 		SELECT c.id FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid
-		WHERE chunk_fts MATCH ? AND c.snapshot_id = ?
-		ORDER BY bm25(chunk_fts, 4.0, 6.0, 1.0, 2.0) * `+secondary+` LIMIT ?`, m, snapshotID, ftsLimit))
+		WHERE chunk_fts MATCH ? AND c.snapshot_id = ?`+in+`
+		ORDER BY bm25(chunk_fts, 4.0, 6.0, 1.0, 2.0) * `+secondary+` LIMIT ?`, append(args, limit)...))
 }
 
 // symbolChunks finds chunks holding the definition of any of the first 32

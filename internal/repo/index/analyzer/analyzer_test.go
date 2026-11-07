@@ -83,7 +83,7 @@ module.exports = {};
 	p := NewParser()
 	defer p.Close()
 	for _, c := range cases {
-		got := flat(p.Symbols(c.lang, []byte(c.src)), "")
+		got := flat(p.Parse(c.lang, []byte(c.src)).Symbols, "")
 		if strings.Join(got, "\n") != strings.Join(c.want, "\n") {
 			t.Errorf("%s:\ngot:\n%s\nwant:\n%s", c.lang, strings.Join(got, "\n"), strings.Join(c.want, "\n"))
 		}
@@ -94,9 +94,53 @@ module.exports = {};
 func TestSignature(t *testing.T) {
 	p := NewParser()
 	defer p.Close()
-	syms := p.Symbols("go", []byte("package x\n\nfunc Run(a int) error {\n\treturn nil\n}\n"))
+	syms := p.Parse("go", []byte("package x\n\nfunc Run(a int) error {\n\treturn nil\n}\n")).Symbols
 	if len(syms) != 1 || syms[0].Signature != "func Run(a int) error {" {
 		t.Fatalf("%+v", syms)
+	}
+}
+
+func TestImports(t *testing.T) {
+	cases := []struct{ lang, src, want string }{
+		{"go", "package x\n\nimport \"fmt\"\n\nimport (\n\tstdpath \"path\"\n\t_ `example.com/m/raw`\n\t\"example.com/m/pkg\"\n\t\"fmt\"\n)\n\nfunc f() { _ = \"not/an/import\" }\n",
+			"fmt path example.com/m/raw example.com/m/pkg"},
+		{"typescript", `import a from "./a";
+import type { B } from '../b';
+import "./side-effect.css";
+import x = require("./legacy");
+export { c } from "./c";
+export * from "./d";
+const e = require("./e");
+async function f() { return import("./f"); }
+const g = "./not-an-import";
+// import h from "./h";
+require(dynamicName);
+`, "./a ../b ./side-effect.css ./legacy ./c ./d ./e ./f"},
+		{"tsx", "import { Card } from '@/components/card'\nexport const X = () => <Card />\n", "@/components/card"},
+		{"javascript", "const { join } = require('node:path')\nmodule.exports = require(`./tpl`)\nconst s = `${require('./in-tpl')}`\n", "node:path ./in-tpl"},
+		{"go", "package x\n\nimport \"a\\nb\"\n", ""}, // a line break would split the stored list
+		{"markdown", "import x from './x'\n", ""},
+	}
+	p := NewParser()
+	defer p.Close()
+	for _, c := range cases {
+		if got := strings.Join(p.Parse(c.lang, []byte(c.src)).Imports, " "); got != c.want {
+			t.Errorf("%s:\ngot  %q\nwant %q", c.lang, got, c.want)
+		}
+	}
+	many := "package x\n\nimport (\n" + strings.Repeat("\t\"a\"\n", 2) // a repeat counts once
+	for i := range maxImports + 5 {
+		many += fmt.Sprintf("\t\"m/p%d\"\n", i)
+	}
+	if got := p.Parse("go", []byte(many+")\n")).Imports; len(got) != maxImports || got[0] != "a" {
+		t.Errorf("got %d imports, first %q", len(got), got[0])
+	}
+	long := "package x\n\nimport \"" + strings.Repeat("a", maxSpec+1) + "\"\n"
+	if got := p.Parse("go", []byte(long)).Imports; len(got) != 0 {
+		t.Errorf("an over-long import path was kept: %d", len(got))
+	}
+	if !HasGrammar("tsx") || HasGrammar("markdown") {
+		t.Error("HasGrammar")
 	}
 }
 

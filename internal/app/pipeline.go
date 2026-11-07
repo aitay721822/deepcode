@@ -10,6 +10,7 @@ import (
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/catalog"
+	"deepcode/internal/repo/index/graph"
 	"deepcode/internal/repo/index/indexer"
 )
 
@@ -66,6 +67,20 @@ func (p pipeline) fillTerms(ctx context.Context) {
 	}
 	if err != nil && ctx.Err() == nil {
 		log.Printf("indexer: splitting the identifiers of earlier chunks stopped (the next start goes on): %v", err)
+	}
+}
+
+// linkStale links by their imports the files of the snapshots an older
+// version published, beside the server: until then retrieval, the wiki's
+// planning and its diagram go without them, and a stop leaves the rest to
+// the next start.
+func (p pipeline) linkStale(ctx context.Context) {
+	n, err := graph.LinkStale(ctx, p.indexer.DB)
+	if n > 0 {
+		log.Printf("indexer: linked the files of %d snapshots by their imports", n)
+	}
+	if err != nil && ctx.Err() == nil {
+		log.Printf("indexer: linking the files of earlier snapshots stopped (the next start goes on): %v", err)
 	}
 }
 

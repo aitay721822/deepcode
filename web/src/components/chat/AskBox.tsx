@@ -1,17 +1,22 @@
 import { ArrowUpIcon } from 'lucide-react'
 import { useId, useState } from 'react'
 import { Button } from '../ui/controls/button'
+import { Switch } from '../ui/controls/switch'
 import { Spinner } from '../ui/feedback/spinner'
 import { Textarea } from '../ui/form/textarea'
 
-/** The question box docked at the bottom of the window. */
-export function AskBox({ placeholder, disabled, busy, onAsk }: { placeholder: string; disabled?: boolean; busy?: boolean; onAsk: (q: string) => void }) {
+/** The question box docked at the bottom of the window. deep: search more rounds and read the wiki first (slower). */
+export function AskBox({ placeholder, disabled, busy, defaultDeep = false, onAsk }: {
+  placeholder: string; disabled?: boolean; busy?: boolean; defaultDeep?: boolean; onAsk: (q: string, deep: boolean) => void
+}) {
   const [text, setText] = useState('')
+  const [deep, setDeep] = useState(defaultDeep)
   const hint = useId()
+  const deepHint = useId()
   const submit = () => {
     const q = text.trim()
     if (!q || disabled || busy) return
-    onAsk(q)
+    onAsk(q, deep)
     setText('')
   }
   return (
@@ -34,7 +39,13 @@ export function AskBox({ placeholder, disabled, busy, onAsk }: { placeholder: st
           }} />
         <div className="flex items-center gap-3 px-3 pt-1 pb-2.5">
           <span id={hint} className="eyebrow pl-1 text-muted-foreground max-[520px]:hidden">Enter to send · Shift+Enter for a new line</span>
-          <Button type="submit" size="icon-sm" className="ml-auto rounded-full bg-brand text-brand-foreground hover:bg-brand/90" aria-label="Send"
+          <label className="ml-auto flex cursor-pointer items-center gap-2 font-mono text-[12px] text-muted-foreground has-[[data-state=checked]]:text-foreground"
+            title="Searches up to three rounds and reads the nearest wiki page first: a fuller answer, two to three times slower">
+            <Switch checked={deep} onCheckedChange={setDeep} disabled={disabled} aria-describedby={deepHint} />
+            Deep
+          </label>
+          <span id={deepHint} className="sr-only">Searches up to three rounds and reads the nearest wiki page first: a fuller answer, two to three times slower</span>
+          <Button type="submit" size="icon-sm" className="rounded-full bg-brand text-brand-foreground hover:bg-brand/90" aria-label="Send"
             disabled={disabled || busy || !text.trim()}>
             {busy ? <Spinner /> : <ArrowUpIcon />}
           </Button>

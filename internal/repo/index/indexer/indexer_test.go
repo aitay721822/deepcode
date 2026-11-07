@@ -102,9 +102,9 @@ func TestParseFile(t *testing.T) {
 			t.Errorf("%s: ok %v, %d lines, content %q", name, ok, got.lines, got.content)
 		}
 	}
-	got, _ := parseFile(p, f, []byte("package a\r\n\r\nfunc F() {}\r\n"))
-	if len(got.symbols) != 1 || got.symbols[0].Name != "F" || len(got.chunks) == 0 {
-		t.Fatalf("symbols %+v, %d chunks", got.symbols, len(got.chunks))
+	got, _ := parseFile(p, f, []byte("package a\r\n\r\nimport \"x/y\"\r\n\r\nfunc F() {}\r\n"))
+	if len(got.symbols) != 1 || got.symbols[0].Name != "F" || len(got.chunks) == 0 || !reflect.DeepEqual(got.imports, []string{"x/y"}) {
+		t.Fatalf("symbols %+v, imports %q, %d chunks", got.symbols, got.imports, len(got.chunks))
 	}
 }
 
@@ -290,6 +290,48 @@ func TestTerms(t *testing.T) {
 	db.QueryRow(`SELECT terms FROM chunks WHERE id = 1`).Scan(&stale)
 	if stale.Valid {
 		t.Fatalf("terms worked out from other content were written: %q", stale.String)
+	}
+}
+
+// TestImports: a parsed file's imports are stored with its content, NULL in
+// a language no grammar reads, and fill in those of a content an older
+// version stored; pruning a snapshot drops its edges.
+func TestImports(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "deepcode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r');
+		INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (1, 1, 'a');
+		INSERT INTO file_contents(hash, content) VALUES ('old', 'import "./b"')`); err != nil {
+		t.Fatal(err)
+	}
+	ix := &Indexer{DB: db}
+	files := []parsedFile{
+		{file: file{path: "a.ts", sha: "old", lang: "typescript"}, content: `import "./b"`, imports: []string{"./b"}},
+		{file: file{path: "b.ts", sha: "b", lang: "typescript"}, content: "export {}"},
+		{file: file{path: "c.md", sha: "c", lang: "markdown"}, content: "# c"},
+	}
+	if err := ix.write(ctx, 1, 0, files, nil); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	db.QueryRow(`SELECT group_concat(hash || '=' || coalesce(imports, 'NULL'), ' ') FROM (SELECT * FROM file_contents ORDER BY hash)`).Scan(&got)
+	if got != "b= c=NULL old=./b" {
+		t.Fatalf("stored imports: %q", got)
+	}
+	if _, err := db.Exec(`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'a.ts', 'b.ts')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ix.dropSnapshotData(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	var edges int
+	db.QueryRow(`SELECT count(*) FROM file_edges`).Scan(&edges)
+	if edges != 0 {
+		t.Fatalf("%d edges left after pruning", edges)
 	}
 }
 

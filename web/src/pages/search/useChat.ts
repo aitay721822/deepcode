@@ -10,6 +10,7 @@ export type Turn = {
   answer: string
   citations: Citation[]
   sources: Source[]
+  rounds: string[] // what a deep answer searched for again, round by round
   status: 'searching' | 'answering' | 'done' | 'error' | 'interrupted' // interrupted: the stream closed before done or error
   error?: string
 }
@@ -18,7 +19,7 @@ function toTurns(messages: Message[]): Turn[] {
   const turns: Turn[] = []
   for (const m of messages) {
     if (m.role === 'user') {
-      turns.push({ question: m.content, answer: '', citations: [], sources: [], status: 'error', error: 'This question has no stored answer.' })
+      turns.push({ question: m.content, answer: '', citations: [], sources: [], rounds: [], status: 'error', error: 'This question has no stored answer.' })
     } else if (turns.length) {
       Object.assign(turns[turns.length - 1], { answer: m.content, citations: m.citations, status: 'done', error: undefined })
     }
@@ -64,10 +65,10 @@ export function useChat(repoId: number, conversationId?: string) {
     setSelected(c)
   }, [])
 
-  async function ask(repo: Repo, question: string) {
+  async function ask(repo: Repo, question: string, deep: boolean) {
     pinned.current = false
     setLoadError('') // a new question: the stored conversation's load error no longer applies
-    setTurns((ts) => [...ts, { question, answer: '', citations: [], sources: [], status: 'searching' }])
+    setTurns((ts) => [...ts, { question, answer: '', citations: [], sources: [], rounds: [], status: 'searching' }])
     const ctl = new AbortController()
     abort.current = ctl
     // The answer re-renders as markdown, so streamed text lands at most once per frame, not per token.
@@ -81,10 +82,12 @@ export function useChat(repoId: number, conversationId?: string) {
       if (more) update((t) => ({ ...t, status: 'answering', answer: t.answer + more }))
     }
     try {
-      await streamChat({ repoId: repo.id, conversationId: conv?.id ?? 0, question }, ({ event, data }) => {
+      await streamChat({ repoId: repo.id, conversationId: conv?.id ?? 0, question, deep }, ({ event, data }) => {
         if (event === 'conversation') {
           setConv(data)
           if (String(data.id) !== conversationId) navigate(`/repos/${repo.id}/search/${data.id}`, { replace: true })
+        } else if (event === 'search') {
+          update((t) => ({ ...t, rounds: [...t.rounds, data.terms] }))
         } else if (event === 'evidence') {
           update((t) => ({ ...t, sources: data.sources }))
           select(data.sources[0])

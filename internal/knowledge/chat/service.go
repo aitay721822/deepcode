@@ -59,7 +59,8 @@ type Request struct {
 	RepoID         int64  `json:"repoId"`
 	ConversationID int64  `json:"conversationId"` // 0 starts one; else one of UserID's
 	Question       string `json:"question"`
-	UserID         int64  `json:"-"` // who asks
+	Deep           bool   `json:"deep"` // search more rounds and read a wiki page first (deep.go)
+	UserID         int64  `json:"-"`    // who asks
 }
 
 // Emit sends one server-sent event.
@@ -73,8 +74,9 @@ const (
 	noEvidence    = "無法從目前程式碼確認 — no indexed code matched this question."
 )
 
-// Ask runs one question end to end, emitting: conversation, evidence, delta*,
-// then done (the stored, citation-checked message) or error.
+// Ask runs one question end to end, emitting: conversation, search* (a deep
+// answer's further rounds), evidence, delta*, then done (the stored,
+// citation-checked message) or error.
 func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	q := strings.TrimSpace(req.Question)
 	if q == "" || utf8.RuneCountInString(q) > maxQuestion {
@@ -108,17 +110,29 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	if _, err := s.addMessage(ctx, conv.id, "user", q, nil); err != nil {
 		return err
 	}
-	res, err := s.search(ctx, conv.snap.ID, r.Owner+"/"+r.Name, retrievalQuery(history, q))
+	repo, asked := r.Owner+"/"+r.Name, retrievalQuery(history, q)
+	res, err := s.search(ctx, conv.snap.ID, repo, asked)
 	if err != nil {
 		return err
 	}
-	sources, used := evidence.Format(res.Hits, evidenceChars)
-	emit("evidence", map[string]any{"sources": sourceList(used), "fts": res.FTS, "vector": res.Vector, "symbol": res.Symbol})
+	budget, background, rounds := evidenceChars, "", 1
+	if req.Deep {
+		if res, rounds, err = s.deepen(ctx, conv.snap.ID, repo, asked, res, emit); err != nil {
+			return err
+		}
+		if background, err = s.background(ctx, req.RepoID, conv.snap.ID, asked); err != nil {
+			return err
+		}
+		budget = deepEvidenceChars
+	}
+	sources, used := evidence.Format(res.Hits, budget)
+	emit("evidence", map[string]any{"sources": sourceList(used), "fts": res.FTS, "vector": res.Vector, "symbol": res.Symbol,
+		"graph": res.Graph, "rounds": rounds})
 
 	answer := noEvidence
 	if len(used) == 0 {
 		emit("delta", answer)
-	} else if answer, err = s.Chat.Stream(ctx, prompt(r.Owner+"/"+r.Name, conv.snap.CommitSHA, history, sources, q), func(d string) { emit("delta", d) }); err != nil {
+	} else if answer, err = s.Chat.Stream(ctx, prompt(repo, conv.snap.CommitSHA, history, background, sources, q), func(d string) { emit("delta", d) }); err != nil {
 		return fmt.Errorf("%w: %w", errModel, err)
 	}
 	content, cites := evidence.LinkCitations(ai.StripThinking(answer), used, func(c evidence.Citation) string {

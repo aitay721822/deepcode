@@ -1,5 +1,5 @@
 import { ArrowLeftIcon } from 'lucide-react'
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AskBox } from '../../components/chat/AskBox'
 import { SearchSteps } from '../../components/chat/SearchSteps'
 import { RepoNotice } from '../../components/repo/RepoNotice'
@@ -17,6 +17,8 @@ export function SearchPage({ id, conversationId }: { id: number; conversationId?
   const { conv, turns, selected, loadError, busy, loading, ask, select } = useChat(id, conversationId)
   const started = useRef(false)
   const aside = useRef<HTMLElement>(null)
+  // Read before the hand-over below clears it: a question asked deep keeps the follow-ups deep.
+  const [handedDeep] = useState(() => (history.state as { deep?: boolean } | null)?.deep === true)
 
   // On one column the cited file sits below every turn: bring it into view. Stable, or every memoised turn would draw again.
   const cite = useCallback((c: Citation) => {
@@ -29,11 +31,11 @@ export function SearchPage({ id, conversationId }: { id: number; conversationId?
   // A question handed over from the repository page.
   useEffect(() => {
     if (!repo || conversationId || started.current) return
-    const question = (history.state as { question?: string } | null)?.question
+    const { question, deep } = (history.state as { question?: string; deep?: boolean } | null) ?? {}
     if (!question) return navigate(`/repos/${repo.id}`, { replace: true })
     history.replaceState(null, '') // asked now: a reload must not ask it again
     started.current = true
-    ask(repo, question)
+    ask(repo, question, deep === true)
   }, [repo])
 
   const last = turns.at(-1)
@@ -49,7 +51,7 @@ export function SearchPage({ id, conversationId }: { id: number; conversationId?
 
   // The first question names the tab, which would otherwise read the same as the repository's own.
   const title = turns[0] ? `${turns[0].question} · ${repo.owner}/${repo.name}` : `${repo.owner}/${repo.name}`
-  const side = last?.status === 'searching' ? <SearchSteps sources={last.sources} /> : selected && conv ? <CitedFile repo={repo} conv={conv} citation={selected} /> : null
+  const side = last?.status === 'searching' ? <SearchSteps sources={last.sources} rounds={last.rounds} /> : selected && conv ? <CitedFile repo={repo} conv={conv} citation={selected} /> : null
   return (
     <Frame title={title}>
       <main tabIndex={-1} className="grid gap-4 px-4 pt-7 pb-44 outline-none min-[900px]:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] min-[900px]:px-6 print:block">
@@ -69,7 +71,7 @@ export function SearchPage({ id, conversationId }: { id: number; conversationId?
           <aside ref={aside} className="h-[70dvh] min-w-0 print:hidden scroll-mt-20 min-[900px]:sticky min-[900px]:top-[calc(4rem+28px)] min-[900px]:h-[max(16rem,calc(100dvh-4rem-180px))]">{side}</aside>
         )}
       </main>
-      {repo.permissions.includes('repo.chat') && <AskBox placeholder="Ask a follow-up question" busy={busy} disabled={loading} onAsk={(q) => ask(repo, q)} />}
+      {repo.permissions.includes('repo.chat') && <AskBox placeholder="Ask a follow-up question" busy={busy} disabled={loading} defaultDeep={handedDeep} onAsk={(q, deep) => ask(repo, q, deep)} />}
     </Frame>
   )
 }

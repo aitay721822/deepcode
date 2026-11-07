@@ -71,10 +71,10 @@ Ctrl-C（或 SIGTERM）停止服務：進行中的請求最多再等 10 秒，�
 1. 以 `admin` 登入。帳號選單的 **Admin console** 管理使用者、角色與 Git 伺服器，並查看背景工作。要讓其他人自己註冊帳號，在 **Users** 打開 **Open sign-up**。
 2. 首頁 **Add** 接受 `owner/repo`（第一個 Git 伺服器，預設為 GitHub）、任一已設定伺服器上的網址（例如 `https://gitlab.example.com/group/sub/project`），或選擇伺服器後輸入 `group/sub/project`。
 3. Repository 頁顯示索引進度（Fetch → Parse → Embed → Publish），接著生成 Wiki（Plan → Write），頁面寫完一頁出現一頁。後台 **Jobs** 可即時看每個工作的輸出，包括模型正在寫的 Wiki 內容。
-4. 左側 **Wiki** 列出頁面，**Files** 是檔案樹與 Symbol 搜尋（只有 Go、JavaScript、TypeScript / TSX 建立 Symbol；其他語言以純文字切塊，仍可全文與向量檢索）。文中的來源標籤會開啟檔案並標出行號範圍；連往 GitHub 或 GitLab 的連結都綁定 Commit SHA。
-5. 在底部輸入問題進入問答頁：左側串流答案與來源，右側顯示被引用的程式碼。可以繼續追問，`/repos/{id}/search/{conversation}` 能重新開啟對話（只有發問者看得到）。問題裡的字詞與名稱都對不上程式碼時（例如全中文的問題），會先請模型把問題轉成英文搜尋詞與可能的識別字再找一次，多一次模型呼叫；仍無證據時回答「無法從目前程式碼確認」。每位使用者同時最多 2 個回答在生成（不論開了幾個分頁），再問會請他等其中一個寫完。
+4. 左側 **Wiki** 列出頁面，**Files** 是檔案樹與 Symbol 搜尋（只有 Go、JavaScript、TypeScript / TSX 建立 Symbol 與 import 關係；其他語言以純文字切塊，仍可全文與向量檢索）。文中的來源標籤會開啟檔案並標出行號範圍；連往 GitHub 或 GitLab 的連結都綁定 Commit SHA。概覽頁附一張目錄之間的 import 關係圖，由索引的 import 直接畫出、不經模型（測試、範例與文件不算；最多 14 個目錄、24 條箭頭，目錄取到最多三層、節點仍放得下的深度）；說明架構、分層或資料流的頁面，模型會附一張 Mermaid 圖。Mermaid 第一次需要畫圖時才載入；語法錯誤、或含有會隱藏文字的字元時，顯示原文。
+5. 在底部輸入問題進入問答頁：左側串流答案與來源，右側顯示被引用的程式碼。可以繼續追問，`/repos/{id}/search/{conversation}` 能重新開啟對話（只有發問者看得到）。問題裡的字詞與名稱都對不上程式碼時（例如全中文的問題），會先請模型把問題轉成英文搜尋詞與可能的識別字再找一次，多一次模型呼叫；仍無證據時回答「無法從目前程式碼確認」。每位使用者同時最多 2 個回答在生成（不論開了幾個分頁），再問會請他等其中一個寫完。提問框的 **Deep** 開關：檢索後讓模型看已找到的來源（檔案、行號、Symbol），說出還缺的程式碼要搜什麼，最多再搜 2 輪（回答 DONE、或找不到新的程式碼就停）；證據上限從 40000 提高到 64000 字元，並把同一 Repository 的 Wiki 中與問題共用字詞最多的一頁（標題中的字算三倍；中文以相鄰兩字比對；每頁都有的字不算）當背景放進提示詞，只供參考、不能引用。回答約慢 2～3 倍，檢索步驟會顯示每一輪搜尋的字詞。
 6. **Sync** 取得最新 Commit（設定 `DEEPCODE_SYNC_EVERY` 後也會定期自動檢查）：未變更的檔案沿用 Symbol 與 Chunk，未變更的 Chunk 沿用向量，完成後才切換版本。保留最新兩個版本；更舊的版本分批刪除索引資料（不會長時間佔住資料庫的寫入，中斷時下次清理接續），原本綁在上面的對話改用目前版本。
-7. 新版本的 Wiki 沿用上一份完成的同語言 Wiki 的頁面：引用的檔案、或以頁面標題與焦點重新檢索到的檔案（概覽頁另含 README）有新增、修改或刪除時才重寫那一頁，其餘頁面連同引用沿用，連結改指向新 Commit。重寫時已檢索不到任何程式碼的頁面（例如引用的檔案都刪了）改為說明無法從目前程式碼確認。變更的檔案（新增、修改、刪除合計）超過新版本檔案數的一半、或 `.devin/wiki.json` 有變更（含新增、刪除）時重新規劃。判斷偏保守：有 Embedding 的小 Repository 幾乎每頁都會檢索到變更的檔案而重寫；改動很小時新增的子系統要等下次重新規劃才有自己的頁面。
+7. 新版本的 Wiki 沿用上一份完成的同語言 Wiki 的頁面：引用的檔案、或以頁面標題與焦點重新檢索到的檔案（概覽頁另含 README）有新增、修改或刪除，或 import 了宣告有變的檔案時，才重寫那一頁，其餘頁面連同引用沿用，連結改指向新 Commit。「宣告有變」以 Symbol 的名稱、種類與第一行比較，只改函式內容不算，所以修改被大量引用的工具函式內部時不會牽動其他頁面；struct 新增欄位、Go interface 新增方法看不出來。重寫時已檢索不到任何程式碼的頁面（例如引用的檔案都刪了）改為說明無法從目前程式碼確認。變更的檔案（新增、修改、刪除合計）超過新版本檔案數的一半、`.devin/wiki.json` 有變更（含新增、刪除）、或新增了兩層深的目錄且其他目錄的程式碼 import 它（新的子系統）時重新規劃。判斷偏保守：有 Embedding 的小 Repository 幾乎每頁都會檢索到變更的檔案而重寫。
 8. Repository 根目錄的 `.devin/wiki.json`（與 DeepWiki 同格式）可以引導 Wiki：`repo_notes` 的 `content` 在規劃與撰寫時提供給模型；列出 `pages`（`title`、`purpose`、`page_notes`）時直接寫這些頁面（最多 30 頁），不再請模型規劃，`purpose` 與 `page_notes` 作為該頁的檢索焦點。頁面是單層清單，依檔案中的順序，`parent` 不使用。JSON 格式錯誤時整份忽略，並在工作輸出說明；檔案超過 `DEEPCODE_MAX_FILE_KB`、或有一行超過 4000 位元組（例如壓成一行的 JSON）時，和其他這類檔案一樣不會被索引，也就不會生效。
 
    ```json
@@ -163,9 +163,9 @@ worker 寫進度到 jobs、輸出到 job_logs ──► job.updated / job.output
 | `GET` | `/api/repos/{id}/files` | 檔案清單 |
 | `GET` | `/api/repos/{id}/files/{path}` | 檔案內容 |
 | `GET` | `/api/repos/{id}/symbols?q=` | Symbol 搜尋 |
-| `GET` | `/api/repos/{id}/search?q=` | 混合檢索（FTS5 + Vector + Symbol → RRF）。設了 Embedding 模型時，每個沒查過的查詢呼叫一次 Embedding（查詢向量最多快取一小時），不受問答的每人同時上限限制；Embedding 的呼叫速率用 `DEEPCODE_LLM_RPM` 限制（與 Chat 分開計算） |
-| `GET` | `/api/repos/{id}/wiki` | Wiki 頁面與引用 |
-| `POST` | `/api/chat/stream` | SSE 問答（`repo.chat`），body `{"repoId", "conversationId", "question"}`；事件為 `conversation`、`evidence`、`delta`、`done`、`error` |
+| `GET` | `/api/repos/{id}/search?q=` | 混合檢索（FTS5 + Vector + Symbol → RRF；前 5 名所在檔案 import 的檔案（最多 40 個）再以全文檢索取最多 10 個 Chunk，補進最後 2 個名額，不取代前面的結果；回應的 `graph` 是補進結果的數量）。設了 Embedding 模型時，每個沒查過的查詢呼叫一次 Embedding（查詢向量最多快取一小時），不受問答的每人同時上限限制；Embedding 的呼叫速率用 `DEEPCODE_LLM_RPM` 限制（與 Chat 分開計算） |
+| `GET` | `/api/repos/{id}/wiki` | Wiki 頁面與引用；概覽頁另有 `diagram`（import 關係圖的 Mermaid 原始碼，沒有 import 關係時省略） |
+| `POST` | `/api/chat/stream` | SSE 問答（`repo.chat`），body `{"repoId", "conversationId", "question", "deep"}`；事件為 `conversation`、`search`（Deep 模式每多一輪檢索一次）、`evidence`、`delta`、`done`、`error` |
 | `GET` | `/api/conversations/{id}` | 自己的對話紀錄 |
 | `GET` | `/api/jobs/{id}` | 工作進度 |
 | `GET` `POST` `PATCH` `DELETE` | `/api/admin/users[/{id}]` | 使用者（`users.manage`） |
@@ -224,7 +224,8 @@ npm --prefix web run typecheck
 - 不執行 Repository 內的任何程式；檔案數、單檔大小、總量、工作時間與輸出 Token 都有上限。
 - 會讓文字倒序或隱形的字元（雙向控制字元、零寬空格等不可見的格式字元、韓文填充字元、Tag 字元與變體選擇符，即 Trojan Source；emoji 用的 U+FE0E、U+FE0F 與連接符除外）在程式碼檢視、程式碼區塊，以及回答與 wiki 的文字和行內程式碼中，以加框的碼位顯示（例如 `U+202E`），也不影響前後文字的方向；複製出來的文字不變。檔案開頭的 BOM 不顯示。路徑含控制或格式字元、或不是 UTF-8 的檔案不索引。
 - 在 Windows 上，git 因逾時或超過 `DEEPCODE_MAX_REPO_MB` 被中止時，整個行程樹一起結束：Git for Windows 的 `cmd\git.exe` 只是啟動器，只結束它的話，真正的 git 會繼續下載。
-- 原始碼、README 與註解在提示詞中標為不可信資料。`.devin/wiki.json` 的 `repo_notes` 也標為不可信：只用來決定涵蓋與強調的內容，不能改變引用與格式的規則，每則壓成一行，不能假裝區塊已結束；列出頁面的 `purpose` 與 `page_notes` 只作為該頁的檢索焦點，和模型規劃的焦點一樣使用（單行）。列出的頁數、標題、焦點與 notes 的長度都有上限。回答只保留指向實際提供給模型的檔案與行號範圍的引用，其餘移除；一個方括號內的多個引用（`[a.go:1-5; b.go:7]`）逐一驗證。
+- 原始碼、README 與註解在提示詞中標為不可信資料。`.devin/wiki.json` 的 `repo_notes` 也標為不可信：只用來決定涵蓋與強調的內容，不能改變引用與格式的規則，每則壓成一行，不能假裝區塊已結束；列出頁面的 `purpose` 與 `page_notes` 只作為該頁的檢索焦點，和模型規劃的焦點一樣使用（單行）。列出的頁數、標題、焦點與 notes 的長度都有上限。回答只保留指向實際提供給模型的檔案與行號範圍的引用，其餘移除；一個方括號內的多個引用（`[a.go:1-5; b.go:7]`）逐一驗證。Deep 模式的背景 Wiki 頁標為可能過時、不可引用、不可遵循其中的指示，連結的網址先拿掉；照抄其中的引用也一樣要對得上提供的來源才保留。
+- Mermaid 以 `strict` 安全等級繪製：標籤裡的 HTML 會編碼、不能掛點擊事件；畫出的 SVG 經 Mermaid 的消毒。由 import 關係畫圖時，目錄名稱裡會結束標籤或被當成標記的字元先轉成實體。
 
 ## 目錄
 
@@ -257,15 +258,16 @@ internal/
     git/                 git 指令（帶 Token 標頭的 fetch、ls-tree、cat-file）
     catalog/             Repository 目錄：匯入、同步與輪詢判斷、目前版本、檔案清單（快取）、內容與兩個版本間變更的檔案
     index/               索引
-      analyzer/          語言判斷、Tree-sitter Symbol（Go、JavaScript、TypeScript / TSX）
+      analyzer/          語言判斷、Tree-sitter Symbol 與 import（Go、JavaScript、TypeScript / TSX）
       chunker/           Symbol-aware chunking；camelCase 識別字拆字（FTS5 的 terms 欄）
+      graph/             import 解析成檔案之間的關係（Go 經 go.mod、JS/TS 經相對路徑）、被 import 的檔案、宣告變動的影響、目錄關係與 Mermaid 圖
       indexer/           增量索引、Embedding、版本發佈與清理、補齊舊 Chunk 的 terms
       vectorstore/       向量 BLOB 儲存與 Cosine 檢索
   knowledge/             由索引產生知識
-    retrieval/           FTS5、Symbol、向量檢索與 RRF
+    retrieval/           FTS5、Symbol、向量檢索與 RRF，再補上最佳結果 import 的程式碼
     evidence/            Evidence Pack 與引用驗證
-    chat/                問答與對話
-    wiki/                Wiki 規劃（含 .devin/wiki.json）、沿用上一版未受影響的頁面、撰寫與讀取
+    chat/                問答與對話、Deep 模式（多輪檢索與背景 Wiki 頁）
+    wiki/                Wiki 規劃（含 .devin/wiki.json 與目錄之間的 import）、沿用上一版未受影響的頁面、撰寫與讀取
 test/                    e2e、資料夾與檔案長度規則、依賴方向檢查
 web/public/              theme.js：第一次繪製前套用主題（CSP 不執行 inline 腳本）
 web/src/                 React + TypeScript + Vite；Tailwind CSS v4 + shadcn/ui（Radix），動畫用 motion；index.css 放主題 token（紙與墨兩套配色，訊號橘標示連結、引用與進行中）；字型隨程式打包（Fontsource 套件：Newsreader、Schibsted Grotesk、IBM Plex Mono），不向外部請求
@@ -277,6 +279,7 @@ web/src/                 React + TypeScript + Vite；Tailwind CSS v4 + shadcn/ui
     ui/                  shadcn/ui 元件（加上 motion）：form、controls、overlay、display、feedback
     layout/              頁首、主題切換、帳號選單、變更密碼、置中訊息
     source/              Markdown、程式碼檢視、引用標籤、串流中先行連結引用（citations.ts，與伺服器同一套語法）；唯一的元件 CSS（語法高亮配色與 Markdown 排版）
+      diagram/           Mermaid 圖（第一次用到才載入，顏色取自主題 token，切換主題時重畫）
     repo/                工作進度與階段判斷（jobStage.ts）、Repository 無法開啟時的提示（RepoNotice）、來源連結格式
       provider/          Git 伺服器的名稱與標誌
     chat/                提問框、檢索步驟
@@ -298,7 +301,8 @@ web/src/                 React + TypeScript + Vite；Tailwind CSS v4 + shadcn/ui
 - **取得原始碼**以 shallow bare fetch 抓固定 SHA，再用 `git cat-file --batch` 讀取，不建立工作目錄。快取只保留正在索引的 Commit：換成別的 Commit 時整份重抓（depth 1 本來就會下載整棵樹，增量比對靠資料庫裡的 blob SHA），同步再多次也不會累積舊版本。下載時每 0.25 秒量一次快取大小、結束時再量一次，超過 `DEEPCODE_MAX_REPO_MB` 就中止並刪掉這份快取；抓取時關掉 Git 的自動維護，免得重新打包被算成下載量。每個 Git 指令的輸出最多保留 64 MB：上百萬個空檔案的樹只要下載幾 MB，`ls-tree` 卻要列出上百 MB，超過就讓該次索引失敗。
 - **工作恢復**：資料庫只由一個程序使用，啟動時把 `running` 的工作重新排入（已用完重試次數的改為 `failed`），沒有 lease；多程序共用資料庫時才需要。
 - **向量儲存**（`vectorstore.SQLite`）的 `Upsert` 一次寫多筆；沒有 `Delete`，向量隨 Chunk 以外鍵 cascade 刪除。沒有熱門向量的記憶體快取，量測到掃描成為瓶頸再加。
-- **migrations** 放在 `internal/platform/storage/migrations/` 並編入執行檔；`002_fts_porter.sql` 把 FTS5 改為 porter 詞幹，並在同一個 transaction 內重建既有資料的索引。`003_access.sql`（帳號、角色、session）與 `004_git_servers_job_logs.sql`（Git 伺服器、工作輸出）讓既有資料庫升級：原有 Repository 歸到 GitHub 伺服器，原有對話歸給第一位管理員。`005_signup.sql` 新增註冊開關（預設關閉）。之後的 migration 依業務放進子資料夾（每個資料夾最多 5 個檔案），例如 `knowledge/006_wiki_language.sql`：仍記錄為 `migrations/<檔名>`、依檔名的編號排序，所以檔案搬進子資料夾不會重跑；兩個同名檔案會讓啟動失敗。`006_wiki_language.sql` 記錄每個版本的 Wiki 以哪種語言撰寫：新版本只沿用同語言 Wiki 的頁面，續寫時語言不同就重新規劃（之前的 Wiki 沒有記錄語言，不會被沿用，未完成的會重新規劃）。`repo/007_chunk_terms.sql` 為 Chunk 加上 camelCase 識別字拆開後的單字欄（`terms`），並以它重建 FTS5 索引；SQL 拆不了 camelCase，所以升級前的 Chunk 在升級後第一次啟動時於背景分批補上（中斷時下次啟動接續，補完後 log 寫出筆數），補完之前照舊只以原文比對。
-- **Wiki 增量更新**以頁面的引用加上重新檢索的結果判斷受影響的頁面，沒有呼叫圖；寧可多重寫，也不留下與程式碼不符的頁面。
+- **migrations** 放在 `internal/platform/storage/migrations/` 並編入執行檔；`002_fts_porter.sql` 把 FTS5 改為 porter 詞幹，並在同一個 transaction 內重建既有資料的索引。`003_access.sql`（帳號、角色、session）與 `004_git_servers_job_logs.sql`（Git 伺服器、工作輸出）讓既有資料庫升級：原有 Repository 歸到 GitHub 伺服器，原有對話歸給第一位管理員。`005_signup.sql` 新增註冊開關（預設關閉）。之後的 migration 依業務放進子資料夾（每個資料夾最多 5 個檔案），例如 `knowledge/006_wiki_language.sql`：仍記錄為 `migrations/<檔名>`、依檔名的編號排序，所以檔案搬進子資料夾不會重跑；兩個同名檔案會讓啟動失敗。`006_wiki_language.sql` 記錄每個版本的 Wiki 以哪種語言撰寫：新版本只沿用同語言 Wiki 的頁面，續寫時語言不同就重新規劃（之前的 Wiki 沒有記錄語言，不會被沿用，未完成的會重新規劃）。`repo/007_chunk_terms.sql` 為 Chunk 加上 camelCase 識別字拆開後的單字欄（`terms`），並以它重建 FTS5 索引；SQL 拆不了 camelCase，所以升級前的 Chunk 在升級後第一次啟動時於背景分批補上（中斷時下次啟動接續，補完後 log 寫出筆數），補完之前照舊只以原文比對。`repo/008_import_graph.sql` 在檔案內容旁存放它 import 的模組（`file_contents.imports`），並新增 `file_edges`（每個版本 import 解析後的檔案關係）；索引時讀取新檔案的 import，升級前的檔案在下次連結該版本時從資料庫裡的內容讀取，已發佈的版本在升級後第一次啟動時於背景連結（log 寫出版本數）。
+- **Wiki 增量更新**以頁面的引用、重新檢索的結果，以及 import 了宣告有變的檔案判斷受影響的頁面；import 關係只到檔案層級，沒有呼叫圖。寧可多重寫，也不留下與程式碼不符的頁面。
+- **import 解析**只認 Go 的 go.mod 模組路徑與 JS/TS 的相對路徑（含省略副檔名、`index.*`、`.js` 對應 `.ts`）；套件名稱、tsconfig 的 `paths`（如 `@/components`）與 go.work 不解析。
 - **帳號與 Git 伺服器**是計畫之外新增的：計畫只匯入公開 GitHub、沒有登入機制。
-- 沒有 Makefile；DeepWiki 的 Deep Research 模式屬於研究 Agent，不在 V1 範圍。
+- 沒有 Makefile。問答的 Deep 模式只多做最多 2 輪由模型決定字詞的檢索，不呼叫工具，也不是 DeepWiki 的 Deep Research Agent。

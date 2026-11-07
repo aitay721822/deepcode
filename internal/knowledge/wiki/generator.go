@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"slices"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/catalog"
+	"deepcode/internal/repo/index/graph"
 )
 
 type Generator struct {
@@ -218,10 +220,10 @@ func (g *Generator) store(ctx context.Context, snap int64, pages []newPage) erro
 // in the same language: the same pages, each keeping its text unless the
 // change may touch it, so only the touched pages are written again. It
 // reports false, storing nothing, when there is no such wiki, when
-// .devin/wiki.json changed (it may list other pages) or when more than half
-// of the files changed, which calls for a new plan.
-// ponytail: a subsystem added in a small change gets no page of its own until
-// the next new plan; compare the layouts if that bites.
+// .devin/wiki.json changed (it may list other pages), when more than half of
+// the files changed, or when the change adds a directory, two levels deep as
+// planning sees them, that code outside it imports: a new subsystem, which
+// only a new plan gives a page.
 func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, progress jobs.Progress) (bool, error) {
 	var base int64
 	var baseSHA string
@@ -242,6 +244,22 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, p
 		progress.Logf("%d of %d files changed since %.7s, or %s did: planning anew", len(changed), files, baseSHA, steeringFile)
 		return false, nil
 	}
+	added, err := graph.NewDirs(ctx, g.DB, base, snap, 2)
+	if err != nil {
+		return false, err
+	}
+	if len(added) > 0 {
+		progress.Logf("since %.7s the code imports the new %s: planning anew", baseSHA, strings.Join(added, ", "))
+		return false, nil
+	}
+	// A page may also read differently when a file it cites imports a
+	// declaration the change altered.
+	ripple, err := graph.Impact(ctx, g.DB, base, snap, changed)
+	if err != nil {
+		return false, err
+	}
+	affected := maps.Clone(changed)
+	maps.Copy(affected, ripple)
 	old, err := g.pages(ctx, base)
 	if err != nil {
 		return false, err
@@ -254,7 +272,7 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, p
 	kept := 0
 	for i, p := range old {
 		pages[i] = newPage{title: p.title, query: p.query}
-		touched, err := g.touched(ctx, snap, p, cites[p.id], changed)
+		touched, err := g.touched(ctx, snap, p, cites[p.id], affected)
 		if err != nil {
 			return false, err
 		}
@@ -269,17 +287,18 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, p
 	if err := g.store(ctx, snap, pages); err != nil {
 		return false, err
 	}
-	progress.Logf("carried %d of %d pages over from %.7s, where %d files differ; writing the rest", kept, len(pages), baseSHA, len(changed))
+	progress.Logf("carried %d of %d pages over from %.7s, where %d files differ and %d more import a changed declaration; writing the rest",
+		kept, len(pages), baseSHA, len(changed), len(ripple))
 	return true, nil
 }
 
 // touched reports whether the change may make page p read differently: a
 // file it cites, or one that its search now finds, was added, edited or
-// removed.
-func (g *Generator) touched(ctx context.Context, snap int64, p page, cites []evidence.Citation, changed map[string]bool) (bool, error) {
-	if slices.ContainsFunc(cites, func(c evidence.Citation) bool { return changed[c.Path] }) {
+// removed, or imports what was (affected holds them all).
+func (g *Generator) touched(ctx context.Context, snap int64, p page, cites []evidence.Citation, affected map[string]bool) (bool, error) {
+	if slices.ContainsFunc(cites, func(c evidence.Citation) bool { return affected[c.Path] }) {
 		return true, nil
 	}
 	hits, err := g.sources(ctx, snap, p)
-	return slices.ContainsFunc(hits, func(h retrieval.Hit) bool { return changed[h.Path] }), err
+	return slices.ContainsFunc(hits, func(h retrieval.Hit) bool { return affected[h.Path] }), err
 }

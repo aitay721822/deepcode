@@ -31,6 +31,7 @@ type parsedFile struct {
 	content string
 	lines   int
 	symbols []analyzer.Symbol
+	imports []string
 	chunks  []chunker.Chunk
 }
 
@@ -137,7 +138,7 @@ func (ix *Indexer) indexable(entries []git.TreeEntry) ([]file, error) {
 func hidden(r rune) bool { return r == utf8.RuneError || unicode.In(r, unicode.Cc, unicode.Cf) }
 
 // parseFile normalises a blob to UTF-8 text with LF endings and extracts its
-// symbols and chunks; binary and minified files are rejected.
+// symbols, imports and chunks; binary and minified files are rejected.
 func parseFile(p *analyzer.Parser, f file, raw []byte) (parsedFile, bool) {
 	if bytes.IndexByte(raw, 0) >= 0 {
 		return parsedFile{}, false // binary, wherever the NUL is: files are at most MaxFileBytes
@@ -152,8 +153,9 @@ func parseFile(p *analyzer.Parser, f file, raw []byte) (parsedFile, bool) {
 			return parsedFile{}, false
 		}
 	}
-	syms := p.Symbols(f.lang, []byte(content))
-	return parsedFile{file: f, content: content, lines: len(lines), symbols: syms, chunks: chunker.Chunks(lines, syms)}, true
+	parsed := p.Parse(f.lang, []byte(content))
+	return parsedFile{file: f, content: content, lines: len(lines), symbols: parsed.Symbols, imports: parsed.Imports,
+		chunks: chunker.Chunks(lines, parsed.Symbols)}, true
 }
 
 // pathMap runs a two-column query (path, value) for one snapshot; snapshot 0

@@ -269,6 +269,60 @@ func TestRunCarriesPages(t *testing.T) {
 	}
 }
 
+// TestRunFollowsImports: a page is written again when a file it cites
+// imports a changed declaration, not when only a body changed; a change that
+// adds a directory other code imports is planned anew, the plan seeing the
+// imports between directories and the overview told the diagram is drawn.
+func TestRunFollowsImports(t *testing.T) {
+	// tools/ is there before: what is new is tools/gen, two levels deep as planning sees directories.
+	common := map[string]string{"a.go": "alpha", "b.go": "beta", "d.go": "delta", "e.go": "epsilon", "h.go": "helper", "tools/t.go": "tooling"}
+	next := maps.Clone(common)
+	next["h.go"] = "helper two"
+	withDir := maps.Clone(common)
+	withDir["tools/gen/x.go"] = "gizmo" // what the plan's page searches for
+	for name, c := range map[string]struct {
+		next          map[string]string
+		before, after string // h.go's declaration in each snapshot
+		edge          string // an import in the new snapshot
+		plans, writes int
+	}{
+		"declaration": {next, "func H() {", "func H(n int) {", "b.go>h.go", 0, 1},
+		"body":        {next, "func H() {", "func H() {", "b.go>h.go", 0, 0},
+		"subsystem":   {withDir, "func H() {", "func H() {", "a.go>tools/gen/x.go", 1, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := carryDB(t, "English", common, c.next)
+			src, dst, _ := strings.Cut(c.edge, ">")
+			for _, q := range []string{
+				`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (2, 'b.go', 'h.go'), (6, '` + src + `', '` + dst + `')`,
+				`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line, signature) VALUES
+					(2, 'h.go', 'H', 'H', 'function', 1, 1, '` + c.before + `'), (6, 'h.go', 'H', 'H', 'function', 1, 1, '` + c.after + `')`,
+			} {
+				if _, err := db.Exec(q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			model := &fakeModel{}
+			srv := httptest.NewServer(model)
+			defer srv.Close()
+			g := &Generator{DB: db, Catalog: &catalog.Catalog{DB: db, Queue: &jobs.Queue{DB: db}}, Retriever: &retrieval.Retriever{DB: db},
+				Chat: &ai.OpenAI{BaseURL: srv.URL, ModelName: "m"}, Language: "English"}
+			if err := g.Run(context.Background(), 1, "next", jobs.Progress{}); err != nil {
+				t.Fatal(err)
+			}
+			if len(model.plans) != c.plans || len(model.writes) != c.writes {
+				t.Fatalf("%d plans and %d pages written, want %d and %d", len(model.plans), len(model.writes), c.plans, c.writes)
+			}
+			if c.plans > 0 && (!strings.Contains(model.plans[0], "./ → tools/gen/ (1)") || !strings.Contains(model.writes[0], drawnNote)) {
+				t.Fatalf("plan request %q\nwrite request %q", model.plans[0], model.writes[0])
+			}
+			if c.writes == 1 && c.plans == 0 && strings.Contains(model.writes[0], drawnNote) {
+				t.Fatal("a page past the overview was told of the diagram")
+			}
+		})
+	}
+}
+
 // TestParseSteering: listed pages are clipped and taken in the file's order,
 // a parent making no difference, with their purpose and notes as their
 // focus; repo_notes become one block, framed as untrusted, a note per line,
@@ -362,8 +416,12 @@ func TestLoadPicksSnapshot(t *testing.T) {
 		t.Fatalf("snapshot %d shown, want 2 with the finished wiki", got)
 	}
 	w, _ := Reader{DB: db}.Load(context.Background(), 1)
-	if b, _ := json.Marshal(w.Pages); !strings.Contains(string(b), `"citations":[]`) {
-		t.Fatalf("a page without citations, as JSON: %s", b)
+	if b, _ := json.Marshal(w.Pages); !strings.Contains(string(b), `"citations":[]`) || strings.Contains(string(b), "diagram") {
+		t.Fatalf("a page without citations or imports, as JSON: %s", b)
+	}
+	db.Exec(`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (2, 'cmd/main.go', 'lib/x.go')`)
+	if w, err := (Reader{DB: db}).Load(context.Background(), 1); err != nil || !strings.Contains(w.Pages[0].Diagram, `n0["cmd"]`) {
+		t.Fatalf("the overview's diagram: %+v %v", w.Pages, err)
 	}
 }
 
