@@ -1,6 +1,9 @@
 package store
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // FileCount counts the snapshot's indexed files, generated ones aside.
 func (s *Store) FileCount(ctx context.Context, snap int64) (int, error) {
@@ -65,6 +68,33 @@ func (s *Store) Declared(ctx context.Context, snap int64, each func(path, name s
 		each(p, name)
 	}
 	return rows.Err()
+}
+
+// Symbols returns, for each of paths the snapshot holds chunks of, the
+// symbols they are of ("" for code outside any declaration).
+func (s *Store) Symbols(ctx context.Context, snap int64, paths []string) (map[string]map[string]bool, error) {
+	list, err := json.Marshal(paths)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT DISTINCT path, coalesce(symbol_name, '') FROM chunks
+		WHERE snapshot_id = ? AND path IN (SELECT value FROM json_each(?))`, snap, string(list))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]map[string]bool{}
+	for rows.Next() {
+		var p, symbol string
+		if err := rows.Scan(&p, &symbol); err != nil {
+			return nil, err
+		}
+		if out[p] == nil {
+			out[p] = map[string]bool{}
+		}
+		out[p][symbol] = true
+	}
+	return out, rows.Err()
 }
 
 // File is one file of a snapshot with its content.

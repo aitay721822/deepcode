@@ -16,6 +16,7 @@ import (
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/catalog"
+	"deepcode/internal/repo/index/analyzer"
 )
 
 // steer reads the snapshot's .devin/wiki.json. A missing file steers nothing,
@@ -44,18 +45,18 @@ The overview introduces the whole repository. Then give exactly one section for 
 
 const sectionPrompt = `You plan the pages of one section of a technical wiki for a code repository. Reply with JSON only, no prose:
 {"pages":[{"title":"…","query":"keywords, paths and identifiers to search the code for this page"}]}
-Plan exactly as many pages as the user's message asks for: where the section's files hold fewer separate subjects, give its larger files, workflows, options, error handling and tests pages of their own. Each covers one distinct component, workflow, feature or concept of the section's files, named plainly in its title; no two pages share a subject, and none repeats the section's overview or another section's subject. Queries name concrete files, types or functions from the files listed.`
+Plan exactly as many pages as the user's message asks for: where the section's files hold fewer separate subjects, give its larger files, workflows, options and error handling pages of their own. Each covers one distinct component, workflow, feature or concept of the section's files, named plainly in its title; no two pages share a subject, and none repeats the section's overview or another section's subject. Tests, examples, guides and configuration files are grouped by the feature, workflow or tool they serve, never one page per file, and between them the pages' queries name every example, guide and folder of tests listed. Queries name concrete files, types or functions from the files listed.`
 
 // plannedPages returns the snapshot's pages. When there are none yet, it
 // stores them first: carried over from the previous wiki, else the pages
 // .devin/wiki.json lists, else a plan the model makes.
-func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, sha, repo string, steer steering.Steering, progress jobs.Progress) ([]page, error) {
+func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, src source, repo string, steer steering.Steering, progress jobs.Progress) ([]page, error) {
 	pages, err := g.Store.Pages(ctx, snap)
 	if err != nil || len(pages) > 0 {
 		return pages, err
 	}
 	progress.Stage("plan", 0, 0)
-	carried, err := g.carry(ctx, repoID, snap, sha, len(steer.Pages) > 0, progress)
+	carried, err := g.carry(ctx, repoID, snap, src, len(steer.Pages) > 0, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -118,10 +119,10 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 	if err != nil {
 		return nil, err
 	}
-	budgets := outline.Budgets(sections, lines, total-1-len(sections))
+	budgets := outline.Budgets(sections, lines, total-1)
 	var groups strings.Builder
 	for i, s := range sections {
-		fmt.Fprintf(&groups, "%d. %s (%d files): %s\n", i+1, dirNames(s.Dirs), len(s.Files), strings.Join(s.Files[:min(12, len(s.Files))], ", "))
+		fmt.Fprintf(&groups, "%d. %s (%d files): %s\n", i+1, sectionName(s), len(s.Files), strings.Join(outline.Pick(s.Files, lines, 12), ", "))
 	}
 	progress.Logf("%d sections of %d pages in all, from %d files", len(sections), total, files)
 	out, err := g.ask(ctx, outlinePrompt, about+layout+"\nGroups of directories, one per section, with some of their files:\n"+groups.String(), func(s string) bool {
@@ -139,8 +140,9 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 		if i == len(heads) {
 			heads = append(heads, outline.Page{})
 		}
-		if heads[i].Title == "" { // the model named none: named after its folders
-			heads[i] = outline.Page{Title: dirNames(sections[i].Dirs), Query: outline.Clip(strings.Join(sections[i].Dirs, " "), outline.MaxQuery), Parent: -1}
+		if heads[i].Title == "" { // the model named none: named after its folders, or what it holds, and searching for them
+			query := cmp.Or(strings.Join(sections[i].Dirs, " "), strings.Join(outline.Pick(sections[i].Files, lines, 12), " "))
+			heads[i] = outline.Page{Title: sectionName(sections[i]), Query: outline.Clip(query, outline.MaxQuery), Parent: -1}
 		}
 	}
 	declared, err := g.declared(ctx, snap)
@@ -151,26 +153,41 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 	for i, h := range heads {
 		titles[i] = h.Title
 	}
+	// A section of one page is that page; of two, two pages of their own, as
+	// one under the section's own would only repeat it; else the section's own
+	// page and the rest under it.
 	children := make([][]outline.Page, len(sections))
 	if err := fanout.Each(ctx, len(sections), g.Parallel, func(ctx context.Context, i int) error {
+		units := outline.Units(sections[i], lines) // the examples, guides and tests its pages are to name
+		want := budgets[i] - 1
+		if budgets[i] == 2 {
+			want = 2
+		} else if want == 0 {
+			outline.Spread(heads[i:i+1], units)
+			return nil
+		}
 		var b strings.Builder // what all sections share first, for the prompt cache
 		fmt.Fprintf(&b, "%sThe wiki's sections: %s\n\nSection: %s. Focus: %s\nFiles of this section (%d), with what they declare:\n",
 			about, strings.Join(titles, " | "), heads[i].Title, heads[i].Query, len(sections[i].Files))
-		for _, f := range sections[i].Files[:min(200, len(sections[i].Files))] {
+		for _, f := range outline.Pick(sections[i].Files, lines, 200) {
 			fmt.Fprintf(&b, "%s %s\n", f, strings.Join(declared[f], ", "))
 		}
-		fmt.Fprintf(&b, "\nPlan exactly %d pages.", budgets[i])
+		fmt.Fprintf(&b, "\nPlan exactly %d pages.", want)
 		out, err := g.ask(ctx, sectionPrompt, b.String(), func(s string) bool { return len(outline.ParsePages(s, 1)) > 0 })
 		if err != nil {
 			return err
 		}
-		children[i] = outline.ParsePages(out, budgets[i])
+		children[i] = outline.Spread(outline.ParsePages(out, want), units)
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	plan := []outline.Page{overview}
 	for i, h := range heads {
+		if budgets[i] == 2 && len(children[i]) > 0 {
+			plan = append(plan, children[i]...)
+			continue
+		}
 		at := len(plan)
 		plan = append(plan, h)
 		for _, c := range children[i] {
@@ -193,18 +210,23 @@ func (g *Generator) ask(ctx context.Context, system, user string, parsed func(st
 	return g.Chat.Generate(ctx, msgs)
 }
 
-// dirNames names a section's directories for the model: the root as such,
-// and the tests, examples and docs as such.
-func dirNames(dirs []string) string {
-	names := make([]string, len(dirs))
-	for i, d := range dirs {
-		switch d {
-		case ".":
+// sectionName names a section for the model: the code's by its directories,
+// the root as such; the others by what they hold.
+func sectionName(s outline.Section) string {
+	switch s.Kind {
+	case analyzer.Tests:
+		return "tests and benchmarks"
+	case analyzer.Examples:
+		return "examples"
+	case analyzer.Docs:
+		return "documentation and guides"
+	case analyzer.Tooling:
+		return "build, packaging, CI and editor configuration"
+	}
+	names := make([]string, len(s.Dirs))
+	for i, d := range s.Dirs {
+		if names[i] = d + "/"; d == "." {
 			names[i] = "the root folder"
-		case "":
-			names[i] = "tests, examples and docs"
-		default:
-			names[i] = d + "/"
 		}
 	}
 	return strings.Join(names[:min(6, len(names))], ", ")

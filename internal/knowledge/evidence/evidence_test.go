@@ -63,9 +63,14 @@ func TestLinkCitations(t *testing.T) {
 		"Unpaired `README.md:3 here":                 "Unpaired `" + link("README.md", 3, 3) + " here",
 		"Path C:\\README.md:3 stays":                 "Path C:\\README.md:3 stays",
 		// The edges of a shown range, a range written backwards, a path written from the root.
-		"Edges [README.md:20-25; async.ts:5-10]": "Edges " + link("README.md", 20, 20) + " " + link("src/vs/base/async.ts", 10, 10),
-		"Reversed [README.md:4-2]":               "Reversed " + link("README.md", 2, 4),
-		"Rooted [./README.md:3; /README.md:5]":   "Rooted " + link("README.md", 3, 3) + " " + link("README.md", 5, 5),
+		"Edges [README.md:20-25; async.ts:5-10]":                 "Edges " + link("README.md", 20, 20) + " " + link("src/vs/base/async.ts", 10, 10),
+		"Reversed [README.md:4-2]":                               "Reversed " + link("README.md", 2, 4),
+		"Rooted [./README.md:3; /README.md:5]":                   "Rooted " + link("README.md", 3, 3) + " " + link("README.md", 5, 5),
+		"Labelled [source: README.md:3-4; sources: async.ts:12]": "Labelled " + link("README.md", 3, 4) + " " + link("src/vs/base/async.ts", 12, 12),
+		// Folders put in front of a shown path: the longest it ends with.
+		"Prefixed [src/_examples/rest/main.go:2-3]": "Prefixed " + link("_examples/rest/main.go", 2, 3),
+		"Not a suffix [lib/vs/base/async.ts:12]":    "Not a suffix ",
+		"Root file [docs/README.md:3]":              "Root file ", // a root file is no guess for one in a folder
 	}
 	for in, want := range cases {
 		if got, _ := LinkCitations(in, used, href); got != want {
@@ -88,6 +93,21 @@ func TestLinkCitationsRejectsAmbiguousNames(t *testing.T) {
 	used = append(used, retrieval.Hit{Path: "index.ts", StartLine: 1, EndLine: 9})
 	if _, cites := LinkCitations("[index.ts:2-3]", used, href); len(cites) != 1 || cites[0].Path != "index.ts" {
 		t.Fatalf("the exact path was not linked: %v", cites)
+	}
+	// Folders put in front: the longest shown path it ends with, not index.ts listed first.
+	if _, cites := LinkCitations("[src/b/index.ts:2-3]", []retrieval.Hit{used[2], used[1]}, href); len(cites) != 1 || cites[0].Path != "b/index.ts" {
+		t.Fatalf("a prefixed path: %v", cites)
+	}
+}
+
+// TestPathless: lines cited without their file, alone or after a source's
+// number, outside code; a reference naming its file, or code, is not.
+func TestPathless(t *testing.T) {
+	for text, want := range map[string]bool{"It runs [55-64].": true, "It runs [5:1-29].": true, "See [L3].": true, "It runs [a.go:5-6].": false,
+		"`x[0]` and ```\nx[1-2]\n```": false, "A [link](u) and [3, 4]": false} {
+		if Pathless(text) != want {
+			t.Errorf("Pathless(%q) = %v", text, !want)
+		}
 	}
 }
 

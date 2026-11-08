@@ -93,6 +93,7 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			data[i] = map[string]any{"index": i, "embedding": bagOfWords(s)}
 		}
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"data": data})
 		return
 	}

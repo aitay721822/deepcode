@@ -4,36 +4,42 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"deepcode/internal/access/account"
 	"deepcode/internal/access/account/store"
 )
 
-// passwd sets a user's password from the first line of stdin and ends their
+func passwdCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "passwd <username>",
+		Short: "Set a user's password from the first line of stdin and end their sessions",
+		Args:  cobra.ExactArgs(1),
+	}
+	data := dataFlag(cmd)
+	cmd.RunE = func(_ *cobra.Command, args []string) error { return passwd(*data, args[0]) }
+	return cmd
+}
+
+// passwd sets username's password from the first line of stdin and ends their
 // sessions: the way back in when an administrator's password is lost. Safe
 // while serve runs.
-func passwd(args []string) error {
-	fs := flag.NewFlagSet("passwd", flag.ExitOnError)
-	data := fs.String("data", "", "data directory (default: the configured one)")
-	fs.Parse(args)
-	if fs.NArg() != 1 {
-		return errors.New(usage)
-	}
-	db, err := openData(*data)
+func passwd(data, username string) error {
+	db, err := openData(data)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 	ctx := context.Background()
 	accounts := &account.Service{Store: &store.Store{DB: db}}
-	u, err := accounts.ByUsername(ctx, fs.Arg(0))
+	u, err := accounts.ByUsername(ctx, username)
 	if errors.Is(err, account.ErrNotFound) {
-		return fmt.Errorf("there is no user %q", fs.Arg(0))
+		return fmt.Errorf("there is no user %q", username)
 	} else if err != nil {
 		return err
 	}
@@ -46,6 +52,6 @@ func passwd(args []string) error {
 	if _, err := accounts.Update(ctx, u.ID, 0, account.Input{Password: &password}); err != nil {
 		return err
 	}
-	log.Printf("changed the password of %s and ended their sessions", fs.Arg(0))
+	log.Printf("changed the password of %s and ended their sessions", username)
 	return nil
 }

@@ -1,19 +1,24 @@
-// Package ai is an OpenAI-compatible client for chat and embeddings that
-// works with OpenAI, llama.cpp, LM Studio, vLLM, Ollama and similar servers.
-// A nil *OpenAI means the model is not configured.
+// Package ai is an OpenAI-compatible client for chat and embeddings, on the
+// official SDK (openai-go), that works with OpenAI, llama.cpp, LM Studio,
+// vLLM, Ollama and similar servers. A nil *OpenAI means the model is not
+// configured.
 package ai
 
 import (
 	"bytes"
+	"cmp"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 )
 
 type Message struct {
@@ -21,19 +26,23 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-// OpenAI talks to any server implementing /chat/completions and /embeddings.
+// OpenAI talks to any server implementing /chat/completions or /responses,
+// and /embeddings.
 type OpenAI struct {
 	BaseURL   string
 	APIKey    string
 	ModelName string
-	MaxTokens int // 0 leaves the output limit to the server
+	API       string // Responses asks a chat model by the Responses API; else Completions
+	MaxTokens int    // 0 leaves the output limit to the server
 	// ReasoningEffort is sent as reasoning_effort when set ("none", "low", ...);
 	// empty leaves reasoning to the server's default.
 	ReasoningEffort string
+	Temperature     *float64      // sent as temperature when set; nil leaves it to the server
 	Timeout         time.Duration // per request, including the whole stream
 	RPM             int           // requests per minute, 0 = unlimited
-	// Measure, when set, is told every answer's Usage, failed ones too, and the
-	// server is asked for its token counts (stream_options.include_usage). The
+	// Measure, when set, is told every answer's Usage, failed ones too, and a
+	// Chat Completions server is asked for its token counts
+	// (stream_options.include_usage), which the Responses API always gives. The
 	// bench sets it; a server that rejects the option fails the request.
 	Measure func(Usage)
 
@@ -41,59 +50,70 @@ type OpenAI struct {
 	next time.Time
 }
 
-// post retries rate limits, server errors and network failures with exponential
-// backoff (honouring Retry-After) until a 200 response arrives.
-func (c *OpenAI) post(ctx context.Context, path string, body any) (*http.Response, error) {
-	payload, err := json.Marshal(body)
-	if err != nil {
+// maxBody bounds an answer's body: a batch's vectors are some megabytes, a
+// streamed answer less; a server sending far more is broken.
+const maxBody = 64 << 20
+
+// options are every request's: the server and its key and nothing from the
+// environment, as the SDK's services read none (openai.NewClient would send
+// OPENAI_API_KEY to whatever server this is); rate limits, server errors and
+// network failures tried 3 times more with backoff, a Retry-After honoured up
+// to a minute; and middleware.
+func (c *OpenAI) options() []option.RequestOption {
+	return []option.RequestOption{
+		option.WithBaseURL(c.BaseURL), option.WithAPIKey(c.APIKey),
+		option.WithMaxRetries(3), option.WithMaxRetryDelay(time.Minute),
+		option.WithMiddleware(c.middleware),
+	}
+}
+
+// middleware gives each attempt its turn under RPM (throttle) and bounds the
+// answer's body by maxBody.
+func (c *OpenAI) middleware(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	if err := c.throttle(req.Context()); err != nil {
 		return nil, err
 	}
-	var lastErr error
-	wait := time.Second
-	for attempt := 0; attempt < 4; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(wait):
-			}
-			wait *= 2
-		}
-		if err := c.throttle(ctx); err != nil {
-			return nil, err
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(payload))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if c.APIKey != "" {
-			req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			lastErr = err
-			continue
-		}
-		if resp.StatusCode == http.StatusOK {
-			return resp, nil
-		}
-		// Reading a key's length past the 2048 bytes quote keeps gets a key that
-		// crosses the cut whole, so it is masked too.
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048+int64(len(c.APIKey))))
-		resp.Body.Close()
-		lastErr = fmt.Errorf("%s %s: %s: %s", c.ModelName, path, resp.Status, c.quote(msg))
-		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
-			return nil, lastErr
-		}
-		if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 {
-			wait = time.Duration(min(s, 60)) * time.Second // in nanoseconds, a huge value would wrap round to no wait
-		}
+	res, err := next(req)
+	if err == nil {
+		res.Body = http.MaxBytesReader(nil, res.Body, maxBody)
 	}
-	return nil, lastErr
+	return res, err
+}
+
+// fail is err fit to return, naming the model and path it came from; res is
+// the answer err came with, if any (option.WithResponseInto). A refused
+// request's error carries its status and the server's message (quote): the
+// SDK's names the status alone, and for a message it cannot read as OpenAI's
+// ({"error":"model not loaded"}, as LM Studio sends) it is a JSON error with
+// neither. An error the server sends inside a stream is quoted as well.
+func (c *OpenAI) fail(path string, res *http.Response, err error) error {
+	var api *openai.Error
+	var stream *ssestream.StreamError
+	var big *http.MaxBytesError
+	if errors.As(err, &api) && api.Response != nil {
+		res = api.Response
+	}
+	switch {
+	case errors.As(err, &big):
+		return fmt.Errorf("%s %s: the answer passed 64 MB", c.ModelName, path)
+	case res != nil && res.StatusCode >= 400:
+		// The SDK has read the body and put it back. Reading a key's length past
+		// the 2048 bytes quote keeps gets a key that crosses the cut whole, so it
+		// is masked too.
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 2048+int64(len(c.APIKey))))
+		if msg := c.quote(body); msg != "" {
+			return fmt.Errorf("%s %s: %s: %s", c.ModelName, path, res.Status, msg)
+		}
+		return fmt.Errorf("%s %s: %s", c.ModelName, path, res.Status)
+	case errors.As(err, &stream):
+		return c.refused(path, stream.Message)
+	}
+	return fmt.Errorf("%s %s: %w", c.ModelName, path, err)
+}
+
+// refused is the error for a server's message that the answer failed, quoted.
+func (c *OpenAI) refused(path, msg string) error {
+	return fmt.Errorf("%s %s: %s", c.ModelName, path, c.quote([]byte(cmp.Or(msg, "the answer failed, the server saying no more"))))
 }
 
 // quote is a server's message fit for an error: the API key masked, since a

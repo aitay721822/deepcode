@@ -96,10 +96,12 @@ func TestRunReplansOtherLanguage(t *testing.T) {
 }
 
 // fakeModel answers the planner with the one page Planned and a page's writer
-// with "Written.", keeping the user message of every request.
+// with "Written.", keeping the user message of every request; when pathless,
+// "Written [1-1].", and asked again, cites the example it was shown.
 type fakeModel struct {
 	mu            sync.Mutex
 	plans, writes []string
+	pathless      bool
 }
 
 func (f *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +116,11 @@ func (f *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply = `{"pages":[{"title":"Planned","query":"gizmo"}]}`
 	} else {
 		f.writes = append(f.writes, body.Messages[1].Content)
+		if _, example, again := strings.Cut(body.Messages[len(body.Messages)-1].Content, "as in "); f.pathless && again && len(body.Messages) > 2 {
+			reply = "Written " + example
+		} else if f.pathless {
+			reply = "Written [1-1]."
+		}
 	}
 	f.mu.Unlock()
 	b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
@@ -169,13 +176,13 @@ func carryDB(t *testing.T, language string, base, next map[string]string) *sql.D
 }
 
 // TestRunCarriesPages: a new snapshot's wiki keeps the pages of the
-// repository's newest finished wiki and rewrites only those whose cited or
-// found files changed (the README too, for the overview), unless that wiki is
-// in another language, more than half of the files changed or
+// repository's newest finished wiki and rewrites only those whose cited lines
+// changed or whose search finds a new file near what they cite, unless that
+// wiki is in another language, more than half of the files changed or
 // .devin/wiki.json did, or the wiki is in sections the repository is too
 // small for; then the pages are planned anew, or taken from .devin/wiki.json,
-// and its notes reach the model. Carried pages keep their sections. An invalid
-// .devin/wiki.json steers nothing.
+// and its notes reach the model. Carried pages keep their sections, and their
+// citations follow their lines. An invalid .devin/wiki.json steers nothing.
 func TestRunCarriesPages(t *testing.T) {
 	common := map[string]string{"a.go": "alpha one", "b.go": "beta", "d.go": "delta", "e.go": "epsilon", "f.go": "filler", "h.go": "helper"}
 	files := func(changes map[string]string, drop ...string) map[string]string {
@@ -189,6 +196,8 @@ func TestRunCarriesPages(t *testing.T) {
 	notes := `{"repo_notes":[{"content":"Stress the gizmo API."}]}`
 	listed := `{"repo_notes":[{"content":"Stress the gizmo API."}],"pages":[{"title":"Listed","purpose":"gizmo"}]}`
 	carried := func(title, file string) string { return aboutPage(title, file, "next") }
+	moved := func(title, file string) string { return strings.ReplaceAll(carried(title, file), "1", "2") } // cites line 2
+	four, kept := []string{"Alpha", "Beta", "Delta", "Epsilon"}, []string{carried("Alpha", "a.go"), carried("Beta", "b.go"), carried("Delta", "d.go"), carried("Epsilon", "e.go")}
 	for name, c := range map[string]struct {
 		language   string
 		base, next map[string]string
@@ -197,19 +206,17 @@ func TestRunCarriesPages(t *testing.T) {
 		prompt     string   // in the plan request, else in a page's; the notes as a block, as the indexed file holds them too
 		contents   []string // how each carried or written page starts
 	}{
-		// 3 of the 6 files differ: just not more than half. Alpha cites the
-		// edited a.go, Delta the removed d.go (nothing matches it now) and
-		// Epsilon's search finds the added g.go: written again.
-		"carry": {"English", common, files(map[string]string{"a.go": "alpha two", "g.go": "gizmo"}, "d.go"),
-			[]string{"Alpha", "Beta", "Delta", "Epsilon"}, 0, "",
+		// 3 of 6 files differ, not more than half: Alpha cites the edited a.go, Delta the removed d.go
+		// (nothing matches it now) and Epsilon's search finds the added g.go, beside e.go: written again.
+		"carry": {"English", common, files(map[string]string{"a.go": "alpha two", "g.go": "gizmo"}, "d.go"), four, 0, "",
 			[]string{"Written.", carried("Beta", "b.go"), "No indexed code matched", "Written."}},
-		"readme changed": {"English", files(map[string]string{"README.md": "Demo one"}), files(map[string]string{"README.md": "Demo two"}),
-			[]string{"Alpha", "Beta", "Delta", "Epsilon"}, 0, "",
-			[]string{"Written.", carried("Beta", "b.go"), carried("Delta", "d.go"), carried("Epsilon", "e.go")}},
-		// Beta's search finds the edited manifest, which no page cites: carried.
-		"manifest edit": {"English", files(map[string]string{"package.json": "beta deps one"}), files(map[string]string{"package.json": "beta deps two"}),
-			[]string{"Alpha", "Beta", "Delta", "Epsilon"}, 0, "",
-			[]string{carried("Alpha", "a.go"), carried("Beta", "b.go"), carried("Delta", "d.go"), carried("Epsilon", "e.go")}},
+		// Beta's search finds the edited manifest, and Alpha's, the overview's, the README: the same chunks, which no page cites.
+		"manifest and readme": {"English", files(map[string]string{"package.json": "beta deps one", "README.md": "Demo one"}),
+			files(map[string]string{"package.json": "beta deps two", "README.md": "Demo two"}), four, 0, "", kept},
+		// a.go grows below the line Alpha cites, b.go above Beta's: carried, Beta's citation moving with its line.
+		"lines moved": {"English", common, files(map[string]string{"a.go": "alpha one\nmore", "b.go": "intro\nbeta"}), four, 0, "",
+			[]string{carried("Alpha", "a.go"), moved("Beta", "b.go"), carried("Delta", "d.go"), carried("Epsilon", "e.go")}},
+		"far new file": {"English", common, files(map[string]string{"web/w.go": "gizmo"}), four, 0, "", kept}, // in a folder no page cites from
 		"other language": {"Deutsch", files(map[string]string{".devin/wiki.json": notes}),
 			files(map[string]string{".devin/wiki.json": notes, "a.go": "alpha two"}), []string{"Planned"}, 1, "\n- Stress the gizmo API.\n", nil},
 		"wide change": {"English", common, files(map[string]string{"a.go": "alpha two", "f.go": "filler two", "g.go": "gizmo"}, "d.go"),
@@ -221,7 +228,7 @@ func TestRunCarriesPages(t *testing.T) {
 		// A wiki in sections, too many for 6 files, is planned anew, unless .devin/wiki.json lists its pages.
 		"sections, too few files": {"English", common, files(map[string]string{"a.go": "alpha two"}), []string{"Planned"}, 1, "", nil},
 		"sections, listed": {"English", files(map[string]string{".devin/wiki.json": listed}), files(map[string]string{".devin/wiki.json": listed, "a.go": "alpha two"}),
-			[]string{"Alpha", "Beta", "Delta", "Epsilon"}, 0, "", []string{"Written.", carried("Beta", "b.go"), carried("Delta", "d.go"), carried("Epsilon", "e.go")}},
+			four, 0, "", append([]string{"Written."}, kept[1:]...)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -273,6 +280,8 @@ func TestRunCarriesPages(t *testing.T) {
 				var want []evidence.Citation
 				if c.contents[i] == carried(b.title, b.file) {
 					want = []evidence.Citation{{Path: b.file, StartLine: 1, EndLine: 1}}
+				} else if c.contents[i] == moved(b.title, b.file) {
+					want = []evidence.Citation{{Path: b.file, StartLine: 2, EndLine: 2}}
 				} else if c.contents[i] == "Written." {
 					written++
 				}
@@ -280,10 +289,10 @@ func TestRunCarriesPages(t *testing.T) {
 					t.Errorf("page %s: %q, query %q, citations %v; want %q, %q, %v", p.Title, p.Content, p.Query, cites[p.ID], c.contents[i], b.query, want)
 				}
 			}
-			var moved int // a carried page stays in its section
-			db.QueryRow(`SELECT count(*) FROM wiki_pages a JOIN wiki_pages b ON b.snapshot_id = 2 AND b.position = a.position WHERE a.snapshot_id = 6 AND a.parent IS NOT b.parent`).Scan(&moved)
-			if len(model.writes) != written || moved > 0 {
-				t.Fatalf("%d pages written, want %d; %d left their section", len(model.writes), written, moved)
+			var left int // a carried page stays in its section
+			db.QueryRow(`SELECT count(*) FROM wiki_pages a JOIN wiki_pages b ON b.snapshot_id = 2 AND b.position = a.position WHERE a.snapshot_id = 6 AND a.parent IS NOT b.parent`).Scan(&left)
+			if len(model.writes) != written || left > 0 {
+				t.Fatalf("%d pages written, want %d; %d left their section", len(model.writes), written, left)
 			}
 		})
 	}
@@ -307,6 +316,7 @@ func TestRunFollowsImports(t *testing.T) {
 		plans, writes int
 	}{
 		"declaration": {next, "func H() {", "func H(n int) {", "b.go>h.go", 0, 1},
+		"pathless":    {next, "func H() {", "func H(n int) {", "b.go>h.go", 0, 2}, // its citations leave out their file: asked again
 		"body":        {next, "func H() {", "func H() {", "b.go>h.go", 0, 0},
 		"subsystem":   {withDir, "func H() {", "func H() {", "a.go>tools/gen/x.go", 1, 1},
 	} {
@@ -318,7 +328,7 @@ func TestRunFollowsImports(t *testing.T) {
 					(2, 'h.go', 'H', 'H', 'function', 1, 1, '` + c.before + `'), (6, 'h.go', 'H', 'H', 'function', 1, 1, '` + c.after + `')`); err != nil {
 				t.Fatal(err)
 			}
-			model := &fakeModel{}
+			model := &fakeModel{pathless: name == "pathless"}
 			srv := httptest.NewServer(model)
 			defer srv.Close()
 			g := generator(db, &ai.OpenAI{BaseURL: srv.URL, ModelName: "m"})
@@ -327,6 +337,9 @@ func TestRunFollowsImports(t *testing.T) {
 			}
 			if len(model.plans) != c.plans || len(model.writes) != c.writes {
 				t.Fatalf("%d plans and %d pages written, want %d and %d", len(model.plans), len(model.writes), c.plans, c.writes)
+			}
+			if cites, _ := g.Store.Citations(context.Background(), 6); model.pathless && len(cites) != 4 {
+				t.Fatalf("written again, the page cites nothing: %v", cites)
 			}
 			if c.plans > 0 && (!strings.Contains(model.plans[0], "./ → tools/gen/ (1)") || !strings.Contains(model.writes[0], drawnNote)) {
 				t.Fatalf("plan request %q\nwrite request %q", model.plans[0], model.writes[0])
@@ -338,17 +351,18 @@ func TestRunFollowsImports(t *testing.T) {
 	}
 }
 
-// TestRunPlansSections: a repository big enough for sections gets the
-// overview, then each section (the model's title, or its folders') followed
-// by the pages it was given, as many as its files' share; pages are written
-// two at a time, a section's page as its overview and a part as a part, and
-// the nav reads each part's section.
+// TestRunPlansSections: a repository big enough for sections gets the overview,
+// then each section (the model's title, or what it holds) followed by the pages
+// it was given, as many as its lines' share, a section of two pages being two
+// of its own; pages are written two at a time, a section's page as its overview
+// and a part as a part, and the nav reads each part's section.
 func TestRunPlansSections(t *testing.T) {
 	stmts := []string{`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`, `INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`,
 		`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'api/a1.go', 'store/s1.go'), (1, 'api/a2.go', 'store/s2.go'), (1, 'web/w1.go', 'api/a1.go')`}
 	for _, f := range []string{"main.go", "go.mod", "docs/d1.md", "docs/d2.md", "api/a1.go", "api/a2.go", "api/a3.go", "api/a4.go", "store/s1.go", "store/s2.go",
 		"store/s3.go", "store/s4.go", "web/w1.go", "web/w2.go", "web/w3.go", "web/w4.go"} {
-		stmts = append(stmts, `INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, '`+f+`', 'go', 'h', 1, 1)`)
+		lines := map[bool]int{false: 100, true: 600}[strings.HasPrefix(f, "docs/")]
+		stmts = append(stmts, fmt.Sprintf(`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, '%s', 'go', 'h', 1, %d)`, f, lines))
 	}
 	db := testDB(t, append(stmts, `INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'api/a1.go', 1, 1, 'core entry tests', 'c')`)...)
 	var mu sync.Mutex
@@ -399,14 +413,14 @@ func TestRunPlansSections(t *testing.T) {
 		got = append(got, fmt.Sprintf("%s<%d", p.Title, p.Parent))
 	}
 	slices.Sort(asked)
-	want := "Overview<-1 Core<-1 Core 1<1 Core 2<1 Core 3<1 Core 4<1 Core 5<1 Core 6<1 Core 7<1 Core 8<1 Core 9<1 Core 10<1 Core 11<1 Core 12<1 Core 13<1 " +
-		"Entry<-1 Entry 1<15 Entry 2<15 tests, examples and docs<-1 tests, examples and docs 1<18"
-	// The overview's search finds nothing, so it is written without the model.
-	if strings.Join(got, " ") != want || !slices.Equal(asked, []int{1, 2, 13}) || len(writes) != len(pages)-1 {
+	want := "Overview<-1 Core<-1 Core 1<1 Core 2<1 Core 3<1 Core 4<1 Core 5<1 Core 6<1 Core 7<1 Core 8<1 Core 9<1 Core 10<1 Core 11<1 Core 12<1 " +
+		"Entry 1<-1 Entry 2<-1 documentation and guides<-1 documentation and guides 1<16 documentation and guides 2<16 documentation and guides 3<16"
+	// The overview's and the docs' searches find nothing (no doc is chunked): written without the model. Each guide is named in a page's focus.
+	if strings.Join(got, " ") != want || !slices.Equal(asked, []int{2, 3, 12}) || len(writes) != len(pages)-2 || !strings.HasPrefix(pages[17].Query, "docs/d") {
 		t.Fatalf("pages %q after asking for %v pages, %d written", got, asked, len(writes))
 	}
 	if !slices.ContainsFunc(writes, func(u string) bool {
-		return strings.Contains(u, "This page opens a section whose pages are: Entry 1 | Entry 2.")
+		return strings.Contains(u, "This page opens a section whose pages are: Core 1 | Core 2 | Core 3 |")
 	}) ||
 		!slices.ContainsFunc(writes, func(u string) bool { return strings.Contains(u, `This page is part of the section "Core"`) }) {
 		t.Fatal("no page was told of its section")
@@ -472,25 +486,15 @@ func TestRunOutcomes(t *testing.T) {
 	}
 }
 
-func TestClean(t *testing.T) {
-	for in, want := range map[string]string{
-		"```markdown\nBody text\n```":     "Body text",
-		"# Title\nBody":                   "Body",
-		"<think>x</think>\n## Section\nA": "## Section\nA",
-	} {
+// TestCleanSlug: a page loses reasoning, a wrapping fence and a title; its
+// slug is its place and the ASCII words of its title.
+func TestCleanSlug(t *testing.T) {
+	for in, want := range map[string]string{"```markdown\nBody text\n```": "Body text", "# Title\nBody": "Body", "<think>x</think>\n## Section\nA": "## Section\nA"} {
 		if got := clean(in); got != want {
 			t.Errorf("clean(%q) = %q, want %q", in, got, want)
 		}
 	}
-}
-
-func TestSlug(t *testing.T) {
-	for _, c := range []struct {
-		i           int
-		title, want string
-	}{{0, "Overview", "1-overview"}, {2, "Routing Tree & URL Matching", "3-routing-tree-url-matching"}, {4, "概覽", "5"}} {
-		if got := slug(c.i, c.title); got != c.want {
-			t.Errorf("slug(%d, %q) = %q, want %q", c.i, c.title, got, c.want)
-		}
+	if got := []string{slug(0, "Overview"), slug(2, "Routing Tree & URL Matching"), slug(4, "概覽")}; !slices.Equal(got, []string{"1-overview", "3-routing-tree-url-matching", "5"}) {
+		t.Errorf("slugs: %q", got)
 	}
 }

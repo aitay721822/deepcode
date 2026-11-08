@@ -117,7 +117,7 @@ func TestBench(t *testing.T) {
 		r.parallel = append(r.parallel, n)
 	}
 	rep := report{Started: time.Now().UTC().Format(time.RFC3339), Model: os.Getenv("DEEPCODE_CHAT_MODEL"),
-		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Deepcode: head()}
+		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Temperature: os.Getenv("DEEPCODE_TEMPERATURE"), Deepcode: head()}
 	for i, tg := range targets {
 		if len(picked) > 0 && !slices.Contains(picked, tg.name) {
 			continue
@@ -163,6 +163,13 @@ func setup(t *testing.T, work string) *rig {
 	if model := os.Getenv("DEEPCODE_CHAT_MODEL"); model != "" {
 		llm := &ai.OpenAI{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model,
 			ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Measure: r.meter.add}
+		if s := os.Getenv("DEEPCODE_TEMPERATURE"); s != "" {
+			temp, err := strconv.ParseFloat(s, 64)
+			if err != nil || !(temp >= 0 && temp <= 2) { // NaN too
+				t.Fatalf("DEEPCODE_TEMPERATURE holds %q, which is no number from 0 to 2", s)
+			}
+			llm.Temperature = &temp
+		}
 		pages, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), "0")) // 0, the default, when unset
 		if err != nil || pages < 0 {
 			t.Fatalf("DEEPCODE_WIKI_MAX_PAGES holds %q, which is no number of pages", os.Getenv("DEEPCODE_WIKI_MAX_PAGES"))
@@ -244,11 +251,11 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 		res.Update.Wiki = r.writeWiki(ctx, id, tg.head, fail)
 		query("head pages", &res.Update.Wiki.Pages, pages, snap)
 		if !res.Wiki.Failed && !res.Update.Wiki.Failed { // else every page would count as rewritten
-			// head's pages that are not base's page of the same title with the same text, its links
-			// to the commit aside (a carried page's move to head): those the update wrote
-			query("pages rewritten", &res.Update.PagesRewritten, `SELECT count(*) FROM wiki_pages h WHERE h.snapshot_id = ?1 AND NOT EXISTS (
-				SELECT 1 FROM wiki_pages b WHERE b.snapshot_id = ?2 AND b.title = h.title AND b.content = replace(h.content,
-					'/blob/' || (SELECT commit_sha FROM snapshots WHERE id = ?1) || '/', '/blob/' || (SELECT commit_sha FROM snapshots WHERE id = ?2) || '/'))`, snap, base)
+			if n, err := rewritten(ctx, r.db, base, snap); err != nil {
+				fail("pages rewritten", err)
+			} else {
+				res.Update.PagesRewritten = n
+			}
 		}
 	}
 	for _, c := range []struct {
@@ -270,6 +277,15 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 		fail("page tree", err)
 	} else {
 		res.Tree = tree
+	}
+	if heads, err := headings(ctx, r.db, snap); err != nil {
+		fail("topics", err)
+	} else if n, err := toolingPages(ctx, r.db, snap); err != nil {
+		fail("topics", err)
+	} else if len(res.Tree) > 0 { // a wiki to measure
+		c := cover(tg.topics, heads)
+		c.ToolingPages = n
+		res.Topics = &c
 	}
 	if d, err := r.ix.Graph.Diagram(ctx, snap); err != nil {
 		fail("diagram", err)

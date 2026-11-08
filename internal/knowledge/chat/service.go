@@ -132,7 +132,7 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	// Each evidence event starts the answer: a second one, after a draft that recheck turned down, starts it anew.
 	show := func(used []retrieval.Hit, res retrieval.Result, rounds int) {
 		emit("evidence", map[string]any{"sources": sourceList(used), "fts": res.FTS, "vector": res.Vector, "symbol": res.Symbol,
-			"graph": res.Graph, "rounds": rounds})
+			"named": res.Named, "graph": res.Graph, "rounds": rounds})
 	}
 	write := func(res retrieval.Result, rounds int, note string) (answer, sources string, used []retrieval.Hit, err error) {
 		sources, used = evidence.Format(res.Hits, budget)

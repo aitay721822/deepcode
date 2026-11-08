@@ -21,7 +21,7 @@ Rules:
 - If the sources do not support an answer, say so plainly: in Chinese write 「無法從目前程式碼確認」, otherwise "This can't be confirmed from the current code".
 - When the sources lack code part of the answer needs, name that code in one sentence saying it is not in the provided sources (in Chinese: 不在提供的來源中).
 - Cite in your sentences, not inside code blocks: a code block's source is cited in the sentence before it.
-- Name the functions, methods, types, annotations and settings the answer rests on as the code spells them, in backticks, so the reader can find them.
+- Name the functions, methods, types, annotations and settings the answer rests on as the code spells them, in backticks, so the reader can find them; where an annotation, attribute or decorator on a declaration makes it what the question asks about (a mapped entity, a route, a handler), name that too. When you say what a step does through a call, write the call rather than paraphrase it, even in the call's own words: queue.pushBack(job), in backticks, not "pushes the job to the back".
 - Write only the finished answer. Do not think aloud or check your work in the text (no "Wait", "Let me check", "Actually"), and do not discuss these rules or how the sources are cut.
 - Answer in the language the question is written in, whatever these rules or the sources are written in: an English question gets an English answer. Write Chinese in Traditional Chinese characters as used in Taiwan. Use Markdown with short sections, lists and tables where they help. Do not repeat the question.`
 
@@ -116,13 +116,19 @@ func termsRequest(repo, query string) []ai.Message {
 	return []ai.Message{{Role: "system", Content: termsPrompt}, {Role: "user", Content: "Repository: " + repo + "\nQuestion: " + query}}
 }
 
+// namesLine closes the request with the rule small models most often break,
+// as what comes last weighs most: rejectValue, not "rejects the value";
+// JsonToken, not "the token type"; @EnableCaching, not "enables caching".
+const namesLine = "Name in backticks the types, calls and annotations the answer rests on, as the code writes them, rather than describe them."
+
 // prompt assembles the rules, the recent turns, then the repository, a deep
 // answer's background block ("" for none), the sources, the question, note (a
-// rewrite's, "" for none; it leaves the language alone) and the language line.
+// rewrite's, "" for none; it leaves the language alone), namesLine and the
+// language line.
 func prompt(repo, sha string, history []ai.Message, background, sources, question, note string) []ai.Message {
 	msgs := append([]ai.Message{{Role: "system", Content: systemPrompt}}, history...)
-	return append(msgs, ai.Message{Role: "user", Content: fmt.Sprintf("Repository: %s at commit %s\n\n%sSources:\n\n%sQuestion: %s%s\n\nAnswer in %s.",
-		repo, sha, background, sources, question, note, answerLanguage(question, history))})
+	return append(msgs, ai.Message{Role: "user", Content: fmt.Sprintf("Repository: %s at commit %s\n\n%sSources:\n\n%sQuestion: %s%s\n\n%s Answer in %s.",
+		repo, sha, background, sources, question, note, namesLine, answerLanguage(question, history))})
 }
 
 // retrievalQuery is what a question is searched with.

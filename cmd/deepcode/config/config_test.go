@@ -39,7 +39,8 @@ func TestDefaults(t *testing.T) {
 		cfg.Workers != 2 || cfg.LLMTimeout != 5*time.Minute || cfg.JobTimeout != 2*time.Hour || cfg.SyncEvery != 0 ||
 		cfg.CacheMB != 64 || cfg.MaxRepoMB != 1024 || cfg.MaxFiles != 20000 || cfg.MaxFileKB != 512 || cfg.MaxIndexMB != 200 ||
 		cfg.WikiLanguage != "Traditional Chinese (Taiwan)" || cfg.SessionTTL != 720*time.Hour || cfg.GitProtocols != "http:https" || len(cfg.TrustedProxies) != 0 ||
-		cfg.MaxOutputTokens != 0 || cfg.LLMRPM != 0 || cfg.WikiParallel != 1 || cfg.WikiMaxPages != 64 {
+		cfg.MaxOutputTokens != 0 || cfg.LLMRPM != 0 || cfg.WikiParallel != 1 || cfg.WikiMaxPages != 64 || cfg.Temperature != nil ||
+		cfg.ChatAPI != "completions" {
 		t.Errorf("defaults: addr %q, %+v", addr, cfg)
 	}
 }
@@ -53,8 +54,10 @@ addr: ""
 cache_mb: ""
 chat_api_key: file-key
 chat_model: file-model
+chat_api: responses
 embed_base_url: http://embed:9000/v1
 reasoning_effort: none
+temperature: 0.2
 workers: 4
 llm_timeout: 90s
 sync_every: 0
@@ -73,8 +76,8 @@ trusted_proxies: [127.0.0.1, "10.0.0.0/8"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ChatModel != "file-model" || cfg.EmbedURL != "http://embed:9000/v1" || cfg.ReasoningEffort != "none" ||
-		cfg.Workers != 8 || cfg.LLMTimeout != 90*time.Second || cfg.SyncEvery != 0 ||
+	if cfg.ChatModel != "file-model" || cfg.ChatAPI != "responses" || cfg.EmbedURL != "http://embed:9000/v1" || cfg.ReasoningEffort != "none" ||
+		cfg.Workers != 8 || cfg.LLMTimeout != 90*time.Second || cfg.SyncEvery != 0 || cfg.Temperature == nil || *cfg.Temperature != 0.2 ||
 		!slices.Equal(cfg.TrustedProxies, []string{"127.0.0.1", "10.0.0.0/8"}) {
 		t.Errorf("file then env: %+v", cfg)
 	}
@@ -111,6 +114,10 @@ func TestBadValues(t *testing.T) {
 		{name: "zero timeout", env: map[string]string{"DEEPCODE_JOB_TIMEOUT": "0"}, want: []string{`DEEPCODE_JOB_TIMEOUT="0"`}},
 		{name: "sync too often", env: map[string]string{"DEEPCODE_SYNC_EVERY": "30s"}, want: []string{`DEEPCODE_SYNC_EVERY="30s": want 0 (off) or 1m or more`}},
 		{name: "effort", env: map[string]string{"DEEPCODE_REASONING_EFFORT": "max"}, want: []string{`DEEPCODE_REASONING_EFFORT="max": want one of none, minimal, low`}},
+		{name: "api", env: map[string]string{"DEEPCODE_CHAT_API": "chat"}, want: []string{`DEEPCODE_CHAT_API="chat": want one of completions, responses`}},
+		{name: "temperature", env: map[string]string{"DEEPCODE_TEMPERATURE": "3"}, want: []string{`DEEPCODE_TEMPERATURE="3": want a number from 0 to 2`}},
+		{name: "temperature text", file: "temperature: warm\n", want: []string{`temperature in deepcode.yaml="warm": want a number from 0 to 2`}},
+		{name: "temperature NaN", env: map[string]string{"DEEPCODE_TEMPERATURE": "NaN"}, want: []string{`DEEPCODE_TEMPERATURE="NaN": want a number from 0 to 2`}},
 		{name: "url without scheme", env: map[string]string{"DEEPCODE_CHAT_BASE_URL": "localhost:8080/v1"}, want: []string{`DEEPCODE_CHAT_BASE_URL="(not shown, as it may hold a key)": want an http or https URL`}},
 		{name: "embed url", file: "embed_base_url: ftp://host/v1\n", want: []string{`embed_base_url in deepcode.yaml="ftp://host": want an http or https URL`}},
 		{name: "list for a value", file: "chat_model: [a, b]\n", want: []string{`chat_model in deepcode.yaml="[a b]": want text`}},

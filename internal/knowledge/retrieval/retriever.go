@@ -1,6 +1,6 @@
 // Package retrieval runs hybrid search over a snapshot: FTS5, exact symbol
-// matches and vector similarity, fused with Reciprocal Rank Fusion, then the
-// code the best hits import.
+// matches, vector similarity and the files a query names, fused with
+// Reciprocal Rank Fusion, then the code the best hits import.
 package retrieval
 
 import (
@@ -31,6 +31,7 @@ type Result struct {
 	FTS    int   `json:"fts"`
 	Vector int   `json:"vector"`
 	Symbol int   `json:"symbol"`
+	Named  int   `json:"named"` // chunks of the files the query names (named)
 	Graph  int   `json:"graph"`
 }
 
@@ -62,6 +63,10 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 	if err != nil {
 		return res, err
 	}
+	named, err := r.named(ctx, snapshotID, query)
+	if err != nil {
+		return res, err
+	}
 	var vec []int64
 	if r.Embed != nil {
 		if vec, err = r.vector(ctx, snapshotID, query); err != nil {
@@ -71,15 +76,52 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 			log.Printf("retrieval: vector search unavailable, using FTS5 and symbols only: %v", err)
 		}
 	}
-	ids := fuse(fts, vec, sym)
+	ids := fuse(fts, vec, sym, named)
 	near, err := r.near(ctx, snapshotID, query, ids)
 	if err != nil {
 		return res, err
 	}
 	ids, res.Graph = supplement(ids, near, limit)
-	res.FTS, res.Vector, res.Symbol = len(fts), len(vec), len(sym)
-	res.Hits, err = r.Store.Chunks(ctx, ids)
+	res.FTS, res.Vector, res.Symbol, res.Named = len(fts), len(vec), len(sym), len(named)
+	if res.Hits, err = r.Store.Chunks(ctx, ids); err != nil {
+		return res, err
+	}
+	res.Hits, err = r.declared(ctx, snapshotID, res.Hits)
 	return res, err
+}
+
+// declared joins each hit on a file's header, the licence, package and
+// imports before its first declaration, to the chunk declaring it: alone the
+// header shows no code, yet its imports can win a search for what the code
+// does (OwnerRepository.java's JpaRepository), and the declaration may rank
+// nowhere. Both found are read as one, in the place of the first.
+// ponytail: at search time, as joining them when chunking ranked the eval's
+// Java corpora lower; chunk headers apart if a corpus needs it.
+func (r *Retriever) declared(ctx context.Context, snapshotID int64, hits []Hit) ([]Hit, error) {
+	drop := map[int]bool{}
+	for i, h := range hits {
+		if h.Symbol != "" || h.StartLine != 1 || drop[i] {
+			continue
+		}
+		next, ok, err := r.Store.Following(ctx, snapshotID, h.Path, h.EndLine+1)
+		if err != nil {
+			return nil, err
+		} else if !ok {
+			continue
+		}
+		at := i
+		if j := slices.IndexFunc(hits, func(o Hit) bool { return o.ChunkID == next.ChunkID }); j >= 0 {
+			at, drop[max(i, j)] = min(i, j), true
+		}
+		hits[at] = Hit{ChunkID: h.ChunkID, Path: h.Path, Symbol: next.Symbol, StartLine: h.StartLine, EndLine: next.EndLine, Content: h.Content + "\n" + next.Content}
+	}
+	out := hits[:0]
+	for i, h := range hits {
+		if !drop[i] {
+			out = append(out, h)
+		}
+	}
+	return out, nil
 }
 
 // near ranks, by the query's words, the chunks of the files that the files of

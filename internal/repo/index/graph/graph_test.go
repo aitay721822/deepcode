@@ -165,10 +165,10 @@ func TestLinkStale(t *testing.T) {
 	}
 }
 
-// TestImpact: the unchanged importers of a changed file reach the impact when
-// its declarations changed, not when only its bodies did, and still when the
-// change removed it; a directory the change adds counts as new once a file
-// outside it imports it.
+// TestImpact: the importers of a changed file, changed ones too (gen.go),
+// reach the impact when its declarations changed, not when only its bodies did
+// or it only gained one, and still when the change removed it; a directory the
+// change adds counts as new once a file outside it imports it.
 func TestImpact(t *testing.T) {
 	ctx := context.Background()
 	db := open(t)
@@ -203,9 +203,14 @@ func TestImpact(t *testing.T) {
 	if got, err := g.Impact(ctx, 1, 2, map[string]bool{"internal/pkg/a.go": true}); err != nil || len(got) != 0 {
 		t.Errorf("a body's change reached %v (%v)", got, err)
 	}
+	run(t, db, `INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line, signature)
+		VALUES (2, 'internal/pkg/a.go', 'C', 'C', 'function', 5, 5, 'func C() {')`)
+	if got, err := g.Impact(ctx, 1, 2, map[string]bool{"internal/pkg/a.go": true}); err != nil || len(got) != 0 {
+		t.Errorf("a new declaration reached %v (%v)", got, err)
+	}
 	declare(2, "func A(n int) {")
-	if got, err := g.Impact(ctx, 1, 2, changed); err != nil || !reflect.DeepEqual(got, map[string]bool{"main.go": true}) {
-		t.Errorf("a changed signature reached %v (%v), want main.go", got, err)
+	if got, err := g.Impact(ctx, 1, 2, changed); err != nil || !reflect.DeepEqual(got, map[string]bool{"main.go": true, "internal/tools/gen/gen.go": true}) {
+		t.Errorf("a changed signature reached %v (%v), want main.go and gen.go", got, err)
 	}
 	if got, err := g.NewDirs(ctx, 1, 2, 2); err != nil || !reflect.DeepEqual(got, []string{"internal/tools"}) {
 		t.Errorf("new directories %v (%v)", got, err)

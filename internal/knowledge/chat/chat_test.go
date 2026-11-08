@@ -227,7 +227,8 @@ func TestDeep(t *testing.T) {
 }
 
 // TestRecheck: a draft naming code the repository defines but the sources
-// lack is written again after a search for those names, whose hits go first;
+// lack is written again after a search for those names, whose hits go after
+// the code it cites;
 // one saying code was not shown, after a search for what the model names; one
 // thinking aloud, from the same sources. Each rewrite starts with evidence
 // again, and is read once more. An answer left with no valid citation says
@@ -271,7 +272,7 @@ func TestRecheck(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&body)
 		user, reply := body.Messages[len(body.Messages)-1].Content, "registry"
 		if strings.HasPrefix(body.Messages[0].Content, "You are deepcode") {
-			_, question, _ := strings.Cut(strings.TrimSuffix(user, "\n\nAnswer in English."), "Question: ")
+			_, question, _ := strings.Cut(strings.TrimSuffix(user, "\n\n"+namesLine+" Answer in English."), "Question: ")
 			question, note, _ := strings.Cut(question, "\n\n")
 			if written[question] == len(drafts[question]) {
 				w.WriteHeader(http.StatusBadRequest)
@@ -333,9 +334,18 @@ func TestRecheck(t *testing.T) {
 	if got := compound([]string{"RoutePattern", "Order", "payment_done", "API", "RoutePattern", "a_b", "v2Router"}); !slices.Equal(got, []string{"RoutePattern", "payment_done", "v2Router"}) {
 		t.Errorf("compound: %q", got)
 	}
-	named := slices.IndexFunc(rewrites, func(u string) bool { return strings.Contains(u, "route.go") })
-	if len(rewrites) != 4 || named < 0 || strings.Index(rewrites[named], "route.go") > strings.Index(rewrites[named], "src/store.ts") {
+	// Its first rewrite reads the cited src/store.ts, then the route.go found for the name it lacked.
+	named := slices.IndexFunc(rewrites, func(u string) bool { return strings.Contains(u, "Question: How does subscribe work?") })
+	if len(rewrites) != 4 || named < 0 || strings.Index(rewrites[named], "route.go") < strings.Index(rewrites[named], "src/store.ts") {
 		t.Errorf("rewrites: %q", rewrites)
+	}
+	// What the draft cites takes turns with what the round found, ahead of the rest.
+	hits := []retrieval.Hit{{Path: "a.go", StartLine: 1, EndLine: 9}, {Path: "b.go", StartLine: 1, EndLine: 9}, {Path: "b.go", StartLine: 10, EndLine: 19}}
+	if kept, rest := cited("It runs [b.go:12-13], not [c.go:1].", hits); !slices.Equal(kept, hits[2:]) || !slices.Equal(rest, hits[:2]) {
+		t.Errorf("cited: %v, rest %v", kept, rest)
+	}
+	if got := alternate(hits[:1], hits[1:]); !slices.Equal(got, hits) || len(alternate(nil, hits[1:])) != 2 {
+		t.Errorf("alternate: %v", got)
 	}
 }
 
@@ -417,7 +427,7 @@ func TestLanguage(t *testing.T) {
 	} {
 		for _, note := range []string{"", rewriteNote} { // the rewrite's English note leaves the language alone
 			msgs := prompt("go-chi/chi", "abc", nil, "", "", q, note)
-			if got := msgs[len(msgs)-1].Content; !strings.HasSuffix(got, note+"\n\nAnswer in "+want+".") {
+			if got := msgs[len(msgs)-1].Content; !strings.HasSuffix(got, note+"\n\n"+namesLine+" Answer in "+want+".") {
 				t.Errorf("%q: %q", q, got)
 			}
 		}

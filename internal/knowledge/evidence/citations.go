@@ -30,6 +30,11 @@ var (
 	// rangeRe matches a bare range that continues the previous reference's
 	// file, like the 99-100 in [a.go:43-51, 99-100].
 	rangeRe = regexp.MustCompile(`^L?\d+(?:-L?\d+)?$`)
+	// labelRe matches a label some models put before a reference: [source: a.go:3-9].
+	labelRe = regexp.MustCompile(`(?i)^sources?:\s*`)
+	// pathlessRe matches lines cited without their file, [55-64], or after a
+	// source's number, [5:1-29].
+	pathlessRe = regexp.MustCompile(`\[(?:\d+:)?L?\d+(?:-L?\d+)?\]`)
 	// fenceRe matches a fenced code block, or one left open at the end.
 	fenceRe = regexp.MustCompile("(?s)```.*?(?:```|$)")
 	// linkText escapes what would end a link's text early: a path may hold
@@ -60,7 +65,7 @@ func LinkCitations(text string, used []retrieval.Hit, link func(Citation) string
 			seen[c] = true
 			cites = append(cites, c)
 		}
-		return fmt.Sprintf("[%s:%d-%d](%s)", linkText.Replace(c.Path), c.StartLine, c.EndLine, link(c))
+		return Link(c, link(c))
 	}
 	fences := fenceRe.FindAllStringIndex(text, -1)
 	prose := []byte(text) // the code blocks blanked, so that their backticks pair with none outside
@@ -118,6 +123,17 @@ func LinkCitations(text string, used []retrieval.Hit, link func(Citation) string
 	return b.String(), cites
 }
 
+// Pathless reports whether text, outside code, cites lines without naming
+// their file, [55-64] or [5:1-29], which LinkCitations leaves as written.
+func Pathless(text string) bool {
+	return pathlessRe.MatchString(inlineRe.ReplaceAllString(fenceRe.ReplaceAllString(text, ""), ""))
+}
+
+// Link is the Markdown link LinkCitations writes for citation c, to url.
+func Link(c Citation, url string) string {
+	return fmt.Sprintf("[%s:%d-%d](%s)", linkText.Replace(c.Path), c.StartLine, c.EndLine, url)
+}
+
 func inside(spans [][]int, i int) bool {
 	for _, s := range spans {
 		if i >= s[0] && i < s[1] {
@@ -132,7 +148,7 @@ func inside(spans [][]int, i int) bool {
 func parseRefs(group string) ([]ref, bool) {
 	var refs []ref
 	for _, part := range strings.FieldsFunc(group, func(r rune) bool { return r == ',' || r == ';' }) {
-		part = strings.TrimSpace(strings.ReplaceAll(part, `\_`, "_")) // Markdown-escaped underscores
+		part = labelRe.ReplaceAllString(strings.TrimSpace(strings.ReplaceAll(part, `\_`, "_")), "") // Markdown-escaped underscores
 		if len(refs) > 0 && rangeRe.MatchString(part) {
 			part = refs[len(refs)-1].path + ":" + part
 		}
@@ -166,6 +182,15 @@ func verify(r ref, used []retrieval.Hit) (Citation, bool) {
 				if match != "" && match != h.Path {
 					return Citation{}, false
 				}
+				match = h.Path
+			}
+		}
+		// Or with folders put in front, src/lib/express.js for lib/express.js:
+		// then it is the longest shown path it ends with (one the loop above
+		// found is longer still, so stays), in a folder itself, as a root
+		// main.go is no guess for a cited cmd/foo/main.go.
+		for _, h := range used {
+			if strings.HasSuffix(r.path, "/"+h.Path) && len(h.Path) > len(match) && strings.Contains(h.Path, "/") {
 				match = h.Path
 			}
 		}

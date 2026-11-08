@@ -155,7 +155,7 @@ func TestDetect(t *testing.T) {
 		"src/a.ts": "typescript", "src/b.tsx": "tsx", "x.mjs": "javascript", "cmd/main.go": "go",
 		"README.md": "markdown", "Dockerfile": "dockerfile", "docs/guide.mdx": "markdown",
 		"node_modules/x/index.js": "", "vendor/a/b.go": "", "dist/app.js": "", "a.min.js": "",
-		"package-lock.json": "", "go.sum": "", "logo.png": "",
+		"package-lock.json": "", "go.sum": "", "logo.png": "", "src/test/jmeter/plan.jmx": "xml",
 		// .NET Framework and Core, Java, Rust
 		"Shop.Web/Shop.Web.csproj": "msbuild", "Legacy/packages.config": "xml", "Legacy/Web.config": "xml", "eShop.slnx": "xml",
 		"Shop.sln": "sln", "Views/Home/Index.cshtml": "razor", "Default.aspx": "aspnet", "Global.asax": "aspnet",
@@ -188,6 +188,18 @@ func TestSecondary(t *testing.T) {
 		".github/workflows/ci.yml": true, "web/.storybook/main.ts": true, ".eslintrc.js": false, "src/a.b/c.go": false, "a/.b": false} {
 		if Secondary(p) != want {
 			t.Errorf("Secondary(%q) = %v", p, !want)
+		}
+	}
+}
+
+// TestAside: what a secondary file is; prose outside docs/ is a guide unless
+// it is a README, changelog or community file.
+func TestAside(t *testing.T) {
+	for p, want := range map[string]string{".github/ISSUE_TEMPLATE/bug.md": Tooling, "a_test.go": Tests, "examples/rest/main.go": Examples,
+		"docs/README.md": Docs, "UserGuide.md": Docs, "Troubleshooting.md": Docs, "README.md": Tooling, "axum/CHANGELOG.md": Tooling,
+		"CODE_OF_CONDUCT.md": Tooling, "Release-Process.md": Tooling, "main.go": ""} {
+		if got := Aside(p); got != want {
+			t.Errorf("Aside(%q) = %q, want %q", p, got, want)
 		}
 	}
 }

@@ -57,8 +57,9 @@ type File struct {
 
 // Version is raised whenever what Detect, Generated or Parse make of a file
 // changes: a snapshot an older version indexed lends the next none of its
-// files' rows, so each is read again. 1 added C#, Java and Rust.
-const Version = 1
+// files' rows, so each is read again. 1 added C#, Java and Rust; 2, JMeter
+// test plans.
+const Version = 2
 
 // HasGrammar reports whether Parse reads lang; it finds nothing in others.
 func HasGrammar(lang string) bool { return languages[lang] != nil }

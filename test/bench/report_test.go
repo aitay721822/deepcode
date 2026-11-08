@@ -16,6 +16,7 @@ type report struct {
 	Deepcode        string   `json:"deepcode"` // the commit measured
 	Model           string   `json:"model"`
 	ReasoningEffort string   `json:"reasoningEffort"`
+	Temperature     string   `json:"temperature"`
 	Repos           []result `json:"repos"`
 }
 
@@ -40,6 +41,7 @@ type result struct {
 	Wiki         *wikiRun  `json:"wiki"`         // the first wiki, at base: its last run
 	WikiRuns     []wikiRun `json:"wikiRuns"`     // each run of it, by pages written at a time
 	Tree         []string  `json:"pageTree"`     // head's wiki, as a Markdown list
+	Topics       *coverage `json:"topicCoverage"`
 	Update       struct {
 		Failed         bool     `json:"failed"` // the head was not indexed: the rest is empty
 		ChangedFiles   int      `json:"changedFiles"`
@@ -119,7 +121,7 @@ func (rep report) write(dir string) error {
 func (rep report) markdown() string {
 	var b strings.Builder
 	p := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	p("# deepcode bench\n\nStarted %s · deepcode %s · model %s · reasoning effort %q\n", rep.Started, rep.Deepcode, rep.Model, rep.ReasoningEffort)
+	p("# deepcode bench\n\nStarted %s · deepcode %s · model %s · reasoning effort %q · temperature %q\n", rep.Started, rep.Deepcode, rep.Model, rep.ReasoningEffort, rep.Temperature)
 	p("The first index's time includes fetching the repository from GitHub. A repository with errors (listed below the tables) has numbers that are partial.\n")
 	p("## Index and graph (head)\n\n| Repository | Files | Generated | Languages | Chunks | Symbols | Import edges | Diagram edges | First index | Errors |\n|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
@@ -161,6 +163,13 @@ func (rep report) markdown() string {
 			index = "failed"
 		}
 		p("| %s | %s | %s | %s | %s | %s |", r.Repo, changed, index, wiki, pages, calls)
+	}
+	p("\n## Topic coverage (head)\n\nDeepWiki's topics a page title or \"##\" or \"###\" heading names, a word of a name like WelcomeController counting; test and tooling pages cite only tests, CI, manifests or editor settings.\n\n| Repository | Covered | Pages | Test and tooling pages | Missing |\n|---|---|---|---|---|")
+	for _, r := range rep.Repos {
+		if c := r.Topics; c != nil {
+			p("| %s | %d of %d (%d%%) | %d | %d (%d%%) | %s |", r.Repo, c.Covered, c.Topics, 100*c.Covered/max(c.Topics, 1), r.Pages,
+				c.ToolingPages, 100*c.ToolingPages/max(r.Pages, 1), cmp.Or(strings.Join(c.Missing, ", "), "–"))
+		}
 	}
 	p("\n## Retrieval eval (head)\n\n| Repository | Questions | recall@10 | MRR |\n|---|---|---|---|")
 	for _, r := range rep.Repos {
@@ -274,10 +283,11 @@ func TestMarkdown(t *testing.T) {
 	broken.Answers = []answer{{Question: "q", Error: "timeout"}}
 	ok.Answers = []answer{{Question: "k", Citations: 2, Missing: []string{"Mount"}, SelfTalk: true, OtherLanguage: true}}
 	ok.WikiRuns, ok.Tree = []wikiRun{{Parallel: 1, Seconds: 20}, {Parallel: 2, Seconds: 12}}, []string{"- 1 Overview", "- 2 Core", "  - 2.1 Mux"}
+	ok.Pages, ok.Topics = 10, &coverage{Topics: 4, Covered: 3, Missing: []string{"SSE"}, ToolingPages: 2}
 	md := report{Repos: []result{ok, broken}}.markdown()
 	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
 		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 0.0 s | 0.0 s | 2 | fail: no Mount | yes | other |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
-		"0 of 2 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language."} {
+		"0 of 2 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the report lacks %q:\n%s", want, md)
 		}

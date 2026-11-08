@@ -37,11 +37,13 @@ var defaults = map[string]any{
 	"chat_base_url":     "https://api.openai.com/v1",
 	"chat_api_key":      "",
 	"chat_model":        "", // "" turns chat and the wiki off
-	"embed_base_url":    "", // "" = chat_base_url
-	"embed_api_key":     "", // "" = chat_api_key
-	"embed_model":       "", // "" turns vector search off
-	"reasoning_effort":  "", // "" leaves it to the server
-	"max_output_tokens": 0,  // 0 leaves it to the server
+	"chat_api":          "completions",
+	"embed_base_url":    "",  // "" = chat_base_url
+	"embed_api_key":     "",  // "" = chat_api_key
+	"embed_model":       "",  // "" turns vector search off
+	"reasoning_effort":  "",  // "" leaves it to the server
+	"temperature":       nil, // unset leaves it to the server; a number, as 0.2, in the file
+	"max_output_tokens": 0,   // 0 leaves it to the server
 	"llm_timeout":       5 * time.Minute,
 	"llm_rpm":           0, // 0 = unlimited
 
@@ -66,6 +68,10 @@ var defaults = map[string]any{
 
 // efforts are the reasoning_effort values OpenAI-compatible servers take.
 var efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+
+// apis are the APIs a chat model can be asked by: Chat Completions and the
+// Responses API (ai.Completions, ai.Responses).
+var apis = []string{"completions", "responses"}
 
 // secrets are never shown in an error, which ends up in the log.
 var secrets = []string{"chat_api_key", "embed_api_key", "admin_password", "secret_key"}
@@ -106,10 +112,12 @@ func Load() (cfg app.Config, addr string, err error) {
 		DataDir: p.str("data"),
 
 		ChatURL: chatURL, ChatKey: chatKey, ChatModel: p.str("chat_model"),
+		ChatAPI:         p.oneOf("chat_api", apis),
 		EmbedURL:        cmp.Or(p.url("embed_base_url"), chatURL),
 		EmbedKey:        cmp.Or(p.str("embed_api_key"), chatKey),
 		EmbedModel:      p.str("embed_model"),
 		ReasoningEffort: p.oneOf("reasoning_effort", efforts),
+		Temperature:     p.temperature("temperature"),
 		MaxOutputTokens: p.whole("max_output_tokens"),
 		LLMTimeout:      p.duration("llm_timeout"),
 		LLMRPM:          p.whole("llm_rpm"),
@@ -146,7 +154,7 @@ func Load() (cfg app.Config, addr string, err error) {
 }
 
 // DataDir reads only the data directory, for backup and passwd without
-// -data: a bad value in another setting must not stand in the way of a backup
+// --data: a bad value in another setting must not stand in the way of a backup
 // or a password reset. A config file that cannot be read still stops them.
 func DataDir() (string, error) {
 	v, err := read()
@@ -281,6 +289,20 @@ func (p *parser) url(key string) string {
 		p.fail(key, shown, "an http or https URL, such as https://api.openai.com/v1")
 	}
 	return s
+}
+
+// temperature reads a sampling temperature from 0 to 2, or nil for "".
+func (p *parser) temperature(key string) *float64 {
+	s, ok := p.get(key)
+	if s == "" {
+		return nil
+	}
+	t, err := strconv.ParseFloat(s, 64)
+	if ok && (err != nil || !(t >= 0 && t <= 2)) { // NaN too
+		p.fail(key, s, "a number from 0 to 2, such as 0.2")
+		return nil
+	}
+	return &t
 }
 
 // oneOf reads one of the allowed values, or "".

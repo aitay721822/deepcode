@@ -15,7 +15,7 @@ var byExt = map[string]string{
 	// indexed as plain text: chunked by lines, no symbols
 	".md": "markdown", ".mdx": "markdown", ".rst": "text", ".txt": "text",
 	".json": "json", ".jsonc": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml", ".ini": "ini",
-	".xml": "xml", ".html": "html", ".htm": "html", ".vue": "html", ".svelte": "html",
+	".xml": "xml", ".jmx": "xml", ".html": "html", ".htm": "html", ".vue": "html", ".svelte": "html", // .jmx: JMeter test plans
 	".css": "css", ".scss": "scss", ".less": "less", ".properties": "properties",
 	".py": "python", ".rb": "ruby", ".kt": "kotlin", ".kts": "kotlin", ".fs": "fsharp",
 	".swift": "swift", ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".hpp": "cpp",
@@ -148,23 +148,72 @@ func Generated(p, content string) bool {
 // shows how the code is used, not how its parts depend on each other. Whole
 // segments only, so latest.go or contest.go stay code.
 // ponytail: fixed path globs; learn them per repository if other layouts rank badly.
-var SecondaryGlobs = []string{
-	"*_test.*", "*.test.*", "*.spec.*", "test_*", "*/test_*", // file names: Go, JS/TS, Python
-	"*Tests.cs", "*Test.cs", "*Tests.vb", "*Test.java", "*Tests.java", "*IT.java", // C#, VB, Java (src/test/ below)
-	"test/*", "*/test/*", "tests/*", "*/tests/*", "__tests__/*", "*/__tests__/*", "spec/*", "*/spec/*", "e2e/*", "*/e2e/*",
-	"*Tests/*", "benches/*", "*/benches/*", // .NET test projects (Foo.UnitTests/), Rust benchmarks
-	"docs/*", "*/docs/*", "examples/*", "*/examples/*", "_examples/*", "*/_examples/*", "*.md", "*.mdx",
-	".*/*", "*/.*/*", // hidden folders
-}
+var SecondaryGlobs = slices.Concat(hiddenGlobs, testGlobs, exampleGlobs, docGlobs, proseGlobs)
+
+var (
+	hiddenGlobs = []string{".*/*", "*/.*/*"}
+	testGlobs   = []string{
+		"*_test.*", "*.test.*", "*.spec.*", "test_*", "*/test_*", // file names: Go, JS/TS, Python
+		"*Tests.cs", "*Test.cs", "*Tests.vb", "*Test.java", "*Tests.java", "*IT.java", // C#, VB, Java (src/test/ below)
+		"test/*", "*/test/*", "tests/*", "*/tests/*", "__tests__/*", "*/__tests__/*", "spec/*", "*/spec/*", "e2e/*", "*/e2e/*",
+		"*Tests/*", "benches/*", "*/benches/*", // .NET test projects (Foo.UnitTests/), Rust benchmarks
+	}
+	exampleGlobs = []string{"examples/*", "*/examples/*", "_examples/*", "*/_examples/*"}
+	docGlobs     = []string{"docs/*", "*/docs/*"}
+	proseGlobs   = []string{"*.md", "*.mdx"} // elsewhere: a guide, or a README, changelog or contribution guide
+	// community are how a project's READMEs, changelogs and community files
+	// are named, in lower case: tooling, not guides to the code.
+	community = []string{"readme", "changelog", "changes", "history", "contributing", "code_of_conduct", "code-of-conduct",
+		"security", "license", "licence", "notice", "authors", "maintainers", "governance", "support", "release", "funding",
+		"triager", "collaborator"}
+)
 
 // Secondary reports whether path p matches one of SecondaryGlobs.
-func Secondary(p string) bool {
-	for _, g := range SecondaryGlobs {
-		if glob(g, p) {
-			return true
+func Secondary(p string) bool { return Aside(p) != "" }
+
+// The kinds of secondary files, as Aside names them.
+const (
+	Tests    = "tests" // and benchmarks
+	Examples = "examples"
+	Docs     = "docs"
+	Tooling  = "tooling" // hidden folders (CI, editor settings, issue templates) and the project's READMEs and changelogs
+)
+
+// Aside is the kind of secondary file p is, "" for none: in a hidden folder
+// first (.github/ISSUE_TEMPLATE/bug.md is tooling), then a test, an example,
+// a document in a docs folder, or other prose: a README, changelog or
+// community file is tooling, any other a guide (gson's UserGuide.md).
+func Aside(p string) string {
+	for _, k := range []struct {
+		kind  string
+		globs []string
+	}{{Tooling, hiddenGlobs}, {Tests, testGlobs}, {Examples, exampleGlobs}, {Docs, docGlobs}, {Docs, proseGlobs}} {
+		if !slices.ContainsFunc(k.globs, func(g string) bool { return glob(g, p) }) {
+			continue
 		}
+		if name := strings.ToLower(path.Base(p)); k.globs[0] == proseGlobs[0] &&
+			slices.ContainsFunc(community, func(c string) bool { return strings.HasPrefix(name, c) }) {
+			return Tooling
+		}
+		return k.kind
 	}
-	return false
+	return ""
+}
+
+// configLanguages are those of build, configuration, script and prose files.
+var configLanguages = map[string]bool{"json": true, "yaml": true, "toml": true, "ini": true, "xml": true, "properties": true,
+	"msbuild": true, "sln": true, "gradle": true, "go.mod": true, "dockerfile": true, "makefile": true, "cmake": true, "hcl": true,
+	"bash": true, "powershell": true, "markdown": true, "text": true}
+
+// Config reports a build, configuration, script or prose file, by its
+// language or its name: a tool's *.config.* or a dotfile even when it is
+// JavaScript, a Gradle build in Kotlin. A folder of only these holds no code
+// of its own. XAML and resources count, as a folder of views is code.
+func Config(p string) bool {
+	base := strings.ToLower(path.Base(p))
+	lang, _ := Detect(p)
+	return configLanguages[lang] && !strings.HasSuffix(base, ".xaml") && !strings.HasSuffix(base, ".resx") ||
+		strings.Contains(base, ".config.") || strings.HasPrefix(base, ".") || strings.HasSuffix(base, ".gradle.kts")
 }
 
 // glob matches s against pattern whose only wildcard is *, which spans any

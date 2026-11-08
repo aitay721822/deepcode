@@ -1,9 +1,9 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/cobra"
 
 	"deepcode/cmd/deepcode/config"
 	"deepcode/internal/app"
@@ -23,17 +24,27 @@ import (
 	"deepcode/internal/platform/storage"
 )
 
-// serve runs the HTTP server and the background pipeline until SIGINT/SIGTERM.
-func serve(args []string) error {
-	cfg, addr, err := config.Load()
+func serveCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Serve the UI and API and run the background jobs until Ctrl-C or SIGTERM",
+		Args:  cobra.NoArgs,
+	}
+	addr := cmd.Flags().String("addr", "", "listen address (default: the configured one)")
+	data := dataFlag(cmd)
+	cmd.RunE = func(*cobra.Command, []string) error { return serve(*addr, *data) }
+	return cmd
+}
+
+// serve runs the HTTP server and the background pipeline until SIGINT/SIGTERM,
+// listening on addr and keeping its data in dir, or the configured ones for "".
+func serve(addr, dir string) error {
+	cfg, configured, err := config.Load()
 	if err != nil {
 		return err
 	}
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	fs.StringVar(&addr, "addr", addr, "listen address")
-	fs.StringVar(&cfg.DataDir, "data", cfg.DataDir, "data directory")
-	fs.Parse(args)
-	data, err := filepath.Abs(cfg.DataDir)
+	addr = cmp.Or(addr, configured)
+	data, err := filepath.Abs(cmp.Or(dir, cfg.DataDir))
 	if err != nil {
 		return err
 	}

@@ -4,48 +4,43 @@ package main
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+
+	"github.com/spf13/cobra"
 
 	"deepcode/cmd/deepcode/config"
 	"deepcode/internal/platform/storage"
 )
 
-const usage = `usage:
-  deepcode serve  [-addr 127.0.0.1:8080] [-data ./data]
-  deepcode backup [-data ./data] <output.db>
-  deepcode passwd [-data ./data] <username>   (reads the new password from stdin)
+func main() {
+	root := &cobra.Command{
+		Use:   "deepcode",
+		Short: "A code wiki: repositories indexed, written up and asked about",
+		Long: `deepcode serves the UI, API and background indexing from one process.
 
 Settings come from deepcode.yaml (or the file DEEPCODE_CONFIG names) and
 DEEPCODE_* environment variables, which override it; flags override both.
-See README.md.`
-
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, usage)
-		os.Exit(2)
+See README.md.`,
+		// Wrong flags or arguments show the usage; a command that fails, its error alone.
+		PersistentPreRun: func(cmd *cobra.Command, _ []string) { cmd.SilenceUsage = true },
+		SilenceErrors:    true,
 	}
-	var err error
-	switch os.Args[1] {
-	case "serve":
-		err = serve(os.Args[2:])
-	case "backup":
-		err = backup(os.Args[2:])
-	case "passwd":
-		err = passwd(os.Args[2:])
-	default:
-		fmt.Fprintln(os.Stderr, usage)
-		os.Exit(2)
-	}
-	if err != nil {
+	root.AddCommand(serveCmd(), backupCmd(), passwdCmd())
+	if err := root.Execute(); err != nil {
 		log.Fatal(err)
 	}
 }
 
+// dataFlag adds --data to cmd: the data directory, in place of the configured
+// one. Given it, backup and passwd do not read the config at all (openData).
+func dataFlag(cmd *cobra.Command) *string {
+	return cmd.Flags().String("data", "", "data directory (default: the configured one)")
+}
+
 // openData opens the database in the data directory dir, which must exist;
-// dir "" is the configured one. Given -data, the config is not read at all,
+// dir "" is the configured one. Given --data, the config is not read at all,
 // so a broken one cannot block a backup or a password reset.
 func openData(dir string) (*sql.DB, error) {
 	if dir == "" {

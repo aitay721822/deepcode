@@ -4,11 +4,15 @@
 package outline
 
 import (
+	"cmp"
 	"encoding/json"
+	"maps"
+	"path"
 	"slices"
 	"strings"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/index/graph"
 )
 
@@ -60,9 +64,10 @@ func Size(files, maxPages int) (pages, sections int) {
 	return pages, min(12, max(2, (pages+3)/6))
 }
 
-// Section is a part of the code a section of the wiki covers.
+// Section is a part of the repository a section of the wiki covers.
 type Section struct {
-	Dirs  []string // largest first; "." is the root, "" the tests, examples and docs
+	Kind  string   // "" for code, else what analyzer.Aside names: tests, examples, docs or tooling
+	Dirs  []string // largest first; "." is the root; none for an aside
 	Files []string
 }
 
@@ -71,23 +76,42 @@ type Section struct {
 // with a heap if monorepos of thousands of packages plan badly.
 const maxUnits = 150
 
+// asides are the kinds of files outside the code, in the order their sections
+// follow the code's.
+var asides = []string{analyzer.Docs, analyzer.Examples, analyzer.Tests, analyzer.Tooling}
+
 // Sections groups files by their part of the code (parts maps each to its
-// directory, "" for a test, example or doc) into at most n sections: the
-// directories that import each other most per file go together, then those
-// whose largest folders share a parent, then the smallest. Tests, examples
-// and docs are one section of their own, the last; the others go largest
-// first.
+// directory, "" for a test, example, doc or hidden file) into about n
+// sections: the directories that import each other most per file go
+// together, then those whose largest folders share a parent, then the
+// smallest. The docs, examples, tests and tooling then follow in a section
+// each; tooling takes a directory of only build and configuration files
+// (analyzer.Config) too, so a manifest is no section of its own. The code's
+// sections go largest first.
 func Sections(parts map[string]string, edges []graph.DirEdge, n int) []Section {
-	byDir := map[string][]string{}
+	byDir, aside := map[string][]string{}, map[string][]string{}
 	for f, d := range parts {
-		byDir[d] = append(byDir[d], f)
+		if d == "" {
+			k := cmp.Or(analyzer.Aside(f), analyzer.Docs) // what Parts set aside, under a name of its own
+			aside[k] = append(aside[k], f)
+		} else {
+			byDir[d] = append(byDir[d], f)
+		}
 	}
-	var aside []Section
-	if files := byDir[""]; len(files) > 0 {
-		slices.Sort(files)
-		aside, n = []Section{{Dirs: []string{""}, Files: files}}, n-1
-		delete(byDir, "")
+	for d, files := range byDir {
+		if !slices.ContainsFunc(files, func(f string) bool { return !analyzer.Config(f) }) {
+			aside[analyzer.Tooling] = append(aside[analyzer.Tooling], files...)
+			delete(byDir, d)
+		}
 	}
+	var tail []Section
+	for _, k := range asides {
+		if files := aside[k]; len(files) > 0 {
+			slices.Sort(files)
+			tail = append(tail, Section{Kind: k, Files: files})
+		}
+	}
+	n = max(1, n-len(tail))
 	dirs := slices.Sorted(func(yield func(string) bool) {
 		for d := range byDir {
 			if !yield(d) {
@@ -150,7 +174,7 @@ func Sections(parts map[string]string, edges []graph.DirEdge, n int) []Section {
 		slices.Sort(out[i].Files)
 	}
 	slices.SortStableFunc(out, func(a, b Section) int { return len(b.Files) - len(a.Files) })
-	return append(out, aside...)
+	return append(out, tail...)
 }
 
 // kin is how near two directories, given by folder, are: half an import for
@@ -175,28 +199,79 @@ func Fits(sectioned bool, files, maxPages int) bool {
 // maxLines is the most lines a file weighs in Budgets.
 const maxLines = 2000
 
-// Budgets shares pages out among sections as the pages under each: one each,
-// then each next page to the section with the fewest for its lines of code
-// (lines holds each file's; one it lacks counts one, and none more than
+// linesPerPage is the fewest weighed lines a section needs for each page past
+// its first: about what one of DeepWiki's pages covers, so that a section of
+// many short files is not spread over pages that each retell the same code.
+const linesPerPage = 100
+
+// light are the languages of the code's styles and data, which weigh less.
+var light = []string{"css", "scss", "less", "sql"}
+
+// Budgets shares pages out among sections, a section's own page among them:
+// one each, then one for each of a section's directories, round by round, and
+// then each next page to the section with the fewest for its weight: its
+// lines (lines holds each file's; one it lacks counts one, and none more than
 // maxLines, as a bundled file need not be marked generated), so a core of a
-// few long files is not outweighed by many short ones; a test, example or doc
-// counts half, and no section takes more than twice its files.
+// few long files is not outweighed by many short ones, though a stylesheet,
+// SQL or a configuration file in the code weighs a quarter. No section takes
+// more than three times its files of code and one, nor a page for less than
+// linesPerPage; docs and examples weigh a third, as they show the code rather
+// than being it, and take a third and a fifth of the pages at most, though
+// docs a page for each long guide first (up to three: a guide is a topic of
+// its own); tests and tooling take one page in twelve at most, four and three,
+// so together no more than a fifth: what a reader comes for is the code.
 func Budgets(sections []Section, lines map[string]int, pages int) []int {
-	out := make([]int, len(sections))
-	weight := make([]float64, len(sections))
+	n := len(sections)
+	out, weight, limit, floor := make([]int, n), make([]float64, n), make([]int, n), make([]int, n)
 	for i, s := range sections {
-		out[i] = 1
+		code := 0
 		for _, f := range s.Files {
-			weight[i] += float64(min(max(lines[f], 1), maxLines))
+			w := float64(min(max(lines[f], 1), maxLines))
+			if lang, _ := analyzer.Detect(f); s.Kind == "" && (analyzer.Config(f) || slices.Contains(light, lang)) {
+				w /= 4
+			} else {
+				code++
+			}
+			weight[i] += w
 		}
-		if slices.Equal(s.Dirs, []string{""}) {
-			weight[i] /= 2
+		limit[i] = min(3*max(code, 1)+1, 1+int(weight[i])/linesPerPage)
+		out[i], floor[i] = 1, min(limit[i], max(1, len(s.Dirs)+1))
+		if len(s.Dirs) < 2 {
+			floor[i] = 1
+		}
+		switch s.Kind {
+		case analyzer.Docs:
+			weight[i] /= 3
+			limit[i] = min(limit[i], max(1, pages/3))
+			long := 0
+			for _, f := range s.Files {
+				if lines[f] >= 2*linesPerPage {
+					long++
+				}
+			}
+			floor[i] = min(limit[i], max(1, long), 3)
+		case analyzer.Examples:
+			weight[i] /= 3
+			limit[i] = min(limit[i], max(1, pages/5))
+		case analyzer.Tests:
+			limit[i] = min(limit[i], 4, max(1, pages/12))
+		case analyzer.Tooling:
+			limit[i] = min(limit[i], 3, max(1, pages/12))
 		}
 	}
-	for left := pages - len(sections); left > 0; left-- {
+	left := pages - n
+	for more := true; more && left > 0; {
+		more = false
+		for i := range out {
+			if out[i] < floor[i] && left > 0 {
+				out[i], left, more = out[i]+1, left-1, true
+			}
+		}
+	}
+	for ; left > 0; left-- {
 		best := -1
 		for i := range out {
-			if out[i] < 2*len(sections[i].Files) && (best < 0 || float64(out[i])/weight[i] < float64(out[best])/weight[best]) {
+			if out[i] < limit[i] && (best < 0 || float64(out[i])/weight[i] < float64(out[best])/weight[best]) {
 				best = i
 			}
 		}
@@ -205,6 +280,36 @@ func Budgets(sections []Section, lines map[string]int, pages int) []int {
 		}
 		out[best]++
 	}
+	return out
+}
+
+// Pick is at most n of files to show the model: the longest of each
+// directory in turn, the directories with the most lines first, so that no
+// directory goes unseen for a sibling's many files (alphabetical order would
+// show axum-core/ and leave axum/ out); in path order.
+func Pick(files []string, lines map[string]int, n int) []string {
+	if len(files) <= n {
+		return files
+	}
+	byDir, total := map[string][]string{}, map[string]int{}
+	for _, f := range files {
+		d := path.Dir(f)
+		byDir[d], total[d] = append(byDir[d], f), total[d]+lines[f]
+	}
+	dirs := slices.Sorted(maps.Keys(byDir))
+	slices.SortStableFunc(dirs, func(a, b string) int { return total[b] - total[a] })
+	for _, d := range dirs {
+		slices.SortStableFunc(byDir[d], func(a, b string) int { return lines[b] - lines[a] })
+	}
+	var out []string
+	for i := 0; len(out) < n; i++ {
+		for _, d := range dirs {
+			if i < len(byDir[d]) && len(out) < n {
+				out = append(out, byDir[d][i])
+			}
+		}
+	}
+	slices.Sort(out)
 	return out
 }
 

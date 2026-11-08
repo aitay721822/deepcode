@@ -24,23 +24,28 @@ func TestSize(t *testing.T) {
 }
 
 // TestSections: the directories importing each other most per file merge
-// first, then siblings, into n sections largest first; tests, examples and
-// docs are the last.
+// first, then siblings, into n sections largest first, the asides' among the
+// n; docs, examples, tests and tooling follow, a directory of only build and
+// configuration files and a README among the tooling.
 func TestSections(t *testing.T) {
-	parts := map[string]string{"a/x.go": "a", "a/y.go": "a", "b/z.go": "b", "c/w.go": "c", "lib/p/q.go": "lib/p", "lib/r/s.go": "lib/r", "a/x_test.go": ""}
+	parts := map[string]string{"a/x.go": "a", "a/y.go": "a", "b/z.go": "b", "c/w.go": "c", "lib/p/q.go": "lib/p", "lib/r/s.go": "lib/r",
+		"a/x_test.go": "", "docs/guide.md": "", "examples/hello/main.go": "", "README.md": "", "build/pom.xml": "build"}
 	edges := []graph.DirEdge{{From: "a", To: "b", Count: 5}, {From: "c", To: "a", Count: 2}}
 	want := []Section{
 		{Dirs: []string{"a", "b", "c"}, Files: []string{"a/x.go", "a/y.go", "b/z.go", "c/w.go"}},
 		{Dirs: []string{"lib/p", "lib/r"}, Files: []string{"lib/p/q.go", "lib/r/s.go"}},
-		{Dirs: []string{""}, Files: []string{"a/x_test.go"}},
+		{Kind: "docs", Files: []string{"docs/guide.md"}},
+		{Kind: "examples", Files: []string{"examples/hello/main.go"}},
+		{Kind: "tests", Files: []string{"a/x_test.go"}},
+		{Kind: "tooling", Files: []string{"README.md", "build/pom.xml"}},
 	}
-	if got := Sections(parts, edges, 3); !reflect.DeepEqual(got, want) {
-		t.Errorf("3 sections: %+v", got)
+	if got := Sections(parts, edges, 6); !reflect.DeepEqual(got, want) {
+		t.Errorf("6 sections: %+v", got)
 	}
-	if got := Sections(parts, edges, 9); len(got) != 6 || got[0].Dirs[0] != "a" || got[5].Dirs[0] != "" {
+	if got := Sections(parts, edges, 12); len(got) != 9 || got[0].Dirs[0] != "a" || got[8].Kind != "tooling" {
 		t.Errorf("more sections asked than directories: %+v", got)
 	}
-	if got := Sections(map[string]string{"x_test.go": ""}, nil, 3); len(got) != 1 {
+	if got := Sections(map[string]string{"x_test.go": ""}, nil, 3); len(got) != 1 || got[0].Kind != "tests" {
 		t.Errorf("tests alone: %+v", got)
 	}
 	// A monorepo of thousands of packages: past maxUnits the smallest go in as one, so it plans in no time.
@@ -69,22 +74,91 @@ func TestFits(t *testing.T) {
 	}
 }
 
-// TestBudgets: one page each, then each next page to the section with the
-// fewest for its lines, tests counting half, none past twice its files.
+// TestBudgets: one page each, then one for each directory of a section, then
+// each next page to the section with the fewest for its lines; none past
+// twice its files of code and one, nor a page for under linesPerPage lines;
+// tests and tooling a few at most.
 func TestBudgets(t *testing.T) {
-	sections := []Section{{Files: []string{"a", "b", "c", "d"}}, {Files: []string{"e", "f"}}, {Dirs: []string{""}, Files: []string{"g"}}}
-	for pages, want := range map[int][]int{10: {6, 3, 1}, 100: {8, 4, 2}, 2: {1, 1, 1}} {
-		if got := Budgets(sections, nil, pages); !slices.Equal(got, want) {
+	sections := []Section{{Dirs: []string{"a"}, Files: []string{"a/1.go", "a/2.go", "a/3.go", "a/4.go"}},
+		{Dirs: []string{"b"}, Files: []string{"b/1.go", "b/2.go"}}, {Kind: "tests", Files: []string{"t_test.go"}}}
+	lines := map[string]int{"a/1.go": 300, "a/2.go": 300, "a/3.go": 300, "a/4.go": 300, "b/1.go": 300, "b/2.go": 300, "t_test.go": 500}
+	for pages, want := range map[int][]int{10: {6, 3, 1}, 100: {13, 7, 4}, 2: {1, 1, 1}} {
+		if got := Budgets(sections, lines, pages); !slices.Equal(got, want) {
 			t.Errorf("%d pages: %v, want %v", pages, got, want)
 		}
 	}
-	// Two long files outweigh four short ones, up to twice their files.
-	if got := Budgets(sections, map[string]int{"a": 50, "b": 50, "c": 50, "d": 50, "e": 900, "f": 700, "g": 40}, 10); !slices.Equal(got, []int{5, 4, 1}) {
+	lines["t_test.go"] = 40 // too short for a second page, however many are left
+	if got := Budgets(sections, lines, 100); !slices.Equal(got, []int{13, 7, 1}) {
+		t.Errorf("a short test file: %v", got)
+	}
+	// Two long files outweigh four short ones; short ones take no page per 100 lines.
+	lines = map[string]int{"a/1.go": 50, "a/2.go": 50, "a/3.go": 50, "a/4.go": 50, "b/1.go": 900, "b/2.go": 700, "t_test.go": 40}
+	if got := Budgets(sections, lines, 10); !slices.Equal(got, []int{2, 7, 1}) {
 		t.Errorf("by lines: %v", got)
 	}
-	// A bundle of 50000 lines weighs no more than 2000.
-	if got := Budgets(sections, map[string]int{"a": 600, "b": 600, "c": 600, "d": 600, "e": 50000, "f": 1, "g": 1}, 6); !slices.Equal(got, []int{3, 2, 1}) {
+	// Each long guide gets a page first, though docs weigh a third.
+	guides := []Section{{Dirs: []string{"a"}, Files: []string{"a/1.go", "a/2.go"}}, {Kind: "docs", Files: []string{"Guide.md", "Troubleshooting.md"}}}
+	if got := Budgets(guides, map[string]int{"a/1.go": 2000, "a/2.go": 2000, "Guide.md": 300, "Troubleshooting.md": 300}, 6); !slices.Equal(got, []int{4, 2}) {
+		t.Errorf("guides: %v", got)
+	}
+	// A bundle of 50000 lines weighs no more than 2000, and a stylesheet a quarter.
+	bundle := []Section{{Dirs: []string{"a"}, Files: []string{"a/app.css", "a/main.go"}}, {Dirs: []string{"b"}, Files: []string{"b/1.go", "b/2.go"}}}
+	if got := Budgets(bundle, map[string]int{"a/app.css": 50000, "a/main.go": 1500, "b/1.go": 1000, "b/2.go": 1000}, 6); !slices.Equal(got, []int{3, 3}) {
 		t.Errorf("a bundle: %v", got)
+	}
+	// A section of three directories gets a page for each first.
+	three := []Section{{Dirs: []string{"p", "q", "r"}, Files: []string{"p/1.go", "q/1.go", "r/1.go"}}, {Dirs: []string{"big"}, Files: []string{"big/1.go"}}}
+	if got := Budgets(three, map[string]int{"p/1.go": 100, "q/1.go": 100, "r/1.go": 100, "big/1.go": 2000}, 6); !slices.Equal(got, []int{4, 2}) {
+		t.Errorf("directories first: %v", got)
+	}
+}
+
+// TestPick: the longest file of each directory in turn, the directories with
+// the most lines first, in path order.
+func TestPick(t *testing.T) {
+	files := []string{"a/x.go", "a/y.go", "a/z.go", "b/q.go", "c/r.go"}
+	lines := map[string]int{"a/x.go": 10, "a/y.go": 500, "a/z.go": 20, "b/q.go": 5, "c/r.go": 100}
+	if got := Pick(files, lines, 3); !slices.Equal(got, []string{"a/y.go", "b/q.go", "c/r.go"}) {
+		t.Errorf("3 of 5: %v", got)
+	}
+	if got := Pick(files, lines, 4); !slices.Equal(got, []string{"a/y.go", "a/z.go", "b/q.go", "c/r.go"}) {
+		t.Errorf("4 of 5: %v", got)
+	}
+	if got := Pick(files, lines, 9); len(got) != 5 {
+		t.Errorf("all: %v", got)
+	}
+}
+
+// TestUnits: an example is its folder under examples/, a guide its file, tests
+// their folder, the largest first; code and tooling have none.
+func TestUnits(t *testing.T) {
+	lines := map[string]int{"_examples/rest/main.go": 50, "_examples/rest/routes.json": 60, "_examples/fileserver/main.go": 100, "examples/hello.go": 10}
+	ex := Section{Kind: "examples", Files: []string{"_examples/rest/main.go", "_examples/rest/routes.json", "_examples/fileserver/main.go", "examples/hello.go"}}
+	if got := Units(ex, lines); !slices.Equal(got, []string{"_examples/rest", "_examples/fileserver", "examples/hello.go"}) {
+		t.Errorf("examples: %v", got)
+	}
+	tests := Section{Kind: "tests", Files: []string{"src/test/jmeter/plan.jmx", "src/test/java/a/ATest.java"}}
+	if got := Units(tests, map[string]int{"src/test/jmeter/plan.jmx": 900}); !slices.Equal(got, []string{"src/test/jmeter", "src/test/java/a"}) {
+		t.Errorf("tests: %v", got)
+	}
+	if Units(Section{Dirs: []string{"a"}, Files: []string{"a/x.go"}}, nil) != nil || Units(Section{Kind: "tooling", Files: []string{"go.mod"}}, nil) != nil {
+		t.Error("code or tooling has units")
+	}
+}
+
+// TestSpread: a unit no page names goes in front of the query of the page
+// given fewest, by its last two parts, at most perPage to a page.
+func TestSpread(t *testing.T) {
+	pages := []Page{{"REST API", "_examples/rest/main.go", -1}, {"Hello", "hello", -1}}
+	units := []string{"_examples/rest", "_examples/fileserver", "src/test/jmeter", "examples/hello.go", "x/y1", "x/y2", "x/y3"} // y3: both are full
+	got := Spread(pages, units)
+	if got[0].Query != "x/y1 _examples/fileserver _examples/rest/main.go" || got[1].Query != "x/y2 test/jmeter hello" {
+		t.Errorf("spread: %+v", got)
+	}
+	// A name inside a longer word names no unit; root tests have no name.
+	got = Spread([]Page{{"Basic-auth and rapid", "q", -1}}, []string{"examples/basic", "tests/api", "."})
+	if got[0].Query != "tests/api examples/basic q" {
+		t.Errorf("whole words: %+v", got)
 	}
 }
 

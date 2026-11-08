@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"deepcode/internal/knowledge/chat/draft"
+	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/platform/ai"
 )
@@ -61,9 +62,10 @@ func (s *Service) deepen(ctx context.Context, snapshotID int64, repo, question s
 // says code it needs was not shown, one more round searches for what the
 // model names given what the draft says it missed, and for those names, and
 // adds the code that uses the names the round and the draft give (Users):
-// the handler of an event, the caller of a function. What it finds goes
-// first. again reports whether the answer is to be written anew: that round
-// found more, or the draft thought aloud.
+// the handler of an event, the caller of a function. What it finds takes
+// turns with the code the draft cites, ahead of the rest. again reports whether
+// the answer is to be written anew: that round found more, or the draft
+// thought aloud.
 func (s *Service) recheck(ctx context.Context, snapshotID int64, repo, question, first, sources string, res retrieval.Result, rounds int, emit Emit) (_ retrieval.Result, _ int, again bool, _ error) {
 	r := draft.Read(first)
 	names, err := s.unshown(ctx, snapshotID, compound(r.Names), sources)
@@ -93,9 +95,30 @@ func (s *Service) recheck(ctx context.Context, snapshotID int64, repo, question,
 		return res, rounds, false, err
 	}
 	n, found := len(res.Hits), merge(slices.Clone(more.Hits), users)
-	res.FTS, res.Vector, res.Symbol, res.Graph = res.FTS+more.FTS, res.Vector+more.Vector, res.Symbol+more.Symbol, res.Graph+more.Graph+len(found)-len(more.Hits)
-	res.Hits = merge(found, res.Hits)
+	res.FTS, res.Vector, res.Symbol, res.Named = res.FTS+more.FTS, res.Vector+more.Vector, res.Symbol+more.Symbol, res.Named+more.Named
+	res.Graph += more.Graph + len(found) - len(more.Hits)
+	kept, rest := cited(first, res.Hits)
+	res.Hits = merge(merge(nil, alternate(kept, found)), rest)
 	return res, rounds, len(res.Hits) > n || r.SelfTalk, nil
+}
+
+// cited splits hits into those draft cites, in order, and the rest. The code
+// an answer rests on and what one more round finds go in turns ahead of the
+// rest, so the evidence budget cuts into neither alone: chi's timeout.go stays
+// beside the middlewares a draft named, eShop's AppHost.cs beside the
+// project files it cited.
+func cited(draft string, hits []retrieval.Hit) (kept, rest []retrieval.Hit) {
+	_, cites := evidence.LinkCitations(draft, hits, func(evidence.Citation) string { return "" })
+	for _, h := range hits {
+		if slices.ContainsFunc(cites, func(c evidence.Citation) bool {
+			return c.Path == h.Path && c.StartLine <= h.EndLine && c.EndLine >= h.StartLine
+		}) {
+			kept = append(kept, h)
+		} else {
+			rest = append(rest, h)
+		}
+	}
+	return kept, rest
 }
 
 // compound are those of names made of two words or more, as in
@@ -131,7 +154,8 @@ func (s *Service) searchMore(ctx context.Context, snapshotID int64, round int, q
 	}
 	n := len(res.Hits)
 	res.Hits = merge(res.Hits, more.Hits)
-	res.FTS, res.Vector, res.Symbol, res.Graph = res.FTS+more.FTS, res.Vector+more.Vector, res.Symbol+more.Symbol, res.Graph+more.Graph
+	res.FTS, res.Vector, res.Symbol, res.Named = res.FTS+more.FTS, res.Vector+more.Vector, res.Symbol+more.Symbol, res.Named+more.Named
+	res.Graph += more.Graph
 	return res, len(res.Hits) > n, nil
 }
 
@@ -175,6 +199,20 @@ func moreRequest(repo, question string, hits []retrieval.Hit) []ai.Message {
 		fmt.Fprintf(&b, "- %s:%d-%d %s\n", h.Path, h.StartLine, h.EndLine, h.Symbol)
 	}
 	return []ai.Message{{Role: "system", Content: morePrompt}, {Role: "user", Content: b.String()}}
+}
+
+// alternate is a[0], b[0], a[1], b[1]…, then what is left of the longer.
+func alternate(a, b []retrieval.Hit) []retrieval.Hit {
+	out := make([]retrieval.Hit, 0, len(a)+len(b))
+	for i := range max(len(a), len(b)) {
+		if i < len(a) {
+			out = append(out, a[i])
+		}
+		if i < len(b) {
+			out = append(out, b[i])
+		}
+	}
+	return out
 }
 
 // merge appends the hits of b that a does not hold.

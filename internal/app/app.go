@@ -137,8 +137,8 @@ func (a *App) Run(ctx context.Context) error {
 // providers builds the configured model clients; nil means turned off.
 func providers(cfg Config) (chatP, embedP *ai.OpenAI) {
 	if cfg.ChatModel != "" {
-		chatP = &ai.OpenAI{BaseURL: cfg.ChatURL, APIKey: cfg.ChatKey, ModelName: cfg.ChatModel,
-			MaxTokens: cfg.MaxOutputTokens, ReasoningEffort: cfg.ReasoningEffort, Timeout: cfg.LLMTimeout, RPM: cfg.LLMRPM}
+		chatP = &ai.OpenAI{BaseURL: cfg.ChatURL, APIKey: cfg.ChatKey, ModelName: cfg.ChatModel, API: cfg.ChatAPI,
+			MaxTokens: cfg.MaxOutputTokens, ReasoningEffort: cfg.ReasoningEffort, Temperature: cfg.Temperature, Timeout: cfg.LLMTimeout, RPM: cfg.LLMRPM}
 	}
 	if cfg.EmbedModel != "" {
 		embedP = &ai.OpenAI{BaseURL: cfg.EmbedURL, APIKey: cfg.EmbedKey, ModelName: cfg.EmbedModel,

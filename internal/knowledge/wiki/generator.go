@@ -19,14 +19,15 @@ import (
 
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
+	"deepcode/internal/knowledge/wiki/change"
 	"deepcode/internal/knowledge/wiki/fanout"
-	"deepcode/internal/knowledge/wiki/manifest"
 	"deepcode/internal/knowledge/wiki/outline"
 	"deepcode/internal/knowledge/wiki/steering"
 	"deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/catalog"
+	"deepcode/internal/repo/gitserver"
 	"deepcode/internal/repo/index/graph"
 )
 
@@ -103,7 +104,7 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 	if err != nil {
 		return err
 	}
-	pages, err := g.plannedPages(ctx, repoID, snap, sha, repo, steer, progress)
+	pages, err := g.plannedPages(ctx, repoID, snap, src, repo, steer, progress)
 	if err != nil {
 		return err
 	}
@@ -167,7 +168,8 @@ func (g *Generator) store(ctx context.Context, snap int64, pages []newPage) erro
 
 // carry starts the snapshot's wiki from the repository's newest finished wiki
 // in the same language: the same pages, each keeping its text unless the
-// change may touch it, so only the touched pages are written again. It
+// change may touch it, so only the touched pages are written again; a kept
+// page's citations follow their lines, and its links go to the new commit. It
 // reports false, storing nothing, when there is no such wiki, when
 // .devin/wiki.json changed (it may list other pages), when more than half of
 // the files changed, when the change adds a directory, two levels deep as
@@ -175,7 +177,7 @@ func (g *Generator) store(ctx context.Context, snap int64, pages []newPage) erro
 // only a new plan gives a page), or, unless .devin/wiki.json lists the pages,
 // when the wiki is flat and the repository now calls for sections, or the
 // other way round.
-func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, listed bool, progress jobs.Progress) (bool, error) {
+func (g *Generator) carry(ctx context.Context, repoID, snap int64, src source, listed bool, progress jobs.Progress) (bool, error) {
 	base, baseSHA, err := g.Store.Base(ctx, repoID, snap, g.Language)
 	if errors.Is(err, store.ErrNotFound) {
 		return false, nil
@@ -204,12 +206,6 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, l
 	if err != nil {
 		return false, err
 	}
-	affected := maps.Clone(changed)
-	maps.Copy(affected, ripple)
-	edits, err := g.manifestEdits(ctx, base, snap, changed)
-	if err != nil {
-		return false, err
-	}
 	old, err := g.Store.Pages(ctx, base)
 	if err != nil {
 		return false, err
@@ -232,71 +228,114 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, sha string, l
 	if err != nil {
 		return false, err
 	}
+	u, err := g.weigh(ctx, base, snap, changed, ripple, old, cites)
+	if err != nil {
+		return false, err
+	}
+	link := func(sha string, c evidence.Citation) string {
+		return evidence.Link(c, gitserver.SourceURL(src.kind, src.url, sha, c.Path, c.StartLine, c.EndLine))
+	}
 	pages := make([]newPage, len(old))
 	kept := 0
 	for i, p := range old {
 		pages[i] = newPage{Title: p.Title, Query: p.Query, Parent: p.Parent}
-		touched, err := g.touched(ctx, snap, p, cites[p.ID], affected, edits)
+		touched, err := g.touched(ctx, snap, p, cites[p.ID], u)
 		if err != nil {
 			return false, err
+		} else if touched {
+			continue
 		}
-		if !touched {
-			// The cited files did not change, so their lines and citations hold;
-			// the links move to the new commit.
-			pages[i].Content = strings.ReplaceAll(p.Content, "/blob/"+baseSHA+"/", "/blob/"+sha+"/")
-			pages[i].Cites = cites[p.ID]
-			kept++
+		// The cited lines read as they did: the citations follow them, the links to the new commit.
+		now, swap := slices.Clone(cites[p.ID]), []string{}
+		for j, c := range cites[p.ID] {
+			if e, ok := u.edits[c.Path]; ok {
+				now[j].StartLine, now[j].EndLine = e.Moved(c.StartLine, c.EndLine)
+			}
+			swap = append(swap, link(baseSHA, c), link(src.sha, now[j]))
 		}
+		swap = append(swap, "/blob/"+baseSHA+"/", "/blob/"+src.sha+"/") // a link no stored citation names
+		pages[i].Content, pages[i].Cites = strings.NewReplacer(swap...).Replace(p.Content), now
+		kept++
 	}
 	if err := g.store(ctx, snap, pages); err != nil {
 		return false, err
 	}
-	progress.Logf("carried %d of %d pages over from %.7s, where %d files differ and %d more import a changed declaration; writing the rest",
+	progress.Logf("carried %d of %d pages over from %.7s, where %d files differ and %d import a declaration it removed or altered; writing the rest",
 		kept, len(pages), baseSHA, len(changed), len(ripple))
 	return true, nil
 }
 
+// update is what a change did, as carry weighs each page against it.
+type update struct {
+	changed, ripple map[string]bool            // the files that differ, and those importing a declaration that changed
+	edits           map[string]change.Edit     // by changed file a page cites: what became of its lines
+	known           map[string]map[string]bool // by changed file base held: the symbols of its chunks there
+	groups          map[int][]string           // by group of base's pages (group): the files they cite
+}
+
+// weigh gathers what carry weighs base's pages against.
+func (g *Generator) weigh(ctx context.Context, base, snap int64, changed, ripple map[string]bool, old []page, cites map[int64][]evidence.Citation) (update, error) {
+	u := update{changed: changed, ripple: ripple, edits: map[string]change.Edit{}, groups: map[int][]string{}}
+	for _, p := range old {
+		for _, c := range cites[p.ID] {
+			u.groups[group(p)] = append(u.groups[group(p)], c.Path)
+			if _, done := u.edits[c.Path]; done || !changed[c.Path] {
+				continue
+			}
+			before, held, err := g.content(ctx, base, c.Path)
+			if err != nil {
+				return update{}, err
+			}
+			after, holds, err := g.content(ctx, snap, c.Path)
+			if err != nil {
+				return update{}, err
+			}
+			u.edits[c.Path] = change.Edit{} // removed: none of its lines are left
+			if held && holds {
+				u.edits[c.Path] = change.Diff(before, after)
+			}
+		}
+	}
+	var err error
+	u.known, err = g.Store.Symbols(ctx, base, slices.Collect(maps.Keys(changed)))
+	return u, err
+}
+
+// group is the group of pages p belongs with: its section, or p alone in none.
+func group(p page) int {
+	if p.Parent >= 0 {
+		return p.Parent
+	}
+	return p.Position
+}
+
 // touched reports whether the change may make page p read differently: a
-// file it cites, or one that its search now finds, was added, edited or
-// removed, or imports what was (affected holds them all). A manifest counts
-// only where the page cites the lines that changed (edits holds them): a new
-// dependency version in package.json leaves the pages that cite its scripts.
-func (g *Generator) touched(ctx context.Context, snap int64, p page, cites []evidence.Citation, affected map[string]bool, edits map[string]manifest.Edit) (bool, error) {
+// line it cites is no longer there as it was (for a manifest, only where the
+// page says a word the change lost: a new dependency version leaves the pages
+// citing its scripts), a file it cites imports a declaration the change
+// altered, or its search now finds a declaration that is new: in a changed
+// file, or anywhere in a new file that belongs with p's group of pages
+// (change.Home), as a new file is for the pages nearest it. The same chunk
+// with other lines around it, or a manifest, it may find without harm.
+func (g *Generator) touched(ctx context.Context, snap int64, p page, cites []evidence.Citation, u update) (bool, error) {
 	if slices.ContainsFunc(cites, func(c evidence.Citation) bool {
-		return manifest.Touches(c.Path, c.StartLine, c.EndLine, p.Content, affected, edits)
+		e, edited := u.edits[c.Path]
+		return u.ripple[c.Path] || edited && e.Touches(c.Path, c.StartLine, c.EndLine, p.Content)
 	}) {
 		return true, nil
 	}
 	// ponytail: the page's own search only; the sources its section shares count
 	// where it cites them, so one changed file does not rewrite a whole section.
 	_, hits, err := g.sources(ctx, snap, p, page{}, false)
-	return slices.ContainsFunc(hits, func(h retrieval.Hit) bool { return affected[h.Path] && !manifest.Is(h.Path) }), err
-}
-
-// manifestEdits returns, for each changed manifest that base held, what the
-// change did to its base version; a removed manifest's lines are all
-// replaced, and an added one has none, as base's pages cannot cite it.
-func (g *Generator) manifestEdits(ctx context.Context, base, snap int64, changed map[string]bool) (map[string]manifest.Edit, error) {
-	edits := map[string]manifest.Edit{}
-	for p := range changed {
-		if !manifest.Is(p) {
-			continue
+	return slices.ContainsFunc(hits, func(h retrieval.Hit) bool {
+		if !u.changed[h.Path] || change.Is(h.Path) {
+			return false
 		}
-		before, ok, err := g.content(ctx, base, p)
-		if err != nil {
-			return nil, err
-		} else if !ok {
-			continue
+		if symbols, held := u.known[h.Path]; held {
+			return !symbols[h.Symbol]
 		}
-		after, ok, err := g.content(ctx, snap, p)
-		if err != nil {
-			return nil, err
-		}
-		if edits[p] = (manifest.Edit{Lines: manifest.All(before)}); ok {
-			edits[p] = manifest.Diff(before, after)
-		}
-	}
-	return edits, nil
+		return change.Home(h.Path, u.groups)[group(p)]
+	}), err
 }
 
 // content reads file p of the snapshot, and whether it holds one.

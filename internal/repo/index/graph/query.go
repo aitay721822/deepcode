@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 
@@ -21,25 +22,28 @@ func (g *Graph) Dependencies(ctx context.Context, snap int64, paths []string, li
 	return g.Store.Dependencies(ctx, snap, paths, limit)
 }
 
-// Impact returns the files beyond changed that a change from snapshot base to
-// snap may make read differently: those that import, in either snapshot, a
-// changed file whose declarations differ between the two (one lacking the
-// file included). A change inside function bodies reaches no importer.
-// ponytail: a declaration is compared by its first line, so a struct's new
-// field or a Go interface's new method goes unseen; compare the chunks of
-// declarations if that bites.
+// Impact returns the files that a change from snapshot base to snap may make
+// read differently beyond their own changed lines: those that import, in
+// either snapshot, a changed file that lost a declaration it had (one removed,
+// or changed, the file's removal included), changed importers too, as an edit
+// elsewhere in one leaves its call of the lost declaration as it was. A change
+// inside function bodies reaches no importer, and neither does a new
+// declaration: what imported the file before does not use it.
+// ponytail: a declaration is compared by its first line, so
+// a struct's new field or a Go interface's new method goes unseen; compare
+// the chunks of declarations if that bites.
 func (g *Graph) Impact(ctx context.Context, base, snap int64, changed map[string]bool) (map[string]bool, error) {
-	before, err := g.declarations(ctx, base, changed)
+	before, err := g.Store.Declarations(ctx, base, changed)
 	if err != nil {
 		return nil, err
 	}
-	after, err := g.declarations(ctx, snap, changed)
+	after, err := g.Store.Declarations(ctx, snap, changed)
 	if err != nil {
 		return nil, err
 	}
 	moved := map[string]bool{}
 	for p := range changed {
-		if before[p] != after[p] {
+		if slices.ContainsFunc(before[p], func(d string) bool { return !slices.Contains(after[p], d) }) {
 			moved[p] = true
 		}
 	}
@@ -53,23 +57,12 @@ func (g *Graph) Impact(ctx context.Context, base, snap int64, changed map[string
 			return nil, err
 		}
 		for _, e := range edges {
-			if moved[e.Dst] && !changed[e.Src] {
+			if moved[e.Dst] && e.Src != e.Dst {
 				out[e.Src] = true
 			}
 		}
 	}
 	return out, nil
-}
-
-// declarations reads the declarations of the snapshot's files in paths, each
-// file's as one string, in an order that moving them within the file keeps.
-func (g *Graph) declarations(ctx context.Context, snap int64, paths map[string]bool) (map[string]string, error) {
-	parts, err := g.Store.Declarations(ctx, snap, paths)
-	out := make(map[string]string, len(parts))
-	for p, ds := range parts {
-		out[p] = strings.Join(ds, "\n")
-	}
-	return out, err
 }
 
 // DirEdge counts the imports from the files of one directory into another's.

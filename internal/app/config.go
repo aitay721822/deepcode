@@ -7,10 +7,12 @@ import "time"
 type Config struct {
 	DataDir string // holds deepcode.db, secret.key and repos/ (the git fetch cache)
 
-	ChatURL, ChatKey, ChatModel    string // ChatModel "" turns chat and the wiki off
-	EmbedURL, EmbedKey, EmbedModel string // EmbedModel "" turns vector search off
-	ReasoningEffort                string // sent as reasoning_effort when set
-	MaxOutputTokens                int    // 0 leaves it to the server
+	ChatURL, ChatKey, ChatModel    string   // ChatModel "" turns chat and the wiki off
+	ChatAPI                        string   // ai.Completions or ai.Responses: how the chat model is asked
+	EmbedURL, EmbedKey, EmbedModel string   // EmbedModel "" turns vector search off
+	ReasoningEffort                string   // sent as reasoning_effort when set
+	Temperature                    *float64 // sent as temperature when set
+	MaxOutputTokens                int      // 0 leaves it to the server
 	LLMTimeout                     time.Duration
 	LLMRPM                         int // 0 = unlimited
 
