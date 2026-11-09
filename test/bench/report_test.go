@@ -17,6 +17,7 @@ type report struct {
 	Model           string   `json:"model"`
 	ReasoningEffort string   `json:"reasoningEffort"`
 	Temperature     string   `json:"temperature"`
+	EmbedModel      string   `json:"embedModel,omitempty"` // "": lexical search only
 	Repos           []result `json:"repos"`
 }
 
@@ -122,7 +123,7 @@ func (rep report) write(dir string) error {
 func (rep report) markdown() string {
 	var b strings.Builder
 	p := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	p("# deepcode bench\n\nStarted %s · deepcode %s · model %s · reasoning effort %q · temperature %q\n", rep.Started, rep.Deepcode, rep.Model, rep.ReasoningEffort, rep.Temperature)
+	p("# deepcode bench\n\nStarted %s · deepcode %s · model %s · reasoning effort %q · temperature %q · embeddings %s\n", rep.Started, rep.Deepcode, rep.Model, rep.ReasoningEffort, rep.Temperature, cmp.Or(rep.EmbedModel, "none"))
 	p("The first index's time includes fetching the repository from GitHub. A repository with errors (listed below the tables) has numbers that are partial.\n")
 	p("## Index and graph (head)\n\n| Repository | Files | Generated | Languages | Chunks | Symbols | Import edges | Diagram edges | First index | Errors |\n|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {

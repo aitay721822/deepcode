@@ -20,17 +20,6 @@ import (
 	graphstore "deepcode/internal/repo/index/graph/store"
 )
 
-func TestFuse(t *testing.T) {
-	got := fuse([]int64{1, 2, 3}, []int64{3, 4}, []int64{3, 2})
-	if want := []int64{3, 2, 1, 4}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-	// Two lists agreeing on a chunk outweigh one list's first place; a tie goes to the lower id.
-	if got, want := fuse([]int64{1, 5, 6, 2}, []int64{7, 8, 9, 2}), []int64{2, 1, 7, 5, 8, 6, 9}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-}
-
 // TestSearchKeepsNamed: the search keeps a named file's best chunk, though
 // fusion ranks first what two searches find.
 func TestSearchKeepsNamed(t *testing.T) {
@@ -40,28 +29,6 @@ func TestSearchKeepsNamed(t *testing.T) {
 		(1, 'src/b.go', 'beta', 'beta', 'function', 1, 1), (1, 'src/c.go', 'gamma', 'gamma', 'function', 1, 1)`)
 	if res, err := retriever(db).Search(context.Background(), 1, "alpha beta gamma docs/Pinned.cs", 1); err != nil || len(res.Hits) != 1 || res.Hits[0].Path != "docs/Pinned.cs" {
 		t.Fatalf("got %+v %v, want the named file's chunk", res.Hits, err)
-	}
-}
-
-// TestSure: each must ranked past the first n takes the last of those places
-// not held by another must, the rest moving down; none is lost.
-func TestSure(t *testing.T) {
-	for _, c := range []struct {
-		ids, must []int64
-		n         int
-		want      []int64
-	}{
-		{[]int64{1, 2, 3, 4, 5, 6}, []int64{6, 5}, 4, []int64{1, 2, 5, 6, 3, 4}},
-		{[]int64{1, 2, 3, 4, 5, 6}, []int64{4, 6}, 4, []int64{1, 2, 4, 6, 3, 5}}, // 4 already in place keeps it
-		{[]int64{1, 2, 3}, []int64{2}, 2, []int64{1, 2, 3}},
-		{[]int64{1, 2, 3, 4}, []int64{1, 3, 4}, 2, []int64{1, 3, 2, 4}}, // all must: the first n are must
-		{[]int64{1, 2, 3}, []int64{1, 2, 3}, 2, []int64{1, 2, 3}},       // the first n all must: the rest wait
-		{[]int64{1, 2, 3}, nil, 2, []int64{1, 2, 3}},
-		{nil, []int64{1}, 2, nil},
-	} {
-		if got := sure(slices.Clone(c.ids), c.must, c.n); !slices.Equal(got, c.want) {
-			t.Errorf("sure(%v, %v, %d) = %v, want %v", c.ids, c.must, c.n, got, c.want)
-		}
 	}
 }
 
@@ -194,7 +161,8 @@ func TestSymbolSearch(t *testing.T) {
 }
 
 // TestSymbolChunks: names in a query find the chunks that define them, in any
-// case and longest name first; only the first 32 names are looked up.
+// case, the longer name first when nothing else tells them apart
+// (store.TestDefiningOrder); only the first 32 names are looked up.
 func TestSymbolChunks(t *testing.T) {
 	db := seeded(t,
 		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
@@ -239,6 +207,22 @@ func TestSymbolChunksJoined(t *testing.T) {
 	}
 	if got := joined("matched route pattern of it"); !reflect.DeepEqual(got, []string{"matchedroute", "matchedroutepattern", "routepattern"}) {
 		t.Errorf("joined: %q", got)
+	}
+}
+
+// TestCoded: a name counts as code by its shape or what stands beside it.
+func TestCoded(t *testing.T) {
+	for q, want := range map[string]string{
+		"How does fromJson deserialize a string?":     "fromJson",
+		"Router::nest, with_state, $store and OAuth2": "Router nest with_state $store OAuth2",
+		"Gson.fromJson or Gson#toJson":                "Gson fromJson toJson",
+		"the `serve` call and listen() in HTTPServer": "serve listen HTTPServer",
+		"JSON over HTTP ends here. Next the router.":  "",
+		"中文.Router beside (parenthesised) words":      "",
+	} {
+		if got := strings.Join(coded(q, bounded(identRe.FindAllString(q, -1), 32, nil)), " "); got != want {
+			t.Errorf("coded(%q) = %q, want %q", q, got, want)
+		}
 	}
 }
 
@@ -496,5 +480,13 @@ func TestSearchWithoutEmbeddings(t *testing.T) {
 	res, err := r.Search(context.Background(), 1, "subscribe", 2)
 	if err != nil || res.Vector != 0 || res.FTS != 3 || res.Symbol != 1 || len(res.Hits) != 2 || res.Hits[0].Path != "src/store.ts" {
 		t.Fatalf("got %+v %v; want the defining chunk first of two, from FTS5 and symbols", res, err)
+	}
+}
+
+// TestWeigh: a test's or a generated file's cosine is weighed down, code's not.
+func TestWeigh(t *testing.T) {
+	if weigh("src/a_test.go", false) != secondaryCosine || weigh("src/a.go", true) != secondaryCosine ||
+		weigh("src/a.go", false) != 1 || secondaryCosine >= 1 {
+		t.Fatal("weigh: tests and generated files want secondaryCosine (< 1), code 1")
 	}
 }

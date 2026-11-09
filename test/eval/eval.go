@@ -6,7 +6,10 @@
 //
 // deepcode's own questions run with every go test. The other repositories'
 // need their history: set DEEPCODE_EVAL_GIT to a folder holding a bare clone
-// of each, named after its corpus (git clone --bare <url> chi.git).
+// of each, named after its corpus (git clone --bare <url> chi.git). With
+// DEEPCODE_EMBED_MODEL set, chunks are embedded and searched as deepcode
+// serve does (Embedder) and, for HybridModel, held to the hybrid floors
+// (another model's scores are logged).
 package eval
 
 import (
@@ -15,8 +18,23 @@ import (
 	"slices"
 	"strings"
 
+	"deepcode/cmd/deepcode/config"
+	"deepcode/internal/app"
 	"deepcode/internal/knowledge/retrieval"
+	"deepcode/internal/platform/ai"
 )
+
+// Embedder is the embedding model deepcode serve searches with, read as serve
+// reads it (DEEPCODE_EMBED_MODEL; DEEPCODE_EMBED_BASE_URL and _API_KEY, else
+// the chat's), or nil without one, which leaves vector search off.
+func Embedder() (*ai.OpenAI, error) {
+	cfg, _, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	_, embed := app.Providers(cfg)
+	return embed, nil
+}
 
 // Hits is how many results a question reads: as many as chat's evidence.
 const Hits = 10
@@ -28,10 +46,17 @@ type Question struct {
 }
 
 type Corpus struct {
-	Name, URL, SHA string  // URL: where the clone comes from; "" for this repository
-	Recall, MRR    float64 // the floors
-	Questions      []Question
+	Name, URL, SHA          string  // URL: where the clone comes from; "" for this repository
+	Recall, MRR             float64 // the floors of the lexical search
+	HybridRecall, HybridMRR float64 // the floors with HybridModel's embeddings
+	Questions               []Question
 }
+
+// HybridModel is the embedding model the hybrid floors were measured with
+// (served by LM Studio); another's scores are logged, not held to them. The
+// floors are exact for that setup: the same name quantised or served another
+// way can move a rank, so re-measure the old code before blaming a change.
+const HybridModel = "text-embedding-qwen3-embedding-0.6b"
 
 // Result is a corpus's scores, with a line for each question that missed a
 // file it wants.

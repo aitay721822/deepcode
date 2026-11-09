@@ -74,7 +74,7 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	if err != nil {
 		return nil, err
 	}
-	chatP, embedP := providers(cfg)
+	chatP, embedP := Providers(cfg)
 	mem := cache.New(cfg.CacheMB << 20)
 	vectors := &vectorstore.SQLite{DB: db}
 	graphs := &graph.Graph{Store: &graphstore.Store{DB: db}}
@@ -139,8 +139,9 @@ func (a *App) Run(ctx context.Context) error {
 	return a.bus.Run(ctx)
 }
 
-// providers builds the configured model clients; nil means turned off.
-func providers(cfg Config) (chatP, embedP *ai.OpenAI) {
+// Providers builds the configured model clients; nil means turned off. The
+// retrieval eval and the bench embed with the same client (test/eval Embedder).
+func Providers(cfg Config) (chatP, embedP *ai.OpenAI) {
 	if cfg.ChatModel != "" {
 		chatP = &ai.OpenAI{BaseURL: cfg.ChatURL, APIKey: cfg.ChatKey, ModelName: cfg.ChatModel, API: cfg.ChatAPI,
 			MaxTokens: cfg.MaxOutputTokens, ReasoningEffort: cfg.ReasoningEffort, Temperature: cfg.Temperature, Timeout: cfg.LLMTimeout, RPM: cfg.LLMRPM}

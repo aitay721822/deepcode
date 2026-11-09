@@ -4,11 +4,11 @@
 package retrieval
 
 import (
-	"cmp"
 	"context"
 	"log"
 	"slices"
 
+	"deepcode/internal/knowledge/retrieval/fusion"
 	"deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/cache"
@@ -39,7 +39,6 @@ const (
 	ftsLimit    = 25
 	vectorLimit = 25
 	symbolLimit = 10
-	rrfK        = 60
 
 	// The code the best hits import: the files the top nearHits chunks' files
 	// import, at most nearFiles, searched for at most nearLimit chunks, of
@@ -76,7 +75,7 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 			log.Printf("retrieval: vector search unavailable, using FTS5 and symbols only: %v", err)
 		}
 	}
-	ids := sure(fuse(fts, vec, sym, named), named[:firsts], head(limit))
+	ids := fusion.Sure(fusion.Fuse(fts, vec, sym, named), named[:firsts], head(limit))
 	near, err := r.near(ctx, snapshotID, query, ids)
 	if err != nil {
 		return res, err
@@ -175,65 +174,6 @@ func supplement(ranked, near []int64, limit int) ([]int64, int) {
 // head is how many of a search's limit places the ranked chunks hold before
 // the code they import may take the rest (supplement).
 func head(limit int) int { return max(limit-nearSlots, 1) }
-
-// sure is ids with each of must among the first n: one ranked past them takes
-// the last of those places not held by another of must, the ids it displaces
-// moving down. must are the best chunks of the files a query names, which
-// fusion ranks below any chunk two searches find: eShop's AppHost.cs, a long
-// file few of its page's words match, or an example placed in a page about
-// another, whose words it shares with none.
-func sure(ids, must []int64, n int) []int64 {
-	n = min(n, len(ids))
-	is := map[int64]bool{}
-	for _, id := range must {
-		is[id] = true
-	}
-	var late []int64
-	for _, id := range ids[n:] {
-		if is[id] {
-			late = append(late, id)
-		}
-	}
-	if len(late) == 0 {
-		return ids
-	}
-	head := slices.Clone(ids[:n])
-	room := len(late)
-	for i := len(head) - 1; i >= 0 && room > 0; i-- {
-		if !is[head[i]] {
-			head, room = slices.Delete(head, i, i+1), room-1
-		}
-	}
-	out := append(head, late[:len(late)-room]...)
-	placed := map[int64]bool{}
-	for _, id := range out {
-		placed[id] = true
-	}
-	for _, id := range ids {
-		if !placed[id] {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-// fuse ranks ids by Reciprocal Rank Fusion: score = Σ 1/(k + rank).
-func fuse(lists ...[]int64) []int64 {
-	score := map[int64]float64{}
-	for _, l := range lists {
-		for rank, id := range l {
-			score[id] += 1 / float64(rrfK+rank+1)
-		}
-	}
-	ids := make([]int64, 0, len(score))
-	for id := range score {
-		ids = append(ids, id)
-	}
-	slices.SortFunc(ids, func(a, b int64) int {
-		return cmp.Or(cmp.Compare(score[b], score[a]), cmp.Compare(a, b))
-	})
-	return ids
-}
 
 // Readme returns the first two chunks of the snapshot's top-level README,
 // which the wiki's overview starts from.

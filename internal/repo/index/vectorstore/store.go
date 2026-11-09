@@ -55,9 +55,14 @@ func (s *SQLite) Upsert(ctx context.Context, model string, vectors map[int64][]f
 	return tx.Commit()
 }
 
-func (s *SQLite) Search(ctx context.Context, snapshotID int64, model string, query []float32, limit int) ([]Hit, error) {
+// Search returns the limit chunks of the snapshot that model embedded nearest
+// to query: by cosine similarity, a positive one times weigh(the chunk's path,
+// whether its file is generated), so a weight moves a match down but never a
+// mismatch up; nil weighs every chunk 1.
+func (s *SQLite) Search(ctx context.Context, snapshotID int64, model string, query []float32, limit int, weigh func(path string, generated bool) float32) ([]Hit, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT e.chunk_id, e.embedding FROM chunk_embeddings e JOIN chunks c ON c.id = e.chunk_id
+		SELECT e.chunk_id, e.embedding, c.path, coalesce(f.generated, 0) FROM chunk_embeddings e JOIN chunks c ON c.id = e.chunk_id
+		LEFT JOIN source_files f ON f.snapshot_id = c.snapshot_id AND f.path = c.path
 		WHERE c.snapshot_id = ? AND e.model = ?`, snapshotID, model)
 	if err != nil {
 		return nil, err
@@ -68,7 +73,9 @@ func (s *SQLite) Search(ctx context.Context, snapshotID int64, model string, que
 	for rows.Next() {
 		var id int64
 		var blob []byte
-		if err := rows.Scan(&id, &blob); err != nil {
+		var path string
+		var generated bool
+		if err := rows.Scan(&id, &blob, &path, &generated); err != nil {
 			return nil, err
 		}
 		if len(blob) != 4*len(q) {
@@ -77,6 +84,9 @@ func (s *SQLite) Search(ctx context.Context, snapshotID int64, model string, que
 		var dot float32
 		for i := range q {
 			dot += q[i] * math.Float32frombits(binary.LittleEndian.Uint32(blob[4*i:]))
+		}
+		if weigh != nil && dot > 0 {
+			dot *= weigh(path, generated)
 		}
 		hits = append(hits, Hit{ChunkID: id, Score: dot})
 	}

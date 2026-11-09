@@ -1,12 +1,14 @@
 package eval
 
 // Corpora are the repositories the eval indexes, each at a pinned commit,
-// with the questions asked of it and the floors its scores must keep. Raise
-// a floor when a change raises the score; a Chinese question's terms are what
-// the model replied to chat's termsPrompt for it. deepcode's MRR floor was
-// lowered once, for Markdown's sections (the README says why).
+// with the questions asked of it and the floors its scores must keep: the
+// lexical pair, and the hybrid pair measured with HybridModel, each 0.001
+// under the score. Raise a floor when a change raises the score; a Chinese
+// question's terms are what the model replied to chat's termsPrompt for it.
+// Floors were lowered twice: deepcode's MRR for Markdown's sections, and
+// axum's lexical recall for the weighted fusion (the README says why).
 var Corpora = []Corpus{
-	{Name: "deepcode", SHA: "fddffe3e1fca1938017c15687216be6c7506b4d6", Recall: 0.916, MRR: 0.617, Questions: []Question{
+	{Name: "deepcode", SHA: "fddffe3e1fca1938017c15687216be6c7506b4d6", Recall: 0.949, MRR: 0.699, HybridRecall: 0.966, HybridMRR: 0.806, Questions: []Question{
 		{Ask: "How are the citations in an answer checked against the sources it was given?", Want: []string{"internal/knowledge/evidence/citations.go"}},
 		{Ask: "How does retrieval combine full-text, vector and symbol results?", Want: []string{"internal/knowledge/retrieval/retriever.go"}},
 		{Ask: "How is a question turned into an FTS5 MATCH query?", Want: []string{"internal/knowledge/retrieval/lexical.go"}},
@@ -42,7 +44,7 @@ var Corpora = []Corpus{
 		{Ask: "登入失敗太多次會怎樣？", Terms: "login failed max attempts lockout rate limit account locked too many attempts",
 			Want: []string{"internal/access/session/limiter.go"}},
 	}},
-	{Name: "chi", URL: "https://github.com/go-chi/chi", SHA: "9f8adb1aabaa8a91180a821111d3f8e668d1c0bf", Recall: 0.999, MRR: 0.785, Questions: []Question{
+	{Name: "chi", URL: "https://github.com/go-chi/chi", SHA: "9f8adb1aabaa8a91180a821111d3f8e668d1c0bf", Recall: 0.999, MRR: 0.827, HybridRecall: 0.999, HybridMRR: 0.883, Questions: []Question{
 		{Ask: "How does chi match a request path to a registered route?", Want: []string{"tree.go", "mux.go"}},
 		{Ask: "How do I read a URL parameter such as {id} inside a handler?", Want: []string{"context.go"}},
 		{Ask: "How do I mount a sub-router under a path prefix?", Want: []string{"mux.go"}},
@@ -76,7 +78,7 @@ var Corpora = []Corpus{
 		{Ask: "怎麼限制同時處理的請求數量？", Terms: "middleware MaxConns concurrency limit handler ServeHTTP net.Listener http.Server chi",
 			Want: []string{"middleware/throttle.go"}},
 	}},
-	{Name: "zustand", URL: "https://github.com/pmndrs/zustand", SHA: "382d29c485e67018c06e75ec7235130d0968522c", Recall: 0.999, MRR: 0.872, Questions: []Question{
+	{Name: "zustand", URL: "https://github.com/pmndrs/zustand", SHA: "382d29c485e67018c06e75ec7235130d0968522c", Recall: 0.999, MRR: 0.873, HybridRecall: 0.999, HybridMRR: 0.946, Questions: []Question{
 		{Ask: "How does setState merge a partial state and notify listeners?", Want: []string{"src/vanilla.ts"}},
 		{Ask: "How does subscribe add and remove a listener?", Want: []string{"src/vanilla.ts"}},
 		{Ask: "How does the useStore hook read a slice of the state in React?", Want: []string{"src/react.ts"}},
@@ -105,7 +107,7 @@ var Corpora = []Corpus{
 			Want: []string{"src/middleware/persist.ts"}},
 		{Ask: "如何連接瀏覽器的開發者工具來除錯狀態？", Terms: "devtools middleware zustand devtools connect", Want: []string{"src/middleware/devtools.ts"}},
 	}},
-	{Name: "express", URL: "https://github.com/expressjs/express", SHA: "43fca52d28a422c8be48fd489cbd4f2d6152bab6", Recall: 0.999, MRR: 0.962, Questions: []Question{
+	{Name: "express", URL: "https://github.com/expressjs/express", SHA: "43fca52d28a422c8be48fd489cbd4f2d6152bab6", Recall: 0.999, MRR: 0.962, HybridRecall: 0.999, HybridMRR: 0.999, Questions: []Question{
 		{Ask: "How is an Express application created and its prototype mixed with EventEmitter?", Want: []string{"lib/express.js"}},
 		{Ask: "How does app.use mount middleware or a sub-app at a path?", Want: []string{"lib/application.js"}},
 		{Ask: "How does app.handle dispatch a request and what happens when no route matches?", Want: []string{"lib/application.js"}},
@@ -137,7 +139,7 @@ var Corpora = []Corpus{
 		{Ask: "怎麼把應用程式監聽在某個連接埠上？", Terms: "app listen port http.createServer express",
 			Want: []string{"lib/application.js"}},
 	}},
-	{Name: "petclinic", URL: "https://github.com/spring-projects/spring-petclinic", SHA: "500158f732419217507c7656904b8e6aa1bcc0d6", Recall: 0.963, MRR: 0.724, Questions: []Question{
+	{Name: "petclinic", URL: "https://github.com/spring-projects/spring-petclinic", SHA: "500158f732419217507c7656904b8e6aa1bcc0d6", Recall: 0.963, MRR: 0.736, HybridRecall: 0.999, HybridMRR: 0.866, Questions: []Question{
 		{Ask: "What is the entry point of the Spring Boot application?", Want: []string{"src/main/java/org/springframework/samples/petclinic/PetClinicApplication.java"}},
 		{Ask: "How are owners searched by last name and the results paginated?", Want: []string{"src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java", "src/main/java/org/springframework/samples/petclinic/owner/OwnerRepository.java"}},
 		{Ask: "What happens when the search finds exactly one owner?", Want: []string{"src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java"}},
@@ -170,7 +172,7 @@ var Corpora = []Corpus{
 		{Ask: "應用程式的多國語言訊息放在哪裡？", Terms: "messages.properties messages_en_US.properties messages_fr_FR.properties messages_zh_CN.properties i18n localization locale",
 			Want: []string{"src/main/resources/messages/messages.properties", "src/main/java/org/springframework/samples/petclinic/system/WebConfiguration.java"}},
 	}},
-	{Name: "gson", URL: "https://github.com/google/gson", SHA: "65df6e5a99747f73d386f3a61d887a0257255e0f", Recall: 0.820, MRR: 0.593, Questions: []Question{
+	{Name: "gson", URL: "https://github.com/google/gson", SHA: "65df6e5a99747f73d386f3a61d887a0257255e0f", Recall: 0.838, MRR: 0.683, HybridRecall: 0.892, HybridMRR: 0.742, Questions: []Question{
 		{Ask: "How does Gson.toJson serialize an object to a JSON string?", Want: []string{"gson/src/main/java/com/google/gson/Gson.java"}},
 		{Ask: "How does fromJson deserialize a string into a typed object?", Want: []string{"gson/src/main/java/com/google/gson/Gson.java"}},
 		{Ask: "How do I configure pretty printing, null serialization and a naming policy on the builder?", Want: []string{"gson/src/main/java/com/google/gson/GsonBuilder.java"}},
@@ -203,7 +205,7 @@ var Corpora = []Corpus{
 		{Ask: "遇到格式不正確的 JSON 會丟出什麼例外？", Terms: "MalformedJsonException JsonSyntaxException ParseException gson stream reader",
 			Want: []string{"gson/src/main/java/com/google/gson/JsonSyntaxException.java", "gson/src/main/java/com/google/gson/stream/MalformedJsonException.java"}},
 	}},
-	{Name: "eshop", URL: "https://github.com/dotnet/eShop", SHA: "913acea66708a59595351174cee9b29f37179d29", Recall: 0.799, MRR: 0.611, Questions: []Question{
+	{Name: "eshop", URL: "https://github.com/dotnet/eShop", SHA: "913acea66708a59595351174cee9b29f37179d29", Recall: 0.799, MRR: 0.686, HybridRecall: 0.832, HybridMRR: 0.744, Questions: []Question{
 		{Ask: "How does the catalog search for items by semantic relevance using embeddings?", Want: []string{"src/Catalog.API/Apis/CatalogApi.cs", "src/Catalog.API/Services/CatalogAI.cs"}},
 		{Ask: "How does the catalog list endpoint filter items by brand and type and return per-brand counts?", Want: []string{"src/Catalog.API/Apis/CatalogApi.cs"}},
 		{Ask: "What happens when the price of a catalog item is updated?", Want: []string{"src/Catalog.API/Apis/CatalogApi.cs", "src/Catalog.API/IntegrationEvents/CatalogIntegrationEventService.cs"}},
@@ -238,7 +240,7 @@ var Corpora = []Corpus{
 		{Ask: "訂閱 Webhook 時怎麼驗證對方給的網址？", Terms: "Webhook Subscription Validate Url Verify Endpoint",
 			Want: []string{"src/Webhooks.API/Services/GrantUrlTesterService.cs", "src/Webhooks.API/Apis/WebHooksApi.cs"}},
 	}},
-	{Name: "axum", URL: "https://github.com/tokio-rs/axum", SHA: "4cc51a96df444592ec8276738d4ccd1202e6150d", Recall: 0.799, MRR: 0.466, Questions: []Question{
+	{Name: "axum", URL: "https://github.com/tokio-rs/axum", SHA: "4cc51a96df444592ec8276738d4ccd1202e6150d", Recall: 0.782, MRR: 0.619, HybridRecall: 0.932, HybridMRR: 0.792, Questions: []Question{
 		{Ask: "How does Router::nest strip the prefix and mount another router under a path?", Want: []string{"axum/src/routing/mod.rs", "axum/src/routing/path_router.rs"}},
 		{Ask: "What happens when two routers with overlapping routes are merged?", Want: []string{"axum/src/routing/mod.rs", "axum/src/routing/path_router.rs"}},
 		{Ask: "How do I set a fallback handler for requests that match no route?", Want: []string{"axum/src/routing/mod.rs", "axum/src/routing/not_found.rs"}},

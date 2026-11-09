@@ -5,7 +5,6 @@ package outline
 
 import (
 	"cmp"
-	"encoding/json"
 	"maps"
 	"path"
 	"slices"
@@ -348,7 +347,7 @@ func ParsePages(s string, limit int) []Page {
 	var v struct {
 		Pages []Page `json:"pages"`
 	}
-	if !parse(s, &v) {
+	if !ai.ParseJSON(s, &v) {
 		return nil
 	}
 	return keep(v.Pages, limit)
@@ -363,7 +362,7 @@ func ParseHeads(s string, limit int) (overview Page, sections []Page, ok bool) {
 		Overview Page   `json:"overview"`
 		Sections []Page `json:"sections"`
 	}
-	if !parse(s, &v) {
+	if !ai.ParseJSON(s, &v) {
 		return Page{}, nil, false
 	}
 	for _, p := range v.Sections[:min(limit, len(v.Sections))] {
@@ -372,13 +371,6 @@ func ParseHeads(s string, limit int) (overview Page, sections []Page, ok bool) {
 	}
 	overview, ok = NewPage(v.Overview.Title, v.Overview.Query)
 	return overview, sections, ok
-}
-
-// parse reads the JSON object in s into v, past any reasoning and prose.
-func parse(s string, v any) bool {
-	s = ai.StripThinking(s)
-	i, j := strings.Index(s, "{"), strings.LastIndex(s, "}")
-	return i >= 0 && j > i && json.Unmarshal([]byte(s[i:j+1]), v) == nil
 }
 
 // keep is the first limit pages that have a title, made top-level pages.

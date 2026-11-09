@@ -5,7 +5,9 @@
 //	DEEPCODE_BENCH=1 DEEPCODE_CHAT_MODEL=... go test -run TestBench -timeout 0 -v ./test/bench/
 //
 // with the DEEPCODE_CHAT_* settings deepcode serve reads (the key only ever in
-// the environment). DEEPCODE_BENCH_REPOS=chi,axum picks repositories, and
+// the environment), and DEEPCODE_EMBED_* for vector search, read as serve
+// reads them (lexical search only without DEEPCODE_EMBED_MODEL).
+// DEEPCODE_BENCH_REPOS=chi,axum picks repositories, and
 // DEEPCODE_BENCH_PARALLEL=1,2 writes each first wiki once per number of pages
 // written at a time (DEEPCODE_WIKI_PARALLEL, else 1, by default), the last
 // one kept. Without a chat model only indexing, the graph and the retrieval
@@ -38,6 +40,7 @@ import (
 	"deepcode/internal/knowledge/wiki"
 	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	jobstore "deepcode/internal/platform/jobs/store"
@@ -51,6 +54,7 @@ import (
 	graphstore "deepcode/internal/repo/index/graph/store"
 	"deepcode/internal/repo/index/indexer"
 	indexstore "deepcode/internal/repo/index/indexer/store"
+	"deepcode/internal/repo/index/vectorstore"
 	"deepcode/test/eval"
 )
 
@@ -118,6 +122,9 @@ func TestBench(t *testing.T) {
 	}
 	rep := report{Started: time.Now().UTC().Format(time.RFC3339), Model: os.Getenv("DEEPCODE_CHAT_MODEL"),
 		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Temperature: os.Getenv("DEEPCODE_TEMPERATURE"), Deepcode: head()}
+	if r.ret.Embed != nil {
+		rep.EmbedModel = r.ret.Embed.ModelName
+	}
 	for i, tg := range targets {
 		if len(picked) > 0 && !slices.Contains(picked, tg.name) {
 			continue
@@ -156,10 +163,16 @@ func setup(t *testing.T, work string) *rig {
 	gitc := &git.Client{Dir: filepath.Join(work, "repos"), AllowProtocol: "https", MaxBytes: 1 << 30}
 	servers := &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}
 	graphs := &graph.Graph{Store: &graphstore.Store{DB: db}}
-	r := &rig{db: db, meter: &meter{}, ret: &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: graphs}}
+	embed, err := eval.Embedder() // nil without DEEPCODE_EMBED_MODEL: no vector search
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectors := &vectorstore.SQLite{DB: db}
+	r := &rig{db: db, meter: &meter{}, ret: &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: graphs,
+		Embed: embed, Vectors: vectors, Cache: cache.New(1 << 20)}}
 	r.cat = &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: jobs.New(&jobstore.Store{DB: db}, bus, 2*time.Hour), Git: gitc, Servers: servers}
 	r.ix = &indexer.Indexer{Store: &indexstore.Store{DB: db}, Graph: graphs, Git: gitc, Servers: servers, Events: bus,
-		Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
+		Embed: embed, Vectors: vectors, Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
 	if model := os.Getenv("DEEPCODE_CHAT_MODEL"); model != "" {
 		llm := &ai.OpenAI{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model,
 			ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Measure: r.meter.add}

@@ -25,8 +25,8 @@ var (
 // every project's Extensions.cs, found by the symbol search too, push eShop's
 // AppHost.cs out of its page again; a question naming package.json gives it
 // three of ten places at most, and the code it asks about the rest. Each
-// file's best chunk is sure of a place (sure), as fusion ranks a chunk only
-// the named list finds below any two searches find.
+// file's best chunk is sure of a place (fusion.Sure), as fusion ranks a chunk
+// only the named list finds below most chunks two searches find.
 const (
 	maxFiles     = 40
 	namedPerFile = 3
@@ -272,15 +272,38 @@ func balanced(s string, open, close byte) bool {
 // symbolChunks finds chunks holding the definition of any of the first 32
 // identifiers named in the query, or a method or function named by one of the
 // first 16 runs of two or three adjacent words joined (route pattern:
-// RoutePattern), longest (most specific) names first; Store.Defining says
-// which symbols count, and when case does.
+// RoutePattern); Store.Defining ranks them, the names the query writes as
+// code (coded) first, and says which symbols count, and when case does.
 func (r *Retriever) symbolChunks(ctx context.Context, snapshotID int64, query string) ([]int64, error) {
 	names := bounded(identRe.FindAllString(query, -1), 32, nil)
 	runs := bounded(joined(query), 16, names)
 	if len(names)+len(runs) == 0 {
 		return nil, nil
 	}
-	return r.Store.Defining(ctx, snapshotID, names, runs, symbolLimit)
+	return r.Store.Defining(ctx, snapshotID, names, coded(query, names), runs, symbolLimit)
+}
+
+// coded is those of names the query writes as code somewhere: in mixed case
+// with a capital inside (fromJson, HTTPServer, not JSON), with _, $ or a
+// digit, or beside a backtick, an opening parenthesis, :: or #, or a dot
+// joining it to another name (Gson.fromJson, not a sentence's end).
+func coded(query string, names []string) []string {
+	name := func(b byte) bool {
+		return b < 0x80 && (b == '_' || b == '$' || unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)))
+	}
+	code := map[string]bool{}
+	for _, m := range identRe.FindAllStringIndex(query, -1) {
+		w, before, after := query[m[0]:m[1]], query[:m[0]], query[m[1]:]
+		mixed := strings.ToLower(w) != w && strings.ToUpper(w) != w && strings.ContainsFunc(w[1:], unicode.IsUpper)
+		if mixed || strings.ContainsAny(w, "_$0123456789") ||
+			strings.HasSuffix(before, "`") || strings.HasPrefix(after, "`") || strings.HasPrefix(after, "(") ||
+			strings.HasSuffix(before, "::") || strings.HasPrefix(after, "::") || strings.HasSuffix(before, "#") || strings.HasPrefix(after, "#") ||
+			strings.HasSuffix(before, ".") && len(before) > 1 && name(before[len(before)-2]) ||
+			strings.HasPrefix(after, ".") && len(after) > 1 && name(after[1]) {
+			code[strings.ToLower(w)] = true
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(names), func(n string) bool { return !code[strings.ToLower(n)] })
 }
 
 // bounded is the first limit of words that are not stopwords, each once and

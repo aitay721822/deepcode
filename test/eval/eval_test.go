@@ -11,6 +11,8 @@ import (
 
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
+	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/platform/storage"
@@ -21,14 +23,20 @@ import (
 	graphstore "deepcode/internal/repo/index/graph/store"
 	"deepcode/internal/repo/index/indexer"
 	indexstore "deepcode/internal/repo/index/indexer/store"
+	"deepcode/internal/repo/index/vectorstore"
 )
 
 func TestRetrieval(t *testing.T) {
+	embed, err := Embedder()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range Corpora {
 		t.Run(c.Name, func(t *testing.T) {
 			t.Parallel()
-			db, snap := index(t, source(t, c), c.SHA)
-			ret := &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}}
+			db, snap := index(t, source(t, c), c.SHA, embed)
+			ret := &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}},
+				Embed: embed, Vectors: &vectorstore.SQLite{DB: db}, Cache: cache.New(1 << 20)}
 			res, err := Run(context.Background(), ret, snap, c)
 			if err != nil {
 				t.Fatal(err)
@@ -37,8 +45,15 @@ func TestRetrieval(t *testing.T) {
 				t.Log(m)
 			}
 			t.Logf("%s: recall@%d %.3f, MRR %.3f over %d questions", c.Name, Hits, res.Recall, res.MRR, len(c.Questions))
-			if res.Recall < c.Recall || res.MRR < c.MRR {
-				t.Errorf("below the floors, recall %.3f and MRR %.3f", c.Recall, c.MRR)
+			recall, mrr := c.Recall, c.MRR
+			if embed != nil {
+				if embed.ModelName != HybridModel {
+					t.Skipf("no floors for the embedding model %s, only for %s", embed.ModelName, HybridModel)
+				}
+				recall, mrr = c.HybridRecall, c.HybridMRR
+			}
+			if res.Recall < recall || res.MRR < mrr {
+				t.Errorf("below the floors, recall %.3f and MRR %.3f", recall, mrr)
 			}
 		})
 	}
@@ -67,9 +82,9 @@ func source(t *testing.T, c Corpus) string {
 }
 
 // index indexes the repository in the git directory dir at sha, as an index
-// job does with cmd/deepcode's default limits, into a database of its own,
-// and returns that and the snapshot.
-func index(t *testing.T, dir, sha string) (*sql.DB, int64) {
+// job does with cmd/deepcode's default limits and embed (nil: no vectors),
+// into a database of its own, and returns that and the snapshot.
+func index(t *testing.T, dir, sha string, embed *ai.OpenAI) (*sql.DB, int64) {
 	ctx, tmp := context.Background(), t.TempDir()
 	db, err := storage.Open(ctx, filepath.Join(tmp, "deepcode.db"))
 	if err != nil {
@@ -91,6 +106,7 @@ func index(t *testing.T, dir, sha string) (*sql.DB, int64) {
 	}
 	ix := &indexer.Indexer{Store: &indexstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}},
 		Git: &git.Client{Dir: tmp, AllowProtocol: "file"}, Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}, Events: bus,
+		Embed: embed, Vectors: &vectorstore.SQLite{DB: db},
 		Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
 	if err := ix.Run(ctx, 1, sha, jobs.Progress{}); err != nil {
 		t.Fatal(err)

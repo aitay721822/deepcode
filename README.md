@@ -244,7 +244,7 @@ worker 寫進度到 jobs、輸出到 job_logs ──► job.updated / job.output
 | `GET` | `/api/repos/{id}/files` | 檔案清單 |
 | `GET` | `/api/repos/{id}/files/{path}` | 檔案內容 |
 | `GET` | `/api/repos/{id}/symbols?q=` | Symbol 搜尋 |
-| `GET` | `/api/repos/{id}/search?q=` | 混合檢索（FTS5 + Vector + Symbol + 查詢點名的檔案 → RRF；查詢寫出的路徑（`src/app.ts`）、資料夾（`examples/`）、glob（`tests/*.rs`）或檔名（`App.java`）所指的檔案，其 Chunk 依查詢的字另排一份名單一起融合，名次與全文檢索的同等計分（查詢點名的就是它要的；權重調低時，每個專案的 `Extensions.cs` 又被 Symbol 檢索找到，會再把 eShop 的 `AppHost.cs` 擠出它的頁面；名單最多 6 個檔案，依查詢點名的順序：每個名稱輪流取它所指的下一個檔案（資料夾或 glob 的檔案依查詢的前 16 個檢索詞（含拆開的識別字）在點名檔案裡排出的前 25 個 Chunk 排序，排不進的在最後），因為焦點先寫的才是頁面主要談的（範例也補在焦點最前面），不是字面對得最好的；每個檔案先取最好的一個再輪下一個，每檔最多 3 個、全部最多 6 個，免得問到 `package.json` 的問題被它的 Chunk 佔滿；檢索詞找不到的檔案取它的第一個 Chunk；每個檔案最好的那個 Chunk 保證排進圖關係補充之前的名額（名額比檔案少時，融合排名較前的優先），擠下的往後排（融合時只被一種檢索找到的 Chunk 輸給兩種都找到的，很長的 `AppHost.cs` 與補進別頁焦點的範例都曾因此掉出名單）；回應的 `named` 是這份名單的數量）；一個查詢最多點名 16 個名稱，一個名稱指到的檔案超過剩下的名額（共 40 個）就不算，資料夾含其下各層的檔案，只寫檔名而有好幾個、根目錄又沒有的（每個專案都有的 `appsettings.json`）也不算；只寫檔名時要是有索引的語言的副檔名，網址不算，`a.go:42`、`a.go#L42` 這類行號，包住名稱的引號、括號與粗體，以及開頭的 `./` 都會去掉：Wiki 頁面的 focus 會列出它談的檔案，光靠字面常排不進來（eShop 的 `AppHost.cs` 輸給每個專案的 `Extensions.cs`）；前 5 名所在檔案 import 的檔案（最多 40 個）再以全文檢索取最多 10 個 Chunk，補進最後 2 個名額，不取代前面的結果；回應的 `graph` 是補進結果的數量。命中檔頭（第一個宣告之前的授權、package 與 import）時，與緊接的宣告 Chunk 合成一筆，排在兩者較前的名次：檔頭本身沒有程式，它的 import 卻常讓它勝出）。設了 Embedding 模型時，每個沒查過的查詢呼叫一次 Embedding（查詢向量最多快取一小時），不受問答的每人同時上限限制；Embedding 的呼叫速率用 `DEEPCODE_LLM_RPM` 限制（與 Chat 分開計算） |
+| `GET` | `/api/repos/{id}/search?q=` | 混合檢索（FTS5 + Vector + Symbol + 查詢點名的檔案 → RRF，k = 20，Symbol 名單排定義時，查詢以程式碼寫法寫出的名稱（`fromJson`、`Gson.toJson`、`with_state`、`` `serve` ``、`listen()`）在前，再來是 Repository 裡越少 Chunk 出現的名稱，最後是較長的名稱，名次只算一半：它找的是名稱定義在哪，回答問題的多半是其他程式碼；向量檢索與全文檢索一樣把測試、範例、文件、隱藏資料夾與產生的檔案往後放，相似度乘 0.8（只乘正的，不讓不相干的往前）；依據見「檢索評測」；查詢寫出的路徑（`src/app.ts`）、資料夾（`examples/`）、glob（`tests/*.rs`）或檔名（`App.java`）所指的檔案，其 Chunk 依查詢的字另排一份名單一起融合，名次與全文檢索的同等計分（查詢點名的就是它要的；權重調低時，每個專案的 `Extensions.cs` 又被 Symbol 檢索找到，會再把 eShop 的 `AppHost.cs` 擠出它的頁面；名單最多 6 個檔案，依查詢點名的順序：每個名稱輪流取它所指的下一個檔案（資料夾或 glob 的檔案依查詢的前 16 個檢索詞（含拆開的識別字）在點名檔案裡排出的前 25 個 Chunk 排序，排不進的在最後），因為焦點先寫的才是頁面主要談的（範例也補在焦點最前面），不是字面對得最好的；每個檔案先取最好的一個再輪下一個，每檔最多 3 個、全部最多 6 個，免得問到 `package.json` 的問題被它的 Chunk 佔滿；檢索詞找不到的檔案取它的第一個 Chunk；每個檔案最好的那個 Chunk 保證排進圖關係補充之前的名額（名額比檔案少時，融合排名較前的優先），擠下的往後排（融合時只被一種檢索找到的 Chunk 輸給兩種都找到的，很長的 `AppHost.cs` 與補進別頁焦點的範例都曾因此掉出名單）；回應的 `named` 是這份名單的數量）；一個查詢最多點名 16 個名稱，一個名稱指到的檔案超過剩下的名額（共 40 個）就不算，資料夾含其下各層的檔案，只寫檔名而有好幾個、根目錄又沒有的（每個專案都有的 `appsettings.json`）也不算；只寫檔名時要是有索引的語言的副檔名，網址不算，`a.go:42`、`a.go#L42` 這類行號，包住名稱的引號、括號與粗體，以及開頭的 `./` 都會去掉：Wiki 頁面的 focus 會列出它談的檔案，光靠字面常排不進來（eShop 的 `AppHost.cs` 輸給每個專案的 `Extensions.cs`）；前 5 名所在檔案 import 的檔案（最多 40 個）再以全文檢索取最多 10 個 Chunk，補進最後 2 個名額，不取代前面的結果；回應的 `graph` 是補進結果的數量。命中檔頭（第一個宣告之前的授權、package 與 import）時，與緊接的宣告 Chunk 合成一筆，排在兩者較前的名次：檔頭本身沒有程式，它的 import 卻常讓它勝出）。設了 Embedding 模型時，每個沒查過的查詢呼叫一次 Embedding（查詢向量最多快取一小時），不受問答的每人同時上限限制；Embedding 的呼叫速率用 `DEEPCODE_LLM_RPM` 限制（與 Chat 分開計算） |
 | `GET` | `/api/repos/{id}/wiki` | Wiki 頁面與引用；概覽頁另有 `diagram`（import 關係圖的 Mermaid 原始碼，沒有 import 關係時省略），節之下的頁面另有 `parent`（所屬節頁面的 slug） |
 | `POST` | `/api/chat/stream` | SSE 問答（`repo.chat`），body `{"repoId", "conversationId", "question", "deep", "codemap"}`；事件為 `conversation`、`search`（Deep 與 Codemap 模式每多一輪檢索一次）、`evidence`、`delta`、`drawing`（Codemap 模式取代 `delta`：每產生約 500 位元組一次，帶已產生的字元數）、`done`（Codemap 模式的訊息另有 `codemap`，整張圖）、`error`；答案被檢查後重寫時，再送一次 `search`（有多搜一輪時）、`evidence` 與 `delta`，前端收到 `evidence` 就清掉已顯示的答案；重寫失敗時，在重寫已送出的事件（`search`、`evidence`，可能還有部分 `delta`）之後再送一次 `evidence`（原本答案的來源），之後不再有 `delta`，`done` 帶回原本的答案 |
 | `GET` | `/api/conversations/{id}` | 自己的對話紀錄 |
@@ -294,7 +294,7 @@ npm --prefix web run check
 
 ### 檢索評測
 
-`test/eval` 用答案已知的問題衡量檢索：把 Repository 的固定 commit 交給真正的索引流程建進暫存資料庫，照問答的檢索規則取前 10 筆（問題對不上任何程式碼字詞時，例如中文，就用模型給的英文詞再搜一次；這些詞已凍結在題目裡，不呼叫 LLM），計算 recall@10 與 MRR，低於 `test/eval/cases.go` 記錄的下限就失敗。評測不接 Embedding，只量全文與符號檢索。deepcode 自己的 30 題跟著 `go test ./...` 跑；淺層 clone 沒有那個 commit 時會跳過，CI 要強制下限就得完整 fetch。其他七個 Repository 需要先在同一個資料夾準備 bare clone，名稱是題目的名稱加 `.git`（`chi.git`、`zustand.git`、`express.git`、`eshop.git`、`petclinic.git`、`gson.git`、`axum.git`），例如：
+`test/eval` 用答案已知的問題衡量檢索：把 Repository 的固定 commit 交給真正的索引流程建進暫存資料庫，照問答的檢索規則取前 10 筆（問題對不上任何程式碼字詞時，例如中文，就用模型給的英文詞再搜一次；這些詞已凍結在題目裡，不呼叫 LLM），計算 recall@10 與 MRR，低於 `test/eval/cases.go` 記錄的下限就失敗。設了 `DEEPCODE_EMBED_MODEL` 時，Embedding 的設定照伺服器的讀法（`DEEPCODE_EMBED_BASE_URL`、`DEEPCODE_EMBED_API_KEY`，沒設時沿用 Chat 的），索引時建向量、檢索時一起融合，與伺服器相同，比的是混合檢索的下限（用 LM Studio 載入的 `text-embedding-qwen3-embedding-0.6b` 量的；換別的模型只記錄分數，不比下限；同名模型換了量化或伺服器，向量可能略有不同，低於下限時先重量一次舊程式再判斷）；沒設時只量全文與符號檢索，比全文檢索的下限。deepcode 自己的 30 題跟著 `go test ./...` 跑；淺層 clone 沒有那個 commit 時會跳過，CI 要強制下限就得完整 fetch。其他七個 Repository 需要先在同一個資料夾準備 bare clone，名稱是題目的名稱加 `.git`（`chi.git`、`zustand.git`、`express.git`、`eshop.git`、`petclinic.git`、`gson.git`、`axum.git`），例如：
 
 ```bash
 git clone --bare https://github.com/go-chi/chi chi.git
@@ -306,20 +306,35 @@ DEEPCODE_EVAL_GIT=/path/to/folder-with-the-clones go test -v -run TestRetrieval 
 
 其餘的網址：https://github.com/pmndrs/zustand 、https://github.com/expressjs/express 、https://github.com/dotnet/eShop 、https://github.com/spring-projects/spring-petclinic 、https://github.com/google/gson 、https://github.com/tokio-rs/axum 。
 
-| Repository | 語言 | 題數 | recall@10 | MRR |
-| --- | --- | --- | --- | --- |
-| chi | Go | 31 | 1.000 | 0.786 |
-| zustand | TypeScript | 26 | 1.000 | 0.873 |
-| express | JavaScript | 27 | 1.000 | 0.963 |
-| eShop | C# | 30 | 0.800 | 0.612 |
-| spring-petclinic | Java | 28 | 0.964 | 0.725 |
-| gson | Java | 28 | 0.821 | 0.594 |
-| axum | Rust | 30 | 0.800 | 0.467 |
-| deepcode | Go、TypeScript | 30 | 0.917 | 0.618 |
+| Repository | 語言 | 題數 | 全文 recall@10 | 全文 MRR | 混合 recall@10 | 混合 MRR |
+| --- | --- | --- | --- | --- | --- | --- |
+| chi | Go | 31 | 1.000 | 0.828 | 1.000 | 0.884 |
+| zustand | TypeScript | 26 | 1.000 | 0.874 | 1.000 | 0.947 |
+| express | JavaScript | 27 | 1.000 | 0.963 | 1.000 | 1.000 |
+| eShop | C# | 30 | 0.800 | 0.687 | 0.833 | 0.745 |
+| spring-petclinic | Java | 28 | 0.964 | 0.737 | 1.000 | 0.867 |
+| gson | Java | 28 | 0.839 | 0.684 | 0.893 | 0.743 |
+| axum | Rust | 30 | 0.783 | 0.620 | 0.933 | 0.793 |
+| deepcode | Go、TypeScript | 30 | 0.950 | 0.700 | 0.967 | 0.807 |
 
 調整檢索（欄位權重、融合、import 補位）前後都跑一次：分數上升就把下限調高；任一 Repository 下降時，只有整體明顯上升、且下降的題目經過檢查仍算合理才合併。bm25 的欄位權重（path、Symbol 名稱、內容、拆開的識別字）與測試文件的倍數掃過 162 組，採用 path 1、Symbol 名稱 6、內容 1、拆開的識別字 0.5，測試、文件與產生的檔案降為四分之一：八個 Repository 平均 recall 0.890→0.906、MRR 0.684→0.702，七個上升；gson 的「collections 與 arrays 怎麼轉成 JSON array」掉出 `CollectionTypeAdapterFactory.java`（只靠識別字裡的 collection 命中，第 6 名變第 11 名，換成同樣相關的 `JsonArray.java`）。問題裡相鄰的兩、三個字也連成一個名稱查 Symbol（route pattern 找到 `RoutePattern`），且只比對方法與函式，因為比對到型別時 eShop 的 catalog item、integration event 會把 `CatalogItem`、`IntegrationEvent` 類別排到最前面；chi 與 deepcode 的 MRR 上升，gson 的「accept alternate names」改為先找到同樣相關的 `FieldNamingStrategy.alternateNames()`，`SerializedName.java` 從第 1 名變第 2 名。想要的檔案寫成 `檔案#名稱` 時，要找到含那個 Symbol 的 Chunk 才算（chi 的 matched route pattern 一題用它，因為同一個檔案的其他 Chunk 本來就排得進前 10）。其他已知的方向：bm25 的欄位權重全部改成 1 時 chi、zustand、deepcode 都上升；Symbol 一律區分大小寫時 chi、eShop、gson、petclinic、deepcode 上升，但 zustand 的 MRR 與 axum 的 recall 下降（問題裡小寫的 path 找不到 `Path` extractor）。
 
-Markdown 改成依標題分塊（每個標題是一個 `section` Symbol，Wiki 規劃時把指南的各節當成主題）後，deepcode 的 MRR 從 0.620 降到 0.618，是唯一一次調低下限（0.619→0.617）：「登入失敗太多次會怎樣？」的 `limiter.go` 從第 5 名掉到第 7 名，仍在前 10。原因是 bm25 的全域統計（Chunk 數與平均長度）跟著分塊改變，兩個幾乎同分的程式碼 Chunk 換了位置；這題的前 10 筆裡沒有文件。其他七個 Repository 不變（表中 zustand 與 petclinic 較高的分數在 c84dce4 就已達到，當時沒更新表格與下限，這次一併調高）。接受這次例外，是因為好處在 Wiki 的規劃與主題覆蓋，檢索評測量不到。
+Markdown 改成依標題分塊（每個標題是一個 `section` Symbol，Wiki 規劃時把指南的各節當成主題）後，deepcode 的 MRR 從 0.620 降到 0.618，是第一次調低下限（0.619→0.617）：「登入失敗太多次會怎樣？」的 `limiter.go` 從第 5 名掉到第 7 名，仍在前 10。原因是 bm25 的全域統計（Chunk 數與平均長度）跟著分塊改變，兩個幾乎同分的程式碼 Chunk 換了位置；這題的前 10 筆裡沒有文件。其他七個 Repository 不變（表中 zustand 與 petclinic 較高的分數在 c84dce4 就已達到，當時沒更新表格與下限，這次一併調高）。接受這次例外，是因為好處在 Wiki 的規劃與主題覆蓋，檢索評測量不到。
+
+2026-11-09 評測接上 Embedding 後重訂全部下限，融合也改成加權的 RRF：k 從 60 降到 20，Symbol 清單算一半，測試、範例、文件、隱藏與產生的檔案的向量相似度（只算正值）乘 0.8；Symbol 清單的排序也從名稱長短改成程式碼寫法、名稱出現的 Chunk 數、長短。這些是在八個 Repository 上比過原本的做法與其他做法後選的（平均 recall@10 / MRR）：
+
+| 融合 | Symbol 清單的排序 | 全文 | 混合 |
+| --- | --- | --- | --- |
+| k 60、等權（原本） | 名稱長短 | 0.913 / 0.704 | 0.938 / 0.794 |
+| k 20、Symbol 一半 | 名稱長短 | 0.915 / 0.744 | 0.936 / 0.824 |
+| k 20、Symbol 一半、次要檔案的向量 ×0.8 | 名稱長短 | 0.915 / 0.744 | 0.953 / 0.844 |
+| 同上 | 程式碼寫法、定義它的檔案數、長短 | 0.917 / 0.761 | 0.953 / 0.846 |
+| 同上（採用） | 程式碼寫法、出現它的 Chunk 數、長短 | 0.917 / 0.762 | 0.953 / 0.848 |
+| 同上，Symbol 不減半 | 程式碼寫法、出現它的 Chunk 數、長短 | 0.913 / 0.725 | 0.956 / 0.824 |
+
+k 60 時，兩份清單都排在後面的 Chunk（全文第 20 名加 Symbol 第 5 名）會排到一份清單的第一名前面：gson 的「How does fromJson deserialize a string into a typed object?」裡全文第 1 名的 `Gson.fromJson` 被 `JsonDeserializer`、`JsonDeserializationContext` 等只因 `deserialize` 同時命中兩份清單的 Chunk 擠到第 5 名。Symbol 清單原本依名稱長短排序，11 個字母的普通英文字 `deserialize` 排在問題寫明的 `fromJson` 前面；改成先排問題以程式碼寫法寫出的名稱（大小寫混合且中間有大寫、含 `_`、`$` 或數字，或緊鄰反引號、`(`、`::`、`#`，或以 `.` 接著另一個名稱，`JSON` 與句尾的句點不算），這題與「How does Gson.toJson serialize」的答案檔案都回到第 1 名。接著排出現在較少 Chunk 的名稱（像 bm25 看重少見的字），不用定義它的檔案數：gson 的 `Gson` 類別只定義在一個檔案，卻幾乎每個 Chunk 都有，照定義數排會讓它的建構子排到 Symbol 清單前面，「so Gson can deserialize it」與「How does Gson create an instance」兩題的答案檔案名次下降（混合 MRR 0.743→0.725）；照 Chunk 數排沒有一題比照長短排差，chi 的「middleware 只套用在一組路由」、eShop 的登入頁驗證 return URL、axum 的 async function middleware 與「只套用在已經匹配的路由」都升到第 1 名。Symbol 清單不減半時，不論哪種排序，MRR 都在七個 Repository 下降（recall 有升有降：gson 的混合與 axum 的全文各多半題，deepcode 與 gson 的全文少一題與半題）：它找的是名稱定義在哪，回答問題的多半是其他程式碼。上一次改動把 `test-*/` 資料夾也歸為測試後，gson 的全文 MRR 掉到 0.590，低於當時的下限 0.593，這次升到 0.684。express 的 trust proxy 一題在混合檢索時掉了 `lib/utils.js`（`test/req.*.js` 的向量離問題更近），次要檔案的向量乘 0.8 後找回來；乘 0.5 分數相同，0.8 多保留一點 recall。另外試過把全文與向量清單的第一名提到最前面，zustand 與 eShop 下降，沒採用。
+
+唯一調低的下限是 axum 的全文 recall（0.799→0.782，實測 0.800→0.783），逐題確認過原因（recall 是每題找到的檔案比例，30 題合計少了半題）：兩題各要兩個檔案，都少了主要靠 Symbol 清單的 `routing/mod.rs`（nest 一題只有 Symbol 第 1 名找到，with_state 一題是全文第 18 名、Symbol 第 4 名），Symbol 算一半後掉出前 10，各扣半題；「怎麼限制請求本文的大小？」的 `default_body_limit.rs` 只有全文找到（第 19 名），k 變小後被兩份清單都找到的 Chunk 擠出前 10，扣一題。同時 Option extractor 一題新找到 `option.rs`（加一題），typed path 一題找到要的兩個檔案之一 `typed.rs`（加半題），axum 的全文 MRR 0.467→0.620。少掉的檔案除了 with_state 一題的，混合檢索時都找得到。
 
 ### 基準量測（bench）
 
@@ -329,7 +344,7 @@ Markdown 改成依標題分塊（每個標題是一個 `section` Symbol，Wiki �
 DEEPCODE_BENCH=1 DEEPCODE_CHAT_BASE_URL=http://host:8080/v1 DEEPCODE_CHAT_API_KEY=your-key DEEPCODE_CHAT_MODEL=your-chat-model go test -run TestBench -timeout 0 -v ./test/bench/
 ```
 
-`DEEPCODE_BENCH_REPOS=chi,axum` 只跑其中幾個；`DEEPCODE_BENCH_PARALLEL=1,2` 讓第一次 Wiki 依序以每次 1 頁、2 頁並行各寫一次（每次從頭寫，保留最後一次；沒設時用 `DEEPCODE_WIKI_PARALLEL`，再沒有就是 1），`DEEPCODE_WIKI_MAX_PAGES` 照樣生效；沒設 `DEEPCODE_CHAT_MODEL` 時只量索引、關係圖與檢索評測；`DEEPCODE_REASONING_EFFORT` 與 `DEEPCODE_TEMPERATURE` 照伺服器的設定傳給模型，並記在結果裡。結果寫到 `data/bench/`：`latest.json`（全部數字與回答全文）、`latest.md`（摘要表與回答）、`runs/<開始時間>.json`（每次的紀錄）；工作資料在 `data/bench/work/`，每次重來。記錄的項目：檔案、產生的檔案、語言、Chunk、Symbol、import 關係的邊數與概覽關係圖畫出的箭頭數；第一次索引的時間；第一次 Wiki 的時間、頁數、模型呼叫次數、輸入與輸出的 token（伺服器有回報 usage 時，否則看字元數）與輸入中由提示詞快取讀取的 token 與比例；更新一個 Commit 的變更檔案數、索引與 Wiki 的時間、重寫的頁數（head 中與 base 同標題、去掉引用的行號與連結後文字相同的頁面不算：引用只是跟著行移動）；DeepWiki 主題覆蓋率（每個 Repository 列出 DeepWiki 那份 Wiki 的主題，詞彙表與治理文件除外，每個主題給幾個關鍵字，head 的頁面標題或 `##`、`###` 標題含其中之一（整個字、不分大小寫；名稱裡的字也算：小寫字母或數字後的大寫字母、連續大寫字母中後接小寫字母的最後一個是字的開頭，字母之後的數字之前、連續大寫字母之後而後面接著非字母數字、大寫字母或結尾的 s 之前是字的分界，`WelcomeController` 含 welcome、`HTTPServer` 含 server、`OAuth2` 含 oauth、`APIs` 與 `APIsController` 含 api，`Base64encode` 不含 encode；非 ASCII 的字元也是分界；`####` 與程式碼區塊裡的 `##` 不算，程式碼區塊從縮排至多三格、三個以上的 ``` 或 ~~~ 開始，到只有同一種字元、數量不少於開頭的那一行結束）就算涵蓋；表中列出沒涵蓋的主題）與只引用測試、CI、manifest、編輯器設定的頁數及比例；recall@10 與 MRR；每個問題的第一個字時間、總時間、引用數、必須出現的關鍵字是否都有（不分大小寫，取程式碼裡的名稱而非任何回答都會用的字，例如 chi 的 `RoutePattern`、eShop 的 `OrderPaymentSucceededIntegrationEvent` 與 `SetPaidOrderStatusCommand`；同一名稱有多種寫法時以 `a|b` 列出，出現其一即可；缺的列在表中）、是否自言自語與是否以問題的語言回答（去掉程式碼區塊、行內程式碼與連結後，漢字不少於英文單字算中文），以及通過關鍵字、沒有引用、自言自語、以其他語言回答的題數；第一次 Wiki 每種並行數的時間；head 的 Wiki 頁面樹（節與其下的頁面）。時間包含模型端點的延遲，比較時要分開看；第一次索引的時間包含從 GitHub 下載。某個步驟失敗時錯誤列在表格下方、索引表的「Errors」欄計數，它沒量到的格子一律標成 failed（第一次索引、head 的各項計數、失敗的 Wiki、更新與問題，以及任何一個查詢失敗的計數；沒算的重寫頁數是「–」；檢索評測失敗時該列不出現），不會當成正常數字；`DEEPCODE_BENCH_REPOS` 寫錯名字時直接失敗。bench 的檢索評測在更新過的版本上跑，Chunk 的編號順序和 `test/eval` 從頭建的不同，同分時的排名可能不同，分數會差千分之幾。
+`DEEPCODE_BENCH_REPOS=chi,axum` 只跑其中幾個；`DEEPCODE_BENCH_PARALLEL=1,2` 讓第一次 Wiki 依序以每次 1 頁、2 頁並行各寫一次（每次從頭寫，保留最後一次；沒設時用 `DEEPCODE_WIKI_PARALLEL`，再沒有就是 1），`DEEPCODE_WIKI_MAX_PAGES` 照樣生效；沒設 `DEEPCODE_CHAT_MODEL` 時只量索引、關係圖與檢索評測；`DEEPCODE_REASONING_EFFORT` 與 `DEEPCODE_TEMPERATURE` 照伺服器的設定傳給模型，並記在結果裡；`DEEPCODE_EMBED_*` 照伺服器的讀法生效（沒設 `DEEPCODE_EMBED_MODEL` 時只有全文與符號檢索），用的 Embedding 模型記在結果開頭；有 Embedding 時第一次索引與更新的時間包含計算向量，與沒有的結果不能直接比。結果寫到 `data/bench/`：`latest.json`（全部數字與回答全文）、`latest.md`（摘要表與回答）、`runs/<開始時間>.json`（每次的紀錄）；工作資料在 `data/bench/work/`，每次重來。記錄的項目：檔案、產生的檔案、語言、Chunk、Symbol、import 關係的邊數與概覽關係圖畫出的箭頭數；第一次索引的時間；第一次 Wiki 的時間、頁數、模型呼叫次數、輸入與輸出的 token（伺服器有回報 usage 時，否則看字元數）與輸入中由提示詞快取讀取的 token 與比例；更新一個 Commit 的變更檔案數、索引與 Wiki 的時間、重寫的頁數（head 中與 base 同標題、去掉引用的行號與連結後文字相同的頁面不算：引用只是跟著行移動）；DeepWiki 主題覆蓋率（每個 Repository 列出 DeepWiki 那份 Wiki 的主題，詞彙表與治理文件除外，每個主題給幾個關鍵字，head 的頁面標題或 `##`、`###` 標題含其中之一（整個字、不分大小寫；名稱裡的字也算：小寫字母或數字後的大寫字母、連續大寫字母中後接小寫字母的最後一個是字的開頭，字母之後的數字之前、連續大寫字母之後而後面接著非字母數字、大寫字母或結尾的 s 之前是字的分界，`WelcomeController` 含 welcome、`HTTPServer` 含 server、`OAuth2` 含 oauth、`APIs` 與 `APIsController` 含 api，`Base64encode` 不含 encode；非 ASCII 的字元也是分界；`####` 與程式碼區塊裡的 `##` 不算，程式碼區塊從縮排至多三格、三個以上的 ``` 或 ~~~ 開始，到只有同一種字元、數量不少於開頭的那一行結束）就算涵蓋；表中列出沒涵蓋的主題）與只引用測試、CI、manifest、編輯器設定的頁數及比例；recall@10 與 MRR；每個問題的第一個字時間、總時間、引用數、必須出現的關鍵字是否都有（不分大小寫，取程式碼裡的名稱而非任何回答都會用的字，例如 chi 的 `RoutePattern`、eShop 的 `OrderPaymentSucceededIntegrationEvent` 與 `SetPaidOrderStatusCommand`；同一名稱有多種寫法時以 `a|b` 列出，出現其一即可；缺的列在表中）、是否自言自語與是否以問題的語言回答（去掉程式碼區塊、行內程式碼與連結後，漢字不少於英文單字算中文），以及通過關鍵字、沒有引用、自言自語、以其他語言回答的題數；第一次 Wiki 每種並行數的時間；head 的 Wiki 頁面樹（節與其下的頁面）。時間包含模型端點的延遲，比較時要分開看；第一次索引的時間包含從 GitHub 下載。某個步驟失敗時錯誤列在表格下方、索引表的「Errors」欄計數，它沒量到的格子一律標成 failed（第一次索引、head 的各項計數、失敗的 Wiki、更新與問題，以及任何一個查詢失敗的計數；沒算的重寫頁數是「–」；檢索評測失敗時該列不出現），不會當成正常數字；`DEEPCODE_BENCH_REPOS` 寫錯名字時直接失敗。bench 的檢索評測在更新過的版本上跑，Chunk 的編號順序和 `test/eval` 從頭建的不同，同分時的排名可能不同，分數會差千分之幾。
 
 ## 備份與復原
 
@@ -415,7 +430,7 @@ internal/
         store/           版本的建立與發佈、檔案、Symbol 與 Chunk 的批次寫入、沿用向量、terms、清理
       vectorstore/       向量 BLOB 儲存與 Cosine 檢索
   knowledge/             由索引產生知識；各套件只放規則與流程，SQL 都在自己的 store/
-    retrieval/           FTS5、Symbol、向量檢索、查詢點名的檔案與 RRF，再補上最佳結果 import 的程式碼
+    retrieval/           FTS5、Symbol、向量檢索、查詢點名的檔案，融合後再補上最佳結果 import 的程式碼；fusion/ 加權的 RRF 與點名檔案保證的名次
       store/             FTS5（BM25 權重）、定義 Symbol 的 Chunk、Symbol 搜尋、使用名稱的程式碼、依 id 讀 Chunk
     evidence/            Evidence Pack 與引用驗證
     chat/                問答與對話、Deep 模式（多輪檢索與背景 Wiki 頁）
