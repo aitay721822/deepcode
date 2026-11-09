@@ -91,7 +91,8 @@ type rig struct {
 	wiki     *wiki.Generator // nil without a chat model
 	chat     *chat.Service
 	meter    *meter
-	parallel []int // the first wiki's runs, by pages written at a time
+	parallel []int          // the first wiki's runs, by pages written at a time
+	planned  *wiki.Planning // the last wiki's plan, nil when no model planned it
 }
 
 func TestBench(t *testing.T) {
@@ -187,7 +188,8 @@ func setup(t *testing.T, work string) *rig {
 		if err != nil || pages < 0 {
 			t.Fatalf("DEEPCODE_WIKI_MAX_PAGES holds %q, which is no number of pages", os.Getenv("DEEPCODE_WIKI_MAX_PAGES"))
 		}
-		r.wiki = &wiki.Generator{Store: &wikistore.Store{DB: db}, Graph: graphs, Catalog: r.cat, Retriever: r.ret, Chat: llm, Language: "English", MaxPages: pages}
+		r.wiki = &wiki.Generator{Store: &wikistore.Store{DB: db}, Graph: graphs, Catalog: r.cat, Retriever: r.ret, Chat: llm, Language: "English", MaxPages: pages,
+			Planned: func(p wiki.Planning) { r.planned = &p }}
 		r.chat = &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: r.cat, Retriever: r.ret, Chat: llm}
 	}
 	return r
@@ -409,9 +411,10 @@ func pageTree(ctx context.Context, db *sql.DB, snap int64) ([]string, error) {
 // writeWiki writes the wiki of the snapshot at sha and measures it.
 func (r *rig) writeWiki(ctx context.Context, id int64, sha string, fail func(string, error)) *wikiRun {
 	r.meter.take()
+	r.planned = nil
 	start := time.Now()
 	err := r.wiki.Run(ctx, id, sha, jobs.Progress{})
-	w := &wikiRun{Seconds: since(start), Failed: err != nil}
+	w := &wikiRun{Seconds: since(start), Failed: err != nil, Planning: r.planned}
 	if err != nil {
 		fail("wiki "+sha[:7], err)
 	}

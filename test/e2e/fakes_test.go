@@ -120,7 +120,7 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": part}}}})
 		fmt.Fprintf(w, "data: %s\n\n", b)
 	}
-	fmt.Fprint(w, "data: [DONE]\n\n")
+	fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
 }
 
 func bagOfWords(s string) []float32 {

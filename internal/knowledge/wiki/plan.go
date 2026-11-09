@@ -9,6 +9,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"deepcode/internal/knowledge/wiki/fanout"
 	"deepcode/internal/knowledge/wiki/outline"
@@ -66,7 +68,12 @@ func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, src so
 			progress.Logf("taking the pages %s lists", steering.File)
 		} else {
 			progress.Logf("planning the wiki pages")
-			if plan, err = g.plan(ctx, snap, repo, steer.Notes, progress); err != nil {
+			t, start := &tally{}, time.Now()
+			plan, err = g.plan(ctx, snap, repo, steer.Notes, t, progress)
+			if t.Seconds = time.Since(start).Seconds(); g.Planned != nil { // every section done: no lock needed
+				g.Planned(t.Planning) // a failed plan too: its failures are what it measures
+			}
+			if err != nil {
 				return nil, err
 			}
 			if plan, err = g.readme(ctx, snap, plan, progress); err != nil {
@@ -92,7 +99,7 @@ func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, src so
 // the model titles the overview and each section from the layout and the
 // groups, then plans each section's pages from its files and what they
 // declare, Parallel sections at a time.
-func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, progress jobs.Progress) ([]outline.Page, error) {
+func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, t *tally, progress jobs.Progress) ([]outline.Page, error) {
 	layout, err := g.layout(ctx, snap)
 	if err != nil {
 		return nil, err
@@ -104,11 +111,11 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 	total, n := outline.Size(files, cmp.Or(g.MaxPages, defaultMaxPages))
 	about := fmt.Sprintf("Repository: %s\nWrite the page titles in %s.\n\n%s", repo, g.Language, notes)
 	if n == 0 {
-		out, err := g.ask(ctx, planPrompt, about+layout, func(s string) bool { return len(outline.ParsePages(s, 1)) > 0 })
+		reply, err := ask(ctx, g, t, outline.PlanFormat, planPrompt, about+layout, func(p outline.Plan) bool { return len(p.Titled(1)) > 0 })
 		if err != nil {
 			return nil, err
 		}
-		if plan := outline.ParsePages(out, min(total, flatPages)); len(plan) > 0 {
+		if plan := reply.Titled(min(total, flatPages)); len(plan) > 0 {
 			return plan, nil
 		}
 		return []outline.Page{{Title: "Overview", Query: "overview architecture entry point main modules", Parent: -1}}, nil
@@ -128,14 +135,15 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 		fmt.Fprintf(&groups, "%d. %s (%d files): %s\n", i+1, sectionName(s), len(s.Files), strings.Join(outline.Pick(s.Files, lines, 12), ", "))
 	}
 	progress.Logf("%d sections of %d pages in all, from %d files", len(sections), total, files)
-	out, err := g.ask(ctx, outlinePrompt, about+layout+"\nGroups of directories, one per section, with some of their files:\n"+groups.String(), func(s string) bool {
-		_, _, ok := outline.ParseHeads(s, len(sections))
-		return ok
-	})
+	reply, err := ask(ctx, g, t, outline.OutlineFormat, outlinePrompt, about+layout+"\nGroups of directories, one per section, with some of their files:\n"+groups.String(),
+		func(o outline.Outline) bool {
+			_, _, ok := o.Heads(len(sections))
+			return ok
+		})
 	if err != nil {
 		return nil, err
 	}
-	overview, heads, ok := outline.ParseHeads(out, len(sections))
+	overview, heads, ok := reply.Heads(len(sections))
 	if !ok {
 		overview = outline.Page{Title: "Overview", Query: "overview architecture entry point main modules", Parent: -1}
 	}
@@ -177,11 +185,11 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 			fmt.Fprintf(&b, "%s %s\n", f, strings.Join(declared[f], ", "))
 		}
 		fmt.Fprintf(&b, "\nPlan exactly %d pages.", want)
-		out, err := g.ask(ctx, sectionPrompt, b.String(), func(s string) bool { return len(outline.ParsePages(s, 1)) > 0 })
+		reply, err := ask(ctx, g, t, outline.PlanFormat, sectionPrompt, b.String(), func(p outline.Plan) bool { return len(p.Titled(1)) > 0 })
 		if err != nil {
 			return err
 		}
-		children[i] = outline.Spread(g.cover(outline.ParsePages(out, want), sections[i], lines, progress), units)
+		children[i] = outline.Spread(g.cover(reply.Titled(want), sections[i], lines, progress), units)
 		return nil
 	}); err != nil {
 		return nil, err
@@ -236,16 +244,42 @@ func (g *Generator) readme(ctx context.Context, snap int64, plan []outline.Page,
 	return plan, nil
 }
 
-// ask sends a planning request and returns the reply, asking once more when
-// parsed rejects it: now and then a model's JSON comes cut short or wrapped in
-// prose, and one failed reply would leave a whole section without pages.
-func (g *Generator) ask(ctx context.Context, system, user string, parsed func(string) bool) (string, error) {
+// ask sends g's model a planning request for f's JSON and returns the reply,
+// asking once more when usable rejects it: one empty reply would leave a whole
+// section without pages. A reply that is not f's JSON fails the plan
+// (ai.ErrSchema). Each request is counted in t.
+func ask[T any](ctx context.Context, g *Generator, t *tally, f ai.Format[T], system, user string, usable func(T) bool) (T, error) {
 	msgs := []ai.Message{{Role: "system", Content: system}, {Role: "user", Content: user}}
-	out, err := g.Chat.Generate(ctx, msgs)
-	if err != nil || parsed(out) {
-		return out, err
+	for try := 0; ; try++ {
+		v, _, err := ai.StreamJSON(ctx, g.Chat, msgs, f, nil)
+		if t.add(err); err != nil || usable(v) || try == 1 {
+			return v, err
+		}
 	}
-	return g.Chat.Generate(ctx, msgs)
+}
+
+// Planning is how the model planned one wiki: the time it took, its requests,
+// and those whose answer was not the JSON asked for (structured-output
+// failures, ai.ErrSchema).
+type Planning struct {
+	Seconds  float64 `json:"seconds"`
+	Requests int     `json:"requests"`
+	Failures int     `json:"structuredOutputFailures"`
+}
+
+// tally counts a plan's requests, from sections planned at a time.
+type tally struct {
+	sync.Mutex
+	Planning
+}
+
+// add counts a request that ended with err.
+func (t *tally) add(err error) {
+	t.Lock()
+	defer t.Unlock()
+	if t.Requests++; errors.Is(err, ai.ErrSchema) {
+		t.Failures++
+	}
 }
 
 // sectionName names a section for the model: the code's by its directories,

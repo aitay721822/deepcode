@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -121,7 +122,7 @@ func (f *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	f.mu.Unlock()
-	b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
+	b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 	fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", b)
 }
 
@@ -354,11 +355,10 @@ func TestRunFollowsImports(t *testing.T) {
 	}
 }
 
-// TestRunPlansSections: a repository big enough for sections gets the overview,
-// then each section (the model's title, or what it holds) followed by the pages
-// it was given, as many as its lines' share, a section of two pages being two
-// of its own; pages are written two at a time, a section's page as its overview
-// and a part as a part, and the nav reads each part's section.
+// TestRunPlansSections: a repository big enough for sections gets the overview, then each section (the
+// model's title, or what it holds) followed by the pages it was given, as many as its lines' share, a section
+// of two pages being two of its own; pages are written two at a time, a section's page as its overview and a
+// part as a part, and the nav reads each part's section; planning took 5 requests, none a structured-output failure.
 func TestRunPlansSections(t *testing.T) {
 	stmts := []string{`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`, `INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`,
 		`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'api/a1.go', 'store/s1.go'), (1, 'api/a2.go', 'store/s2.go'), (1, 'web/w1.go', 'api/a1.go')`}
@@ -371,7 +371,7 @@ func TestRunPlansSections(t *testing.T) {
 	var mu sync.Mutex
 	var asked []int // pages asked of each section
 	var writes []string
-	prose := true // Entry's first plan comes back as prose, and is asked again
+	empty, planned := true, Planning{} // Entry's first plan comes back empty, and is asked again
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Messages []ai.Message }
 		json.NewDecoder(r.Body).Decode(&body)
@@ -385,8 +385,8 @@ func TestRunPlansSections(t *testing.T) {
 			var n int
 			fmt.Sscanf(user[strings.LastIndex(user, "Plan "):], "Plan exactly %d pages", &n)
 			section, _, _ := strings.Cut(strings.SplitN(user, "Section: ", 2)[1], ".")
-			if section == "Entry" && prose {
-				prose, reply = false, "Here are the pages you asked for."
+			if section == "Entry" && empty {
+				empty, reply = false, `{"pages":[]}`
 				break
 			}
 			asked = append(asked, n)
@@ -399,12 +399,12 @@ func TestRunPlansSections(t *testing.T) {
 			writes = append(writes, user)
 		}
 		mu.Unlock()
-		b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
+		b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", b)
 	}))
 	defer srv.Close()
 	g := generator(db, &ai.OpenAI{BaseURL: srv.URL, ModelName: "m"})
-	g.Parallel = 2
+	g.Parallel, g.Planned = 2, func(p Planning) { planned = p }
 	if err := g.Run(context.Background(), 1, "abc", jobs.Progress{}); err != nil {
 		t.Fatal(err)
 	}
@@ -417,8 +417,9 @@ func TestRunPlansSections(t *testing.T) {
 	want := "Overview<-1 Core<-1 Core 1<1 Core 2<1 Core 3<1 Core 4<1 Core 5<1 Core 6<1 Core 7<1 Core 8<1 Core 9<1 Core 10<1 Core 11<1 Core 12<1 " +
 		"Entry 1<-1 Entry 2<-1 documentation and guides<-1 documentation and guides 1<16 documentation and guides 2<16 documentation and guides 3<16"
 	// The overview's and the docs' searches find nothing (no doc is chunked): written without the model. Each guide is named in a page's focus.
-	if strings.Join(got, " ") != want || !slices.Equal(asked, []int{2, 3, 12}) || len(writes) != len(pages)-2 || !strings.HasPrefix(pages[17].Query, "docs/d") {
-		t.Fatalf("pages %q after asking for %v pages, %d written", got, asked, len(writes))
+	if strings.Join(got, " ") != want || !slices.Equal(asked, []int{2, 3, 12}) || len(writes) != len(pages)-2 || !strings.HasPrefix(pages[17].Query, "docs/d") ||
+		planned != (Planning{Seconds: planned.Seconds, Requests: 5}) || planned.Seconds <= 0 {
+		t.Fatalf("pages %q after asking for %v pages, %d written; planned %+v", got, asked, len(writes), planned)
 	}
 	for _, s := range []string{"This page opens a section whose pages are: Core 1 | Core 2 | Core 3 |", `This page is part of the section "Core"`} {
 		if !slices.ContainsFunc(writes, func(u string) bool { return strings.Contains(u, s) }) {
@@ -443,35 +444,33 @@ func TestRunPlansSections(t *testing.T) {
 	}
 }
 
-// TestRunOutcomes: a run that fails, or panics, leaves the wiki failed rather
-// than generating, so it can be tried again; a plan that is not JSON is one
-// overview page; a wiki that is ready is left as it is.
+// TestRunOutcomes: a run that fails, or panics, leaves the wiki failed rather than generating, so it can
+// be tried again; so does a refused plan, and one that is not JSON, the only one counted a structured-output
+// failure, while a plan of no pages is one overview page; a wiki that is ready is left as it is.
 func TestRunOutcomes(t *testing.T) {
-	ctx := context.Background()
+	ctx, planned := context.Background(), Planning{}
 	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`)
 	g := generator(db, nil)
-	g.Language = ""
+	g.Language, g.Planned = "", func(p Planning) { planned = p }
 	run := func(model *ai.OpenAI) (string, error) {
 		g.Chat = model
-		err := g.Run(ctx, 1, "abc", jobs.Progress{})
-		var status string
+		status, err := "", g.Run(ctx, 1, "abc", jobs.Progress{})
 		db.QueryRow(`SELECT wiki_status FROM snapshots WHERE id = 1`).Scan(&status)
 		return status, err
 	}
-	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) }))
-	defer refused.Close()
-	// The plan is refused; then, with no model at all, planning panics.
-	for _, model := range []*ai.OpenAI{{BaseURL: refused.URL, ModelName: "m"}, nil} {
-		if status, err := run(model); err == nil || status != catalog.WikiFailed {
-			t.Fatalf("a failed run: %v, wiki %q", err, status)
-		}
+	if status, err := run(nil); err == nil || status != catalog.WikiFailed { // with no model at all, planning panics
+		t.Fatalf("no model: %v, wiki %q", err, status)
 	}
-	prose := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"I would rather not plan."}}]}`+"\n\ndata: [DONE]\n\n")
-	}))
-	defer prose.Close()
-	if status, err := run(&ai.OpenAI{BaseURL: prose.URL, ModelName: "m"}); err != nil || status != catalog.WikiReady {
-		t.Fatalf("a plan that is not JSON: %v, wiki %q", err, status)
+	for _, reply := range []string{"", "I would rather not plan.", `{"pages":[]}`} { // "" is refused; %q quotes the rest as JSON does
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(map[bool]int{true: http.StatusBadRequest, false: http.StatusOK}[reply == ""])
+			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":\"stop\"}]}\n\n", reply)
+		}))
+		status, err := run(&ai.OpenAI{BaseURL: srv.URL, ModelName: "m"})
+		if schema := reply != "" && reply[0] != '{'; errors.Is(err, ai.ErrSchema) != schema || (status == catalog.WikiFailed) != (schema || reply == "") || planned.Failures != map[bool]int{true: 1}[schema] {
+			t.Fatalf("%q: %v, wiki %q, planned %+v", reply, err, status, planned)
+		}
+		srv.Close()
 	}
 	if pages, err := g.Store.Pages(ctx, 1); err != nil || len(pages) != 1 || pages[0].Title != "Overview" {
 		t.Fatalf("pages: %+v %v", pages, err)

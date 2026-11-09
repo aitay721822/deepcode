@@ -1,6 +1,7 @@
 package outline
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
@@ -172,36 +173,38 @@ func TestSpread(t *testing.T) {
 	}
 }
 
-// TestParse: plans are read past reasoning and prose, untitled pages dropped,
-// titles put on one line and clipped, queries clipped, and at most limit kept.
-func TestParse(t *testing.T) {
-	out := "<think>let me plan</think>Here is the plan:\n```json\n" +
-		`{"pages":[{"title":" Overview ","query":"main"},{"title":"","query":"dropped"},{"title":"Router","query":"mux.go"}]}` + "\n```"
-	if got := ParsePages(out, 8); !reflect.DeepEqual(got, []Page{{"Overview", "main", -1}, {"Router", "mux.go", -1}}) {
+// TestTitled: a plan's untitled pages are dropped, titles put on one line and
+// clipped, queries clipped, and at most limit kept; an outline's sections keep
+// their places, untitled ones too, and one without an overview is not taken.
+func TestTitled(t *testing.T) {
+	plan := func(s string) (p Plan) {
+		if err := json.Unmarshal([]byte(s), &p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if got := plan(`{"pages":[{"title":" Overview ","query":"main"},{"title":"","query":"dropped"},{"title":"Router","query":"mux.go"}]}`).Titled(8); !reflect.DeepEqual(got, []Page{{"Overview", "main", -1}, {"Router", "mux.go", -1}}) {
 		t.Fatalf("got %+v", got)
 	}
-	if lines := ParsePages(`{"pages":[{"title":"Setup\nsucceeded\r\n\tnext","query":"q"}]}`, 8); len(lines) != 1 || lines[0].Title != "Setup succeeded next" {
+	if lines := plan(`{"pages":[{"title":"Setup\nsucceeded\r\n\tnext","query":"q"}]}`).Titled(8); len(lines) != 1 || lines[0].Title != "Setup succeeded next" {
 		t.Fatalf("a title over several lines: %+v", lines)
 	}
-	if ParsePages("no json here", 8) != nil {
-		t.Fatal("prose without JSON produced a plan")
-	}
-	if got := ParsePages(`{"pages":[`+strings.Repeat(`{"title":"Page","query":"q"},`, 8)+`{"title":"One too many","query":"q"}]}`, 8); len(got) != 8 {
+	if got := plan(`{"pages":[` + strings.Repeat(`{"title":"Page","query":"q"},`, 8) + `{"title":"One too many","query":"q"}]}`).Titled(8); len(got) != 8 {
 		t.Fatalf("%d pages planned, want at most 8", len(got))
 	}
-	long := ParsePages(fmt.Sprintf(`{"pages":[{"title":%q,"query":%q}]}`, strings.Repeat("標", 200), strings.Repeat("q", MaxQuery+100)), 8)
+	long := plan(fmt.Sprintf(`{"pages":[{"title":%q,"query":%q}]}`, strings.Repeat("標", 200), strings.Repeat("q", MaxQuery+100))).Titled(8)
 	if len(long) != 1 || len([]rune(long[0].Title)) != MaxTitle || len(long[0].Query) != MaxQuery {
 		t.Fatalf("a long title and query: %+v", long)
 	}
-	overview, sections, ok := ParseHeads(`{"overview":{"title":" Overview ","query":"main"},"sections":[{"title":"Routing","query":"mux"},{"title":"","query":"x"},{"title":"Middleware"}]}`, 1)
-	if !ok || overview != (Page{"Overview", "main", -1}) || !reflect.DeepEqual(sections, []Page{{"Routing", "mux", -1}}) {
+	o := Outline{Overview: Page{Title: " Overview ", Query: "main"}, Sections: []Page{{Title: "Routing", Query: "mux"}, {Query: "x"}, {Title: "Middleware"}}}
+	if overview, sections, ok := o.Heads(1); !ok || overview != (Page{"Overview", "main", -1}) || !reflect.DeepEqual(sections, []Page{{"Routing", "mux", -1}}) {
 		t.Fatalf("heads: %+v %+v %v", overview, sections, ok)
 	}
 	// An untitled section keeps its place, so the next stays with its own.
-	if _, sections, _ := ParseHeads(`{"overview":{"title":"O"},"sections":[{"title":"","query":"x"},{"title":"Middleware"}]}`, 3); !reflect.DeepEqual(sections, []Page{{"", "x", -1}, {"Middleware", "", -1}}) {
+	if _, sections, _ := o.Heads(3); !reflect.DeepEqual(sections, []Page{{"Routing", "mux", -1}, {"", "x", -1}, {"Middleware", "", -1}}) {
 		t.Fatalf("an untitled section: %+v", sections)
 	}
-	if _, _, ok := ParseHeads(`{"sections":[{"title":"Routing"}]}`, 9); ok {
+	if _, _, ok := (Outline{Sections: o.Sections}).Heads(9); ok {
 		t.Fatal("an outline without an overview was taken")
 	}
 }

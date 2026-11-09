@@ -2,7 +2,9 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -71,7 +73,7 @@ func TestNoKeyFromEnvironment(t *testing.T) {
 	var auth atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth.Store(r.Header.Get("Authorization"))
-		w.Write([]byte("data: [DONE]\n\n"))
+		w.Write([]byte(finished))
 	}))
 	defer srv.Close()
 	if _, err := (&OpenAI{BaseURL: srv.URL + "/v1", ModelName: "m"}).Generate(context.Background(), nil); err != nil || auth.Load() != "" {
@@ -79,22 +81,90 @@ func TestNoKeyFromEnvironment(t *testing.T) {
 	}
 }
 
-// TestStreamEnds: an answer is whole once the server says it ended, by [DONE]
-// or a finish reason; one cut short, or one past maxAnswer, is an error.
+// finished ends a Chat Completions stream as servers do: a finish reason, then [DONE].
+const finished = `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
+
+// TestStreamEnds: an answer is whole once the server gave its finish reason,
+// [DONE] or not; one without, even ended by [DONE], was cut short, and is an
+// error, as is one past maxAnswer; one stopped by the output budget with
+// nothing said says so.
 func TestStreamEnds(t *testing.T) {
 	chunk := func(s string) string { return `data: {"choices":[{"delta":{"content":"` + s + `"}}]}` + "\n\n" }
 	for name, tc := range map[string]struct {
-		body string
-		ok   bool
+		body, fails string
 	}{
-		"done":      {chunk("hi") + "data: [DONE]\n\n", true},
-		"finished":  {`data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}` + "\n\n", true},
-		"cut short": {chunk("hi"), false},
-		"flood":     {strings.Repeat(chunk(strings.Repeat("x", 1<<16)), 17) + "data: [DONE]\n\n", false},
+		"finished":   {chunk("hi") + finished, ""},
+		"no [DONE]":  {`data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}` + "\n\n", ""},
+		"at length":  {`data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"length"}]}` + "\n\n", ""},
+		"no answer":  {`data: {"choices":[{"delta":{},"finish_reason":"length"}]}` + "\n\n", "whole output budget"},
+		"[DONE] cut": {chunk("hi") + "data: [DONE]\n\n", "ended before it was finished"},
+		"cut short":  {chunk("hi"), "ended before it was finished"},
+		"flood":      {strings.Repeat(chunk(strings.Repeat("x", 1<<16)), 17) + finished, "passed 1 MB"},
 	} {
 		got, err := (&OpenAI{BaseURL: serve(t, 0, tc.body).URL, ModelName: "m"}).Generate(context.Background(), nil)
-		if (err == nil) != tc.ok || tc.ok && got != "hi" {
+		if tc.fails == "" && (err != nil || got != "hi") || tc.fails != "" && (err == nil || !strings.Contains(err.Error(), tc.fails)) {
 			t.Errorf("%s: %q %v", name, got, err)
+		}
+	}
+}
+
+// TestFormat: StreamJSON asks for the schema made from a Go type, strict, on
+// each API, and reads the answer into it; Generate asks for none. An answer
+// the server sent that is not that JSON fails with ErrSchema, naming what the
+// endpoint must support; a request the server refuses fails with its words,
+// as any other, not ErrSchema; JSON cut at the output budget says so instead.
+func TestFormat(t *testing.T) {
+	type page struct {
+		Title string   `json:"title"`
+		Files []string `json:"files"`
+	}
+	f := Schema[struct {
+		Pages []page `json:"pages"`
+	}]("plan")
+	var body, mode atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body.Store(string(b))
+		text, finish, end := `{"pages":[{"title":"A","files":["a.go"]}]}`, "stop", `{"type":"response.completed","response":{}}`
+		switch mode.Load() {
+		case "refused":
+			http.Error(w, `{"error":{"message":"response_format is not supported"}}`, http.StatusBadRequest)
+			return
+		case "prose":
+			text = "Sure, here is the plan."
+		case "shape":
+			text = `{"pages":[{"title":"A"}]}` // JSON, but not the schema's: a page lacks its files
+		case "cut":
+			text, finish, end = `{"pages":[{"title":"A"`, "length", `{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}`
+		}
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": text}, "finish_reason": finish}}})
+		delta, _ := json.Marshal(map[string]string{"type": "response.output_text.delta", "delta": text})
+		fmt.Fprintf(w, "data: %s\n\ndata: %s\n\ndata: %s\n\n", chunk, delta, end) // Chat Completions reads the first, Responses the others
+	}))
+	defer srv.Close()
+	schema := `"schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"properties":{"pages":{"items":{"properties":` +
+		`{"title":{"type":"string"},"files":{"items":{"type":"string"},"type":"array"}},"additionalProperties":false,"type":"object","required":["title","files"]},` +
+		`"type":"array"}},"required":["pages"],"type":"object"}`
+	for api, want := range map[string]string{
+		Completions: `"response_format":{"json_schema":{"name":"plan","strict":true,` + schema + `},"type":"json_schema"}`,
+		Responses:   `"text":{"format":{"name":"plan",` + schema + `,"strict":true,"type":"json_schema"}}`,
+	} {
+		c := &OpenAI{BaseURL: srv.URL, ModelName: "m", API: api}
+		mode.Store("")
+		if v, _, err := StreamJSON(context.Background(), c, nil, f, nil); err != nil || len(v.Pages) != 1 || v.Pages[0].Files[0] != "a.go" || !strings.Contains(body.Load().(string), want) {
+			t.Errorf("%s: %+v %v\n%s", api, v, err, body.Load())
+		}
+		if _, err := c.Generate(context.Background(), nil); err != nil || strings.Contains(body.Load().(string), "schema") {
+			t.Errorf("%s, no format: %v\n%s", api, err, body.Load())
+		}
+		for m, says := range map[string]string{"prose": "m: the answer is not the JSON of plan", "shape": "m: the answer is not the JSON of plan", "refused": "400 Bad Request: {\"error\":{\"message\":\"response_format is not supported\"}}",
+			"cut": "m: the answer reached the output budget before its JSON ended"} {
+			mode.Store(m)
+			_, _, err := StreamJSON(context.Background(), c, nil, f, nil)
+			schema := m == "prose" || m == "shape" // an answer sent (200) that is not the schema's JSON
+			if err == nil || !strings.Contains(err.Error(), says) || errors.Is(err, ErrSchema) != schema || schema && !strings.HasSuffix(err.Error(), ErrSchema.Error()) {
+				t.Errorf("%s, %s: %v", api, m, err)
+			}
 		}
 	}
 }
@@ -303,7 +373,7 @@ func TestRetries(t *testing.T) {
 		var calls atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			if calls.Add(1) > 1 {
-				w.Write([]byte("data: [DONE]\n\n"))
+				w.Write([]byte(finished))
 				return
 			}
 			if tc.retryAfter != "" {

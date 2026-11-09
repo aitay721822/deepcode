@@ -110,7 +110,7 @@ func TestAnswers(t *testing.T) {
 		} else {
 			asked = append(asked, "search terms")
 		}
-		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
@@ -183,7 +183,7 @@ func TestDeep(t *testing.T) {
 		default:
 			asked, reply = append(asked, body.Messages[1].Content), "<think>enough</think>Done: that is enough."
 		}
-		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
@@ -289,7 +289,7 @@ func TestRecheck(t *testing.T) {
 		} else {
 			asked = append(asked, user)
 		}
-		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
@@ -451,8 +451,9 @@ func TestLanguage(t *testing.T) {
 }
 
 // TestCodemap: a code map is drawn with drawing events, its locations linked
-// (a path's brackets escaped) and cited, and stored to be read back; a model
-// that draws no map twice is told as errMap.
+// (a path's brackets escaped) and cited, and stored to be read back; an answer
+// that is no map is told as errSchema, and logged; a map that shows no line of
+// the sources, twice, as errMap.
 func TestCodemap(t *testing.T) {
 	ctx := context.Background()
 	db, _ := storage.Open(ctx, filepath.Join(t.TempDir(), "m.db"))
@@ -462,7 +463,7 @@ func TestCodemap(t *testing.T) {
 		INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready');
 		UPDATE repositories SET ready_snapshot_id = 1;
 		INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'app/[slug]/page.tsx', 1, 1, 'export default function Page() {}', 'h')`)
-	drawn := `{"title":"Page","description":"` + strings.Repeat("x", 600) + `","traces":[{"title":"Render","locations":[{"title":"Page",` +
+	drawn := `{"title":"Page","description":"` + strings.Repeat("x", 600) + `","traces":[{"title":"Render","description":"d","guide":"g","locations":[{"title":"Page","description":"renders",` +
 		`"path":"app/[slug]/page.tsx","line":1,"code":"export default function Page() {}"}]}]}`
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Messages []ai.Message }
@@ -471,7 +472,7 @@ func TestCodemap(t *testing.T) {
 		if strings.Contains(body.Messages[0].Content, "drawing a code map") {
 			reply = drawn
 		}
-		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
@@ -488,8 +489,11 @@ func TestCodemap(t *testing.T) {
 		len(done.Citations) != 1 || len(stored) != 2 || !strings.Contains(string(stored[1].Codemap), `"id":"1a"`) {
 		t.Fatalf("%v %v %+v %+v", err, events, done, stored)
 	}
-	drawn = "no map"
-	if err := s.Ask(ctx, Request{RepoID: 1, Question: "How is a Page rendered?", Codemap: true, UserID: 1}, func(string, any) {}); !errors.Is(err, errMap) {
-		t.Fatalf("no map twice: %v", err)
+	for reply, want := range map[string]error{"no map": errSchema, strings.Replace(drawn, `"path":"app/[slug]/page.tsx"`, `"path":"nope.tsx"`, 1): errMap} {
+		drawn = reply
+		err := s.Ask(ctx, Request{RepoID: 1, Question: "How is a Page rendered?", Codemap: true, UserID: 1}, func(string, any) {})
+		if msg, logIt := Explain(err); !errors.Is(err, want) || msg != want.Error() || logIt != (want == errSchema) {
+			t.Fatalf("%.20q: %v, told %q", reply, err, msg)
+		}
 	}
 }

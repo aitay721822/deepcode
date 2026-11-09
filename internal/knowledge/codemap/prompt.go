@@ -22,15 +22,11 @@ Rules:
 - A trace's title names the path it follows; its description says in one sentence what it covers; its guide explains in 2 to 5 sentences of Markdown how its locations work together and why.
 - The map's title names the question's subject in a few words; its description says in one or two sentences what the traces show together.
 - Write titles, descriptions and guides in the language the user's message asks for, with code, paths and identifiers as the code writes them. Write Chinese in Traditional Chinese characters as used in Taiwan.
-- If the sources hold no code that answers the question, reply {"traces": []}.`
+- If the sources hold no code that answers the question, give the map no traces: "traces": [].`
 
-// retryNote follows a reply that was no JSON map, groundNote one whose
-// locations were none of the lines shown.
-const (
-	retryNote  = "That reply was not the JSON object asked for. Reply with the JSON object only, shaped as the rules say."
-	groundNote = "None of those locations is a line the <source> blocks show: each needs a path as a source block names it, " +
-		"a line number shown there, and the code of that line copied exactly. Reply with the corrected JSON object only."
-)
+// groundNote follows a map whose locations were none of the lines shown.
+const groundNote = "None of those locations is a line the <source> blocks show: each needs a path as a source block names it, " +
+	"a line number shown there, and the code of that line copied exactly. Reply with the corrected JSON object only."
 
 // prompt assembles the rules, the recent turns, then the repository, the
 // background, the sources, the question and the language line.

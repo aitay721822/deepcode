@@ -65,9 +65,9 @@ func TestMCP(t *testing.T) {
 		json.NewDecoder(r.Body).Decode(&body)
 		reply := "DONE"
 		if len(body.Messages) > 0 && strings.Contains(body.Messages[0].Content, "drawing a code map") {
-			reply = `{"title":"A","traces":[{"title":"Define","locations":[{"title":"A","path":"demo.go","line":2,"code":"func A() {}"}]}]}`
+			reply = `{"title":"A","description":"d","traces":[{"title":"Define","description":"d","guide":"g","locations":[{"title":"A","description":"d","path":"demo.go","line":2,"code":"func A() {}"}]}]}`
 		}
-		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()

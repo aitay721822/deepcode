@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"deepcode/internal/knowledge/wiki"
 )
 
 type report struct {
@@ -72,6 +74,9 @@ type wikiRun struct {
 	OutChars  int     `json:"outputChars"`
 	// CachedTokens are the input tokens the server read from its prompt cache.
 	CachedTokens int `json:"cachedTokens"`
+	// Planning is the model's plan of the pages, nil when pages were carried
+	// over or listed by .devin/wiki.json.
+	Planning *wiki.Planning `json:"planning,omitempty"`
 }
 
 type evalResult struct {
@@ -135,7 +140,7 @@ func (rep report) markdown() string {
 			atHead(r, "languages", r.Languages), atHead(r, "chunks", r.Chunks), atHead(r, "symbols", r.Symbols), atHead(r, "edges", r.Edges),
 			atHead(r, "diagram", r.DiagramEdges), index, len(r.Errors))
 	}
-	p("\n## First wiki (base)\n\nTime by pages written at a time; the rest is the last run's. Lines per citation: the median and the most a page citation spans.\n\n| Repository | Time | Pages | Model calls | Input tokens | Cached input | Output tokens | Input chars | Output chars | Page citations (head) | Lines per citation (head) |\n|---|---|---|---|---|---|---|---|---|---|---|")
+	p("\n## First wiki (base)\n\nTime by pages written at a time; the rest is the last run's. Lines per citation: the median and the most a page citation spans. Planning: its time, and its requests whose answer was not the structured output asked for.\n\n| Repository | Time | Pages | Model calls | Input tokens | Cached input | Output tokens | Input chars | Output chars | Page citations (head) | Lines per citation (head) | Planning |\n|---|---|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
 		if w := r.Wiki; w != nil {
 			times := make([]string, len(r.WikiRuns))
@@ -152,8 +157,12 @@ func (rep report) markdown() string {
 			} else if r.PageCitations == 0 {
 				lines = "–" // no citation to measure
 			}
-			p("| %s | %s | %s | %d | %s | %s | %s | %d | %d | %s | %s |", r.Repo, cmp.Or(strings.Join(times, " · "), took(w)), count(r, "base pages", w.Pages), w.Calls,
-				tokens(w.InTokens), cached, tokens(w.OutTokens), w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations), lines)
+			planning := "–" // no model planned it
+			if s := w.Planning; s != nil {
+				planning = fmt.Sprintf("%.1f s, %d of %d requests failed", s.Seconds, s.Failures, s.Requests)
+			}
+			p("| %s | %s | %s | %d | %s | %s | %s | %d | %d | %s | %s | %s |", r.Repo, cmp.Or(strings.Join(times, " · "), took(w)), count(r, "base pages", w.Pages), w.Calls,
+				tokens(w.InTokens), cached, tokens(w.OutTokens), w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations), lines, planning)
 		}
 	}
 	p("\n## Update by one commit (base → head)\n\n| Repository | Changed files | Index | Wiki | Pages rewritten | Model calls |\n|---|---|---|---|---|---|")
@@ -291,7 +300,8 @@ func tokens(n int) string {
 // at each number of pages at a time, and head's wiki its tree; the report
 // lands whole, with no file left aside.
 func TestMarkdown(t *testing.T) {
-	ok, broken := result{Repo: "ok", Wiki: &wikiRun{Seconds: 10, Pages: 6, InTokens: 200, CachedTokens: 150}}, result{Repo: "broken", Wiki: &wikiRun{Failed: true, Seconds: 3}}
+	ok := result{Repo: "ok", Wiki: &wikiRun{Seconds: 10, Pages: 6, InTokens: 200, CachedTokens: 150, Planning: &wiki.Planning{Seconds: 4.25, Requests: 9}}}
+	broken := result{Repo: "broken", Wiki: &wikiRun{Failed: true, Seconds: 3, Planning: &wiki.Planning{Seconds: 1, Requests: 2, Failures: 1}}}
 	ok.Update.Wiki, ok.Update.PagesRewritten = &wikiRun{Seconds: 5, Pages: 6}, 1
 	broken.Update.Failed, broken.Errors = true, []string{"update index: boom"}
 	ok.Failed = []string{"symbols", "pages rewritten"} // a count whose query failed
@@ -303,7 +313,7 @@ func TestMarkdown(t *testing.T) {
 	md := report{Repos: []result{ok, broken, uncited, uncounted}}.markdown()
 	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
 		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 0.0 s | 0.0 s | 2 | fail: no Mount | yes | other |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
-		"0 of 2 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |", "| 0 | 0 | 7 | 3, at most 40 |", "| 0 | 0 | failed | failed |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed |"} {
+		"0 of 2 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |", "| 0 | 0 | 7 | 3, at most 40 | 4.2 s, 0 of 9 requests failed |", "| 0 | 0 | failed | failed | 1.0 s, 1 of 2 requests failed |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the report lacks %q:\n%s", want, md)
 		}

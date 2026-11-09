@@ -21,7 +21,7 @@ const (
 // whether it stopped at the output budget. The answer is whole once the
 // response completed, or ended incomplete; one that failed is an error. The
 // server is asked to store nothing, as no later request names it.
-func (c *OpenAI) responses(ctx context.Context, messages []Message, out *answer, usage *Usage) (spent bool, err error) {
+func (c *OpenAI) responses(ctx context.Context, messages []Message, s *schema, out *answer, usage *Usage) (spent bool, err error) {
 	params := responses.ResponseNewParams{Model: shared.ResponsesModel(c.ModelName), Store: openai.Bool(false)}
 	for _, m := range messages { // system, user and assistant are roles of both APIs
 		params.Input.OfInputItemList = append(params.Input.OfInputItemList,
@@ -35,6 +35,9 @@ func (c *OpenAI) responses(ctx context.Context, messages []Message, out *answer,
 	}
 	if c.Temperature != nil {
 		params.Temperature = openai.Float(*c.Temperature)
+	}
+	if s != nil {
+		params.Text.Format.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{Name: s.Name, Schema: s.JSON, Strict: openai.Bool(true)}
 	}
 	var res *http.Response
 	svc := responses.NewResponseService(c.options()...)

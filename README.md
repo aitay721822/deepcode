@@ -9,7 +9,7 @@
 | 用途 | 需求 |
 |---|---|
 | 建置 | Go 1.27+ 並啟用 CGO（Tree-sitter 需要 C 編譯器）、Node.js `^20.19` 或 `>=22.12`、Bash |
-| 執行 | 系統 `git` 2.31+（Token 標頭以 `GIT_CONFIG_COUNT` 環境變數傳入；`go test` 也需要）、可寫入的資料目錄；問答與 Wiki 需要 OpenAI 相容的 Chat API，語意檢索另需 Embedding API |
+| 執行 | 系統 `git` 2.31+（Token 標頭以 `GIT_CONFIG_COUNT` 環境變數傳入；`go test` 也需要）、可寫入的資料目錄；問答與 Wiki 需要 OpenAI 相容、支援 structured outputs（`json_schema`）的 Chat API，語意檢索另需 Embedding API |
 
 ## 建置
 
@@ -62,7 +62,7 @@ trusted_proxies: [127.0.0.1, 10.0.0.0/8]
 | `DEEPCODE_CONFIG` | `deepcode.yaml` | 設定檔路徑；只能以環境變數指定 |
 | `DEEPCODE_ADDR` | `127.0.0.1:8080` | 監聽位址 |
 | `DEEPCODE_DATA` | `data` | 資料目錄 |
-| `DEEPCODE_CHAT_BASE_URL` | `https://api.openai.com/v1` | OpenAI 相容端點 |
+| `DEEPCODE_CHAT_BASE_URL` | `https://api.openai.com/v1` | OpenAI 相容端點，須支援 structured outputs：Wiki 的頁面規劃與 Codemap 以 JSON schema 要求回答（Chat Completions 的 `response_format`、Responses API 的 `text.format`，`json_schema`、`strict`）。端點回了不合 schema 的內容時，Wiki 失敗、Codemap 回報錯誤，並寫明端點須支援 `json_schema`；端點拒絕這類請求時，錯誤照錄伺服器自己的訊息 |
 | `DEEPCODE_CHAT_API_KEY` | | |
 | `DEEPCODE_CHAT_MODEL` | 關閉 | 問答與 Wiki 使用的模型 |
 | `DEEPCODE_CHAT_API` | `completions` | 問模型的 API：`completions`（Chat Completions，`/chat/completions`，各家相容伺服器都有）或 `responses`（Responses API，`/responses`，要求伺服器不保存回應）。兩者都串流、都送出上面的推理強度、溫度與輸出上限 |
@@ -344,7 +344,7 @@ k 60 時，兩份清單都排在後面的 Chunk（全文第 20 名加 Symbol 第
 DEEPCODE_BENCH=1 DEEPCODE_CHAT_BASE_URL=http://host:8080/v1 DEEPCODE_CHAT_API_KEY=your-key DEEPCODE_CHAT_MODEL=your-chat-model go test -run TestBench -timeout 0 -v ./test/bench/
 ```
 
-`DEEPCODE_BENCH_REPOS=chi,axum` 只跑其中幾個；`DEEPCODE_BENCH_PARALLEL=1,2` 讓第一次 Wiki 依序以每次 1 頁、2 頁並行各寫一次（每次從頭寫，保留最後一次；沒設時用 `DEEPCODE_WIKI_PARALLEL`，再沒有就是 1），`DEEPCODE_WIKI_MAX_PAGES` 照樣生效；沒設 `DEEPCODE_CHAT_MODEL` 時只量索引、關係圖與檢索評測；`DEEPCODE_REASONING_EFFORT` 與 `DEEPCODE_TEMPERATURE` 照伺服器的設定傳給模型，並記在結果裡；`DEEPCODE_EMBED_*` 照伺服器的讀法生效（沒設 `DEEPCODE_EMBED_MODEL` 時只有全文與符號檢索），用的 Embedding 模型記在結果開頭；有 Embedding 時第一次索引與更新的時間包含計算向量，與沒有的結果不能直接比。結果寫到 `data/bench/`：`latest.json`（全部數字與回答全文）、`latest.md`（摘要表與回答）、`runs/<開始時間>.json`（每次的紀錄）；工作資料在 `data/bench/work/`，每次重來。記錄的項目：檔案、產生的檔案、語言、Chunk、Symbol、import 關係的邊數與概覽關係圖畫出的箭頭數；第一次索引的時間；第一次 Wiki 的時間、頁數、模型呼叫次數、輸入與輸出的 token（伺服器有回報 usage 時，否則看字元數）與輸入中由提示詞快取讀取的 token 與比例；更新一個 Commit 的變更檔案數、索引與 Wiki 的時間、重寫的頁數（head 中與 base 同標題、去掉引用的行號與連結後文字相同的頁面不算：引用只是跟著行移動）；DeepWiki 主題覆蓋率（每個 Repository 列出 DeepWiki 那份 Wiki 的主題，詞彙表與治理文件除外，每個主題給幾個關鍵字，head 的頁面標題或 `##`、`###` 標題含其中之一（整個字、不分大小寫；名稱裡的字也算：小寫字母或數字後的大寫字母、連續大寫字母中後接小寫字母的最後一個是字的開頭，字母之後的數字之前、連續大寫字母之後而後面接著非字母數字、大寫字母或結尾的 s 之前是字的分界，`WelcomeController` 含 welcome、`HTTPServer` 含 server、`OAuth2` 含 oauth、`APIs` 與 `APIsController` 含 api，`Base64encode` 不含 encode；非 ASCII 的字元也是分界；`####` 與程式碼區塊裡的 `##` 不算，程式碼區塊從縮排至多三格、三個以上的 ``` 或 ~~~ 開始，到只有同一種字元、數量不少於開頭的那一行結束）就算涵蓋；表中列出沒涵蓋的主題）與只引用測試、CI、manifest、編輯器設定的頁數及比例；recall@10 與 MRR；每個問題的第一個字時間、總時間、引用數、必須出現的關鍵字是否都有（不分大小寫，取程式碼裡的名稱而非任何回答都會用的字，例如 chi 的 `RoutePattern`、eShop 的 `OrderPaymentSucceededIntegrationEvent` 與 `SetPaidOrderStatusCommand`；同一名稱有多種寫法時以 `a|b` 列出，出現其一即可；缺的列在表中）、是否自言自語與是否以問題的語言回答（去掉程式碼區塊、行內程式碼與連結後，漢字不少於英文單字算中文），以及通過關鍵字、沒有引用、自言自語、以其他語言回答的題數；第一次 Wiki 每種並行數的時間；head 的 Wiki 頁面樹（節與其下的頁面）。時間包含模型端點的延遲，比較時要分開看；第一次索引的時間包含從 GitHub 下載。某個步驟失敗時錯誤列在表格下方、索引表的「Errors」欄計數，它沒量到的格子一律標成 failed（第一次索引、head 的各項計數、失敗的 Wiki、更新與問題，以及任何一個查詢失敗的計數；沒算的重寫頁數是「–」；檢索評測失敗時該列不出現），不會當成正常數字；`DEEPCODE_BENCH_REPOS` 寫錯名字時直接失敗。bench 的檢索評測在更新過的版本上跑，Chunk 的編號順序和 `test/eval` 從頭建的不同，同分時的排名可能不同，分數會差千分之幾。
+`DEEPCODE_BENCH_REPOS=chi,axum` 只跑其中幾個；`DEEPCODE_BENCH_PARALLEL=1,2` 讓第一次 Wiki 依序以每次 1 頁、2 頁並行各寫一次（每次從頭寫，保留最後一次；沒設時用 `DEEPCODE_WIKI_PARALLEL`，再沒有就是 1），`DEEPCODE_WIKI_MAX_PAGES` 照樣生效；沒設 `DEEPCODE_CHAT_MODEL` 時只量索引、關係圖與檢索評測；`DEEPCODE_REASONING_EFFORT` 與 `DEEPCODE_TEMPERATURE` 照伺服器的設定傳給模型，並記在結果裡；`DEEPCODE_EMBED_*` 照伺服器的讀法生效（沒設 `DEEPCODE_EMBED_MODEL` 時只有全文與符號檢索），用的 Embedding 模型記在結果開頭；有 Embedding 時第一次索引與更新的時間包含計算向量，與沒有的結果不能直接比。結果寫到 `data/bench/`：`latest.json`（全部數字與回答全文）、`latest.md`（摘要表與回答）、`runs/<開始時間>.json`（每次的紀錄）；工作資料在 `data/bench/work/`，每次重來。記錄的項目：檔案、產生的檔案、語言、Chunk、Symbol、import 關係的邊數與概覽關係圖畫出的箭頭數；第一次索引的時間；第一次 Wiki 的時間、頁數、模型呼叫次數、輸入與輸出的 token（伺服器有回報 usage 時，否則看字元數）與輸入中由提示詞快取讀取的 token 與比例，以及頁面規劃的時間、請求數與其中 structured output 失敗的次數（應為 0）；更新一個 Commit 的變更檔案數、索引與 Wiki 的時間、重寫的頁數（head 中與 base 同標題、去掉引用的行號與連結後文字相同的頁面不算：引用只是跟著行移動）；DeepWiki 主題覆蓋率（每個 Repository 列出 DeepWiki 那份 Wiki 的主題，詞彙表與治理文件除外，每個主題給幾個關鍵字，head 的頁面標題或 `##`、`###` 標題含其中之一（整個字、不分大小寫；名稱裡的字也算：小寫字母或數字後的大寫字母、連續大寫字母中後接小寫字母的最後一個是字的開頭，字母之後的數字之前、連續大寫字母之後而後面接著非字母數字、大寫字母或結尾的 s 之前是字的分界，`WelcomeController` 含 welcome、`HTTPServer` 含 server、`OAuth2` 含 oauth、`APIs` 與 `APIsController` 含 api，`Base64encode` 不含 encode；非 ASCII 的字元也是分界；`####` 與程式碼區塊裡的 `##` 不算，程式碼區塊從縮排至多三格、三個以上的 ``` 或 ~~~ 開始，到只有同一種字元、數量不少於開頭的那一行結束）就算涵蓋；表中列出沒涵蓋的主題）與只引用測試、CI、manifest、編輯器設定的頁數及比例；recall@10 與 MRR；每個問題的第一個字時間、總時間、引用數、必須出現的關鍵字是否都有（不分大小寫，取程式碼裡的名稱而非任何回答都會用的字，例如 chi 的 `RoutePattern`、eShop 的 `OrderPaymentSucceededIntegrationEvent` 與 `SetPaidOrderStatusCommand`；同一名稱有多種寫法時以 `a|b` 列出，出現其一即可；缺的列在表中）、是否自言自語與是否以問題的語言回答（去掉程式碼區塊、行內程式碼與連結後，漢字不少於英文單字算中文），以及通過關鍵字、沒有引用、自言自語、以其他語言回答的題數；第一次 Wiki 每種並行數的時間；head 的 Wiki 頁面樹（節與其下的頁面）。時間包含模型端點的延遲，比較時要分開看；第一次索引的時間包含從 GitHub 下載。某個步驟失敗時錯誤列在表格下方、索引表的「Errors」欄計數，它沒量到的格子一律標成 failed（第一次索引、head 的各項計數、失敗的 Wiki、更新與問題，以及任何一個查詢失敗的計數；沒算的重寫頁數是「–」；檢索評測失敗時該列不出現），不會當成正常數字；`DEEPCODE_BENCH_REPOS` 寫錯名字時直接失敗。bench 的檢索評測在更新過的版本上跑，Chunk 的編號順序和 `test/eval` 從頭建的不同，同分時的排名可能不同，分數會差千分之幾。
 
 ## 備份與復原
 
@@ -406,7 +406,7 @@ internal/
     events/              Watermill 事件匯流排、主題，以及給 SSE 用的短期監聽
     jobs/                工作佇列：worker 名額與掃描器、重試與退避、進度與輸出（job_logs）及其追蹤、過期工作清理
       store/             jobs 與 job_logs 的讀寫：依 idempotency key 排入、領取、記錄結果、清理
-    ai/                  以官方 openai-go SDK 呼叫 OpenAI 相容端點：Chat Completions 或 Responses API 的串流回答、Embedding；不讀 OPENAI_* 環境變數，重試、RPM 節流、回應大小上限與錯誤中的金鑰遮蔽
+    ai/                  以官方 openai-go SDK 呼叫 OpenAI 相容端點：Chat Completions 或 Responses API 的串流回答（Chat Completions 以 SDK 的 accumulator 判斷是否收到結束原因）、依 Go 型別產生 JSON schema 的 structured outputs、Embedding；不讀 OPENAI_* 環境變數，重試、RPM 節流、回應大小上限與錯誤中的金鑰遮蔽
   repo/                  Repository 的來源與索引；各套件只放規則與流程，SQL 都在自己的 store/（vectorstore 本身就是）
     gitserver/           Git 伺服器設定、OAuth 授權與 Token 換新、網址解析、來源連結格式；secret/ Token 加密與金鑰檔，oauth/ OAuth 同意頁網址、Token 端點與進行中的授權
       store/             git_servers 的讀寫（Token 存密文）、Repository 的來源伺服器

@@ -114,28 +114,27 @@ func model(t *testing.T, replies ...string) (*ai.OpenAI, *[][]ai.Message) {
 	return &ai.OpenAI{BaseURL: srv.URL, ModelName: "m"}, &asked
 }
 
-// TestDraw: a reply that is no map, an empty object, or a map of lines the
-// sources lack is asked for once more, after the request, with what it said
-// (its thinking dropped, cut to maxEcho, left out when nothing remains, the
-// note then joining the request) and the note fitting its fault; the count
-// drawing hears runs on over both replies; an empty trace list is the model's
-// answer; the map is written out with a citation per location.
+// TestDraw: a map of lines the sources lack is asked for once more, after the
+// request, with the map (cut to maxEcho) and groundNote, and fails as
+// ErrInvalid the second time; an answer that is no map fails at once with
+// ai.ErrSchema; the count drawing hears runs on over both replies; an empty
+// trace list is the model's answer; the map is written out with a citation
+// per location.
 func TestDraw(t *testing.T) {
-	made := `{"title":"x","traces":[{"title":"t","locations":[{"path":"nope.go","line":1,"code":"x := 1"}]}]}`
-	long := strings.Repeat("é", maxEcho) // 2 bytes each: cut inside one
+	made := strings.Replace(good, "src/server/router.go", "nope.go", 1)
+	long := strings.Replace(made, `"title":"Auth"`, `"title":"x`+strings.Repeat("é", maxEcho)+`"`, 1) // 2 bytes each, after 11: cut inside one
 	for _, c := range []struct {
-		replies    []string
-		traces     int
-		err        error
-		echo, note string // the retry's last two messages: what came back ("" none), the note
+		replies []string
+		traces  int
+		err     error
+		echo    string // the retry's map, before groundNote
 	}{
-		{[]string{"Sure! Here is the map:", "```json\n" + good + "\n```"}, 1, nil, "Sure! Here is the map:", retryNote},
-		{[]string{"<think>a map?</think>{}", good}, 1, nil, "{}", retryNote},
-		{[]string{"<think>only this</think>", good}, 1, nil, "", retryNote},
-		{[]string{long, good}, 1, nil, long[:maxEcho] + "…", retryNote},
-		{[]string{made, good}, 1, nil, made, groundNote},
-		{[]string{made, made}, 0, ErrInvalid, made, groundNote},
-		{[]string{`{"traces": []}`}, 0, nil, "", ""},
+		{[]string{"Sure! Here is the map:"}, 0, ai.ErrSchema, ""},
+		{[]string{"{}"}, 0, ai.ErrSchema, ""}, // JSON, but no map: not taken for one with nothing in it
+		{[]string{long, good}, 1, nil, long[:maxEcho-1] + "…"},
+		{[]string{made, good}, 1, nil, made},
+		{[]string{made, made}, 0, ErrInvalid, made},
+		{[]string{`{"title":"","description":"","traces":[]}`}, 0, nil, ""},
 	} {
 		m, asked := model(t, c.replies...)
 		var heard []int
@@ -152,12 +151,8 @@ func TestDraw(t *testing.T) {
 			continue
 		}
 		first, retry := (*asked)[0], (*asked)[1]
-		ask := first[len(first)-1].Content
-		switch n := len(retry); {
-		case c.echo == "" && (n != len(first) || retry[n-1].Content != ask+"\n\n"+c.note):
-			t.Errorf("%.30q: the retry ends %q", c.replies[0], retry[n-1].Content)
-		case c.echo != "" && (n != len(first)+2 || retry[n-2] != (ai.Message{Role: "assistant", Content: c.echo}) ||
-			retry[n-1] != (ai.Message{Role: "user", Content: c.note}) || retry[n-3].Content != ask):
+		if n := len(retry); n != len(first)+2 || retry[n-2] != (ai.Message{Role: "assistant", Content: c.echo}) ||
+			retry[n-1] != (ai.Message{Role: "user", Content: groundNote}) || retry[n-3].Content != first[len(first)-1].Content {
 			t.Errorf("%.30q: the retry ends %q", c.replies[0], retry[max(n-3, 0):])
 		}
 	}
@@ -166,5 +161,14 @@ func TestDraw(t *testing.T) {
 	md := got.Markdown(func(l Location) string { return fmt.Sprintf("[%s:%d](u)", l.Path, l.Line) })
 	if !strings.Contains(md, "- **1a** Router [src/server/router.go:12](u): uses auth") || !strings.HasPrefix(md, "## Auth") {
 		t.Errorf("markdown:\n%s", md)
+	}
+}
+
+// TestFormat: the map the model is asked for is a Map without ids, which
+// ground gives the traces and locations it keeps.
+func TestFormat(t *testing.T) {
+	b, _ := json.Marshal(format.JSON)
+	if s := string(b); !strings.Contains(s, `"locations"`) || !strings.Contains(s, `"guide"`) || strings.Contains(s, `"id"`) {
+		t.Fatal(s)
 	}
 }

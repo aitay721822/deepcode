@@ -41,6 +41,7 @@ var (
 	errBusy     = fmt.Errorf("同時最多只能產生 %d 個回答；請等其中一個完成後再提問", maxAsking)
 	errModel    = errors.New("語言模型沒有回應；請稍後再試")
 	errMap      = errors.New("語言模型沒有畫出有效的 Codemap；請再試一次，或改用一般問答")
+	errSchema   = errors.New("語言模型伺服器不支援 structured outputs（json_schema），無法畫出 Codemap；請管理員改用支援的端點")
 )
 
 // Explain is what the asker is told about err from Ask: one of the errors
@@ -54,8 +55,10 @@ func Explain(err error) (msg string, logIt bool) {
 			return known.Error(), false
 		}
 	}
-	if errors.Is(err, errModel) {
-		return errModel.Error(), true
+	for _, logged := range []error{errSchema, errModel} {
+		if errors.Is(err, logged) {
+			return logged.Error(), true
+		}
 	}
 	return "回答失敗；管理員可在伺服器記錄檔中查看詳細資訊", true
 }
@@ -213,9 +216,12 @@ func (s *Service) drawMap(ctx context.Context, conv int64, r codemap.Request, li
 				emit("drawing", map[string]any{"chars": n})
 			}
 		})
-		if errors.Is(err, codemap.ErrInvalid) {
+		switch {
+		case errors.Is(err, codemap.ErrInvalid):
 			return errMap
-		} else if err != nil {
+		case errors.Is(err, ai.ErrSchema):
+			return fmt.Errorf("%w: %w", errSchema, err)
+		case err != nil:
 			return fmt.Errorf("%w: %w", errModel, err)
 		}
 		if len(m.Traces) > 0 {

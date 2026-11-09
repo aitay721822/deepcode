@@ -340,36 +340,37 @@ func Pick(files []string, lines map[string]int, n int) []string {
 	return out
 }
 
-// ParsePages reads the model's JSON plan, {"pages":[{"title","query"}]},
-// tolerating reasoning blocks and prose around it, and keeps at most limit
-// titled pages, their titles and queries clipped.
-func ParsePages(s string, limit int) []Page {
-	var v struct {
+// Plan is the model's plan, {"pages":[{"title","query"}]}; Outline its
+// outline of a wiki in sections, {"overview":{...},"sections":[...]}.
+type (
+	Plan struct {
 		Pages []Page `json:"pages"`
 	}
-	if !ai.ParseJSON(s, &v) {
-		return nil
-	}
-	return keep(v.Pages, limit)
-}
-
-// ParseHeads reads the model's outline, {"overview":{...},"sections":[...]},
-// as ParsePages reads pages: the overview, ok false without one, and the first
-// limit section pages in order, one the model left untitled kept in its place
-// with no title, so that each stays with its section.
-func ParseHeads(s string, limit int) (overview Page, sections []Page, ok bool) {
-	var v struct {
+	Outline struct {
 		Overview Page   `json:"overview"`
 		Sections []Page `json:"sections"`
 	}
-	if !ai.ParseJSON(s, &v) {
-		return Page{}, nil, false
-	}
-	for _, p := range v.Sections[:min(limit, len(v.Sections))] {
+)
+
+// PlanFormat and OutlineFormat ask the model for a Plan and an Outline.
+var (
+	PlanFormat    = ai.Schema[Plan]("wiki_pages")
+	OutlineFormat = ai.Schema[Outline]("wiki_outline")
+)
+
+// Titled is p's first limit titled pages, made top-level pages, their titles
+// and queries clipped.
+func (p Plan) Titled(limit int) []Page { return keep(p.Pages, limit) }
+
+// Heads is o's overview, ok false without one, and its first limit section
+// pages in order, one the model left untitled kept in its place with no
+// title, so that each stays with its section.
+func (o Outline) Heads(limit int) (overview Page, sections []Page, ok bool) {
+	for _, p := range o.Sections[:min(limit, len(o.Sections))] {
 		head, _ := NewPage(p.Title, p.Query)
 		sections = append(sections, head)
 	}
-	overview, ok = NewPage(v.Overview.Title, v.Overview.Query)
+	overview, ok = NewPage(o.Overview.Title, o.Overview.Query)
 	return overview, sections, ok
 }
 

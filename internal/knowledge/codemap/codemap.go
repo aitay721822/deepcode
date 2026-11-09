@@ -22,8 +22,12 @@ type Map struct {
 	Traces      []Trace `json:"traces"`
 }
 
+// format asks the model for a Map. It writes no ids: ground numbers the
+// traces and locations it keeps.
+var format = ai.Schema[Map]("code_map")
+
 type Trace struct {
-	ID          string     `json:"id"` // 1, 2, ...
+	ID          string     `json:"id" jsonschema:"-"` // 1, 2, ...
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
 	Guide       string     `json:"guide"` // Markdown: how the locations work together
@@ -31,7 +35,7 @@ type Trace struct {
 }
 
 type Location struct {
-	ID          string `json:"id"` // 1a, 1b, ...
+	ID          string `json:"id" jsonschema:"-"` // 1a, 1b, ...
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Path        string `json:"path"`
@@ -50,22 +54,22 @@ type Request struct {
 	Hits                []retrieval.Hit // as shown in Sources: where the lines are found
 }
 
-// ErrInvalid: the model's reply was no map, twice, or the second map had no
-// location the sources show.
-var ErrInvalid = errors.New("the model's reply was not a code map")
+// ErrInvalid: the model's map had no location the sources show, twice.
+var ErrInvalid = errors.New("the model's code map showed no line of the sources")
 
-// maxEcho bounds how much of a reply that was no map goes back with the
-// request to try again: enough to rework, not a whole runaway reply.
+// maxEcho bounds how much of a map goes back with the request to try again:
+// enough to rework, not a whole runaway reply.
 const maxEcho = 8000
 
-// Draw asks model for the map of r's question and grounds it in r.Hits. A
-// reply that is no JSON map, or whose locations the sources do not show, is
-// asked for once more. drawing is told how much of the replies has come, as
-// it comes. The map has no traces only when the model found nothing to map.
+// Draw asks model for the map of r's question (format) and grounds it in
+// r.Hits. A map whose locations the sources do not show is asked for once
+// more; an answer that is no map is an error wrapping ai.ErrSchema. drawing is
+// told how much of the replies has come, as it comes. The map has no traces
+// only when the model found nothing to map.
 func Draw(ctx context.Context, model *ai.OpenAI, r Request, drawing func(chars int)) (Map, error) {
 	msgs, n := prompt(r), 0
 	for try := 0; ; try++ {
-		reply, err := model.Stream(ctx, msgs, func(d string) {
+		m, reply, err := ai.StreamJSON(ctx, model, msgs, format, func(d string) {
 			if n += len(d); drawing != nil {
 				drawing(n)
 			}
@@ -73,34 +77,19 @@ func Draw(ctx context.Context, model *ai.OpenAI, r Request, drawing func(chars i
 		if err != nil {
 			return Map{}, err
 		}
-		var m Map
-		parsed := ai.ParseJSON(reply, &m) && m.Traces != nil
-		if parsed && len(m.Traces) == 0 {
+		if len(m.Traces) == 0 {
 			return m, nil // nothing to map, as the rules let it say
 		}
-		if parsed {
-			if ground(&m, r.Hits); len(m.Traces) > 0 {
-				return m, nil
-			}
+		if ground(&m, r.Hits); len(m.Traces) > 0 {
+			return m, nil
 		}
 		if try == 1 {
 			return Map{}, ErrInvalid
 		}
-		note := retryNote
-		if parsed {
-			note = groundNote
+		if len(reply) > maxEcho {
+			reply = strings.ToValidUTF8(reply[:maxEcho], "") + "…"
 		}
-		// Without a reply to show (it only thought), the note joins the request:
-		// some servers refuse an empty assistant turn, or two user turns in a row.
-		echo := strings.TrimSpace(ai.StripThinking(reply))
-		if echo == "" {
-			msgs[len(msgs)-1].Content += "\n\n" + note
-			continue
-		}
-		if len(echo) > maxEcho {
-			echo = strings.ToValidUTF8(echo[:maxEcho], "") + "…"
-		}
-		msgs = append(msgs, ai.Message{Role: "assistant", Content: echo}, ai.Message{Role: "user", Content: note})
+		msgs = append(msgs, ai.Message{Role: "assistant", Content: reply}, ai.Message{Role: "user", Content: groundNote})
 	}
 }
 

@@ -40,6 +40,9 @@ type Generator struct {
 	Language  string
 	Parallel  int // pages planned or written at a time; 0 is one
 	MaxPages  int // the most pages a wiki gets; 0 is defaultMaxPages
+	// Planned, when set, is told how each plan the model makes went. The bench
+	// sets it.
+	Planned func(Planning)
 }
 
 const (

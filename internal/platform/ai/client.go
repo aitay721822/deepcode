@@ -1,7 +1,13 @@
 // Package ai is an OpenAI-compatible client for chat and embeddings, on the
 // official SDK (openai-go), that works with OpenAI, llama.cpp, LM Studio,
 // vLLM, Ollama and similar servers. A nil *OpenAI means the model is not
-// configured.
+// configured. Streams, accumulation, tool and schema params are the SDK's;
+// what this package adds is what the SDK leaves to its user: request options
+// (no OPENAI_* environment, retries, RPM, body caps, store false on the
+// Responses API), errors that name the model and mask the key, timeouts that
+// name DEEPCODE_LLM_TIMEOUT, a Chat Completions stream with no finish reason
+// taken as cut, the 1 MB answer cap, DeepSeek's cached-token count, and
+// schemas made from Go types and checked on the answer.
 package ai
 
 import (
