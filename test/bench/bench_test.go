@@ -273,6 +273,11 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 	} {
 		query(c.step, c.dst, c.q, snap)
 	}
+	if s, err := span(ctx, r.db, snap); err != nil {
+		fail("citation span", err)
+	} else {
+		res.CitationSpan = s
+	}
 	if tree, err := pageTree(ctx, r.db, snap); err != nil {
 		fail("page tree", err)
 	} else {
@@ -282,9 +287,11 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 		fail("topics", err)
 	} else if n, err := toolingPages(ctx, r.db, snap); err != nil {
 		fail("topics", err)
+	} else if left, err := unnamed(ctx, r.db, r.ix.Graph, snap); err != nil {
+		fail("topics", err)
 	} else if len(res.Tree) > 0 { // a wiki to measure
 		c := cover(tg.topics, heads)
-		c.ToolingPages = n
+		c.ToolingPages, c.Unnamed = n, left
 		res.Topics = &c
 	}
 	if d, err := r.ix.Graph.Diagram(ctx, snap); err != nil {

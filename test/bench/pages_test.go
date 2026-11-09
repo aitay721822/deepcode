@@ -10,17 +10,47 @@ import (
 	"strings"
 	"testing"
 
+	"deepcode/internal/knowledge/wiki/outline"
+	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/index/analyzer"
+	"deepcode/internal/repo/index/graph"
 )
 
-// coverage is how many of DeepWiki's topics head's wiki covers, and how many
-// of its pages are about tests, CI, manifests or editor settings alone.
+// coverage is how many of DeepWiki's topics head's wiki covers, how many of
+// its pages are about tests, CI, manifests or editor settings alone, and the
+// code files no page is planned on.
 type coverage struct {
 	Topics       int      `json:"topics"`
 	Covered      int      `json:"covered"`
 	Missing      []string `json:"missing"`
 	ToolingPages int      `json:"testAndToolingPages"`
+	Unnamed      []string `json:"unnamedCode"`
+}
+
+// unnamed are the code files of the snapshot's code sections that no page's
+// title or query names (outline.Unnamed): each is to be some page's subject.
+func unnamed(ctx context.Context, db *sql.DB, g *graph.Graph, snap int64) ([]string, error) {
+	parts, _, err := g.Parts(ctx, snap, 1)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for f, d := range parts {
+		if d != "" { // a test, example, doc or hidden file is ""
+			files = append(files, f)
+		}
+	}
+	slices.Sort(files)
+	stored, err := (&wikistore.Store{DB: db}).Pages(ctx, snap)
+	if err != nil {
+		return nil, err
+	}
+	pages := make([]outline.Page, len(stored))
+	for i, p := range stored {
+		pages[i] = outline.Page{Title: p.Title, Query: p.Query}
+	}
+	return outline.Unnamed(pages, files), nil
 }
 
 // citeLink is a citation's link, as the wiki writes it; its file is group 1.
@@ -109,6 +139,37 @@ func headingsOf(content string) []string {
 // what follows it on the line ("go").
 var fenceRe = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})([^\n]*)")
 
+// span is the median and the most lines a citation of the snapshot's pages
+// spans, the median of an even count the mean of its middle two, rounded
+// down: DeepWiki cites a function or a few lines, and a page citing a whole
+// file is written again whenever any line of it changes.
+func span(ctx context.Context, db *sql.DB, snap int64) (citationSpan, error) {
+	rows, err := db.QueryContext(ctx, `SELECT c.end_line - c.start_line + 1 FROM wiki_citations c JOIN wiki_pages p ON p.id = c.page_id
+		WHERE p.snapshot_id = ? ORDER BY 1`, snap)
+	if err != nil {
+		return citationSpan{}, err
+	}
+	defer rows.Close()
+	var n []int
+	for rows.Next() {
+		var lines int
+		if err := rows.Scan(&lines); err != nil {
+			return citationSpan{}, err
+		}
+		n = append(n, lines)
+	}
+	if len(n) == 0 {
+		return citationSpan{}, rows.Err()
+	}
+	return citationSpan{Median: (n[(len(n)-1)/2] + n[len(n)/2]) / 2, Max: n[len(n)-1]}, rows.Err()
+}
+
+// citationSpan is how many lines a page citation spans: the median and the most.
+type citationSpan struct {
+	Median int `json:"median"`
+	Max    int `json:"max"`
+}
+
 // toolingPages counts the snapshot's pages that cite only tests, CI,
 // manifests, editor settings and the like.
 func toolingPages(ctx context.Context, db *sql.DB, snap int64) (int, error) {
@@ -165,24 +226,75 @@ func cover(topics []topic, heads []string) coverage {
 	return c
 }
 
-// holds reports whether heading holds word as a whole word, case and hyphens
-// aside, a name's words counting (edge): WelcomeController and HTTPServer
-// hold welcome and server, Auto Generating holds auto-generating, Unwelcome
-// does not hold welcome.
+// holds reports whether heading holds word as a whole word, case, hyphens
+// and inflections aside (inflected), a name's words counting (edge):
+// WelcomeController and HTTPServer hold welcome and server, Auto Generating
+// holds auto-generating, Versioned APIs holds versioning, Unwelcome does not
+// hold welcome.
 func holds(heading, word string) bool {
 	space := strings.NewReplacer("-", " ") // one byte for one, so that edge reads heading where h is
-	h, w := space.Replace(lowerASCII(heading)), space.Replace(strings.ToLower(word))
-	for i := 0; ; {
-		j := strings.Index(h[i:], w)
-		if j < 0 {
-			return false
-		}
-		j += i
-		if edge(heading, j) && edge(heading, j+len(w)) {
+	h := space.Replace(lowerASCII(heading))
+	re, tails := inflected(space.Replace(strings.ToLower(word)))
+	for _, m := range re.FindAllStringIndex(h, -1) {
+		// Each ending is tried, as one may take a name's next word: Route|Definition, not Routed|efinition.
+		if edge(heading, m[0]) && slices.ContainsFunc(tails, func(t string) bool { return strings.HasPrefix(h[m[1]:], t) && edge(heading, m[1]+len(t)) }) {
 			return true
 		}
-		i = j + 1
 	}
+	return false
+}
+
+// endings are what an inflection adds to a word's stem, the longest first.
+var endings = []string{"ing", "ies", "ied", "es", "ed", "s", "y", "e"}
+
+// inflected matches phrase up to the stem of its last word, each word before
+// it of letters alone in any inflection, its stem and an ending or none, and
+// returns the endings the last word may take: none first, and only that for a
+// name (app.param), which stays as written.
+func inflected(phrase string) (*regexp.Regexp, []string) {
+	words, tails := strings.Fields(phrase), []string{""}
+	for i, w := range words {
+		if strings.Trim(w, "abcdefghijklmnopqrstuvwxyz") != "" {
+			words[i] = regexp.QuoteMeta(w)
+			continue
+		}
+		s, cut := stem(w)
+		last := s[len(s)-1:]
+		ends := append([]string{last + "ings", last + "ing", last + "ed", "ings"}, endings...) // mappings, mapping, mapped, settings
+		if cut == "" || cut == "s" {
+			ends = ends[:len(ends)-2] // y and e end a word that lost one: stat or stats is no State, nor auth Authy
+		}
+		if i == len(words)-1 {
+			words[i], tails = s, append(tails, ends...)
+		} else {
+			words[i] = s + "(?:" + strings.Join(ends, "|") + ")?"
+		}
+	}
+	return regexp.MustCompile(strings.Join(words, " ")), tails
+}
+
+// stem is word without the ending an inflection added, three letters left
+// at least, four after ing, ed or es (string, embed and files keep theirs):
+// version of versioned, versioning and versions, cach of cache and caches,
+// map of mapping, its consonant undoubled. An s after s or u (class, status)
+// is the word's own, as is a y after a vowel (play, key). It also returns the
+// ending cut, "" for none.
+func stem(word string) (string, string) {
+	for _, end := range endings {
+		s, least := strings.TrimSuffix(word, end), 3
+		if end == "ing" || end == "ed" || end == "es" {
+			least = 4
+		}
+		if len(s) == len(word) || len(s) < least || end == "s" && strings.ContainsAny(s[len(s)-1:], "su") ||
+			end == "y" && strings.ContainsAny(s[len(s)-1:], "aeiou") {
+			continue
+		}
+		if n := len(s); (end == "ing" || end == "ed") && n >= 4 && s[n-1] == s[n-2] && !strings.ContainsAny(s[n-1:], "aeiouls") {
+			s = s[:n-1] // calling and passed keep theirs
+		}
+		return s, end
+	}
+	return word, ""
 }
 
 // edge reports whether a word may start or end at byte i of s: at an end of
@@ -247,6 +359,14 @@ func TestRewritten(t *testing.T) {
 	if n, err := rewritten(ctx, db, 1, 2); err != nil || n != 2 {
 		t.Errorf("%d pages rewritten (%v), want 2", n, err)
 	}
+	// Head's citations span 1, 3, 10 and 12 lines; base's 50 do not count.
+	if _, err := db.Exec(`INSERT INTO wiki_citations(page_id, path, start_line, end_line) VALUES (3, 'a.go', 1, 1), (3, 'a.go', 1, 10), (4, 'b.go', 5, 7),
+		(5, 'c.go', 1, 12), (1, 'a.go', 1, 50)`); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := span(ctx, db, 2); err != nil || s != (citationSpan{6, 12}) {
+		t.Errorf("span %+v (%v), want median 6 and at most 12", s, err)
+	}
 }
 
 // TestCiteLink: a citation's lines and link are aside, a bracket in its path kept.
@@ -273,9 +393,17 @@ func TestCover(t *testing.T) {
 		{"WelcomeController", "welcome", true}, {"Unwelcome", "welcome", false}, {"HTTPServer", "server", true}, {"HTTPServer", "http", true},
 		{"CIPipeline", "ci", true}, {"CIRCUIT", "ci", false}, {"OAuth2Client", "client", true}, {"OAuth2 Login", "oauth", true},
 		{"Base64 Encoding", "base", true}, {"Base64encode", "encode", false}, {"REST APIs", "api", true}, {"CIs", "ci", true},
-		{"APIsController", "api", true}, {"APIsimple", "api", false}, {"Apis", "api", false}, {"İ server", "server", true},
+		{"APIsController", "api", true}, {"APIsimple", "api", false}, {"Apis", "api", true}, {"İ server", "server", true},
 		{"使用server", "server", true}, {"GracefulShutdown", "graceful", true}, {"Ungraceful", "graceful", false},
-		{"Auto Generating Selectors", "auto-generating", true}, {"Mobile-BFF", "mobile bff", true}, {"Auto-generatings", "auto generating", false},
+		{"Auto Generating Selectors", "auto-generating", true}, {"Mobile-BFF", "mobile bff", true}, {"Auto-generator", "auto generating", false},
+		// Inflections of a word of letters alone, not of a name.
+		{"Versioned APIs", "versioning", true}, {"API Versions", "versioning", true}, {"Versionless", "version", false}, {"Routing", "route", true},
+		{"Router", "route", false}, {"Caches", "cache", true}, {"Classes", "class", true}, {"Statuses", "status", true}, {"Strategies", "strategy", true},
+		{"Mapping", "map", true}, {"Mapped Types", "mapping", true}, {"Passed", "pass", true}, {"Auto Generated Selectors", "auto-generating", true},
+		{"Settings", "setting", true}, {"Mappings", "map", true}, {"Embedding", "embed", true}, {"Filing", "files", false}, {"Strings", "string", true},
+		{"RouteDefinition", "route", true}, {"CacheDefaults", "cache", true}, {"RouteSet", "route", true}, {"RoutedHandler", "route", true},
+		{"State", "stat", false}, {"Authy", "auth", false}, {"State", "state", true}, {"Strategy", "strategies", true},
+		{"State Management", "stats", false}, {"State", "states", true}, {"Plays", "play", true}, {"Playing", "play", true}, {"Keys", "key", true},
 	} {
 		if got := holds(h.heading, h.word); got != h.want {
 			t.Errorf("holds(%q, %q) = %v", h.heading, h.word, got)

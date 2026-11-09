@@ -169,3 +169,17 @@ func TestHome(t *testing.T) {
 		}
 	}
 }
+
+// TestNovel: a chunk declares something new only when a declaration it lists
+// was in no chunk before, not when the declarations split or merged anew.
+func TestNovel(t *testing.T) {
+	held := map[string]bool{"A, B": true, "C": true, "": true}
+	for name, want := range map[string]bool{"A": false, "B, C": false, "": false, "A, D": true, "D": true} {
+		if got := Novel(name, held); got != want {
+			t.Errorf("Novel(%q) = %v, want %v", name, got, want)
+		}
+	}
+	if Novel("", map[string]bool{"A": true}) { // code outside any declaration declares nothing
+		t.Error("Novel(\"\") with no such chunk before")
+	}
+}

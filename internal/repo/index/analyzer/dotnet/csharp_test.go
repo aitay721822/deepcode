@@ -222,6 +222,23 @@ func TestMembers(t *testing.T) {
 	}
 }
 
+// TestTopLevel: a file's top-level statements are one Main, from the first to
+// the last, a comment between them and a local function inside; a type after
+// them stays a symbol of its own.
+func TestTopLevel(t *testing.T) {
+	src := "using Shop;\n\nvar builder = App.CreateBuilder(args);\n\n// Services\nbuilder.AddProject(\"api\");\n" +
+		"builder.Build().Run();\n\nstatic bool Http() => true;\n\nrecord Options(string Name);\n"
+	syms, _ := syntax.Parse(CSharp, []byte(src))
+	var got []string
+	for _, s := range syms {
+		got = append(got, fmt.Sprintf("%s %s %d-%d %s", s.Kind, s.Name, s.StartLine, s.EndLine, s.Signature))
+	}
+	want := "method Main 3-9 var builder = App.CreateBuilder(args);\nrecord Options 11-11 record Options(string Name);"
+	if strings.Join(got, "\n") != want {
+		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), want)
+	}
+}
+
 // TestBroken: a namespace with a broken name keeps what it holds and names
 // no namespace; a declarator on a line of its own is signed by the type's line.
 func TestBroken(t *testing.T) {

@@ -3,9 +3,10 @@ package eval
 // Corpora are the repositories the eval indexes, each at a pinned commit,
 // with the questions asked of it and the floors its scores must keep. Raise
 // a floor when a change raises the score; a Chinese question's terms are what
-// the model replied to chat's termsPrompt for it.
+// the model replied to chat's termsPrompt for it. deepcode's MRR floor was
+// lowered once, for Markdown's sections (the README says why).
 var Corpora = []Corpus{
-	{Name: "deepcode", SHA: "fddffe3e1fca1938017c15687216be6c7506b4d6", Recall: 0.916, MRR: 0.619, Questions: []Question{
+	{Name: "deepcode", SHA: "fddffe3e1fca1938017c15687216be6c7506b4d6", Recall: 0.916, MRR: 0.617, Questions: []Question{
 		{Ask: "How are the citations in an answer checked against the sources it was given?", Want: []string{"internal/knowledge/evidence/citations.go"}},
 		{Ask: "How does retrieval combine full-text, vector and symbol results?", Want: []string{"internal/knowledge/retrieval/retriever.go"}},
 		{Ask: "How is a question turned into an FTS5 MATCH query?", Want: []string{"internal/knowledge/retrieval/lexical.go"}},
@@ -75,7 +76,7 @@ var Corpora = []Corpus{
 		{Ask: "怎麼限制同時處理的請求數量？", Terms: "middleware MaxConns concurrency limit handler ServeHTTP net.Listener http.Server chi",
 			Want: []string{"middleware/throttle.go"}},
 	}},
-	{Name: "zustand", URL: "https://github.com/pmndrs/zustand", SHA: "382d29c485e67018c06e75ec7235130d0968522c", Recall: 0.961, MRR: 0.865, Questions: []Question{
+	{Name: "zustand", URL: "https://github.com/pmndrs/zustand", SHA: "382d29c485e67018c06e75ec7235130d0968522c", Recall: 0.999, MRR: 0.872, Questions: []Question{
 		{Ask: "How does setState merge a partial state and notify listeners?", Want: []string{"src/vanilla.ts"}},
 		{Ask: "How does subscribe add and remove a listener?", Want: []string{"src/vanilla.ts"}},
 		{Ask: "How does the useStore hook read a slice of the state in React?", Want: []string{"src/react.ts"}},
@@ -136,7 +137,7 @@ var Corpora = []Corpus{
 		{Ask: "怎麼把應用程式監聽在某個連接埠上？", Terms: "app listen port http.createServer express",
 			Want: []string{"lib/application.js"}},
 	}},
-	{Name: "petclinic", URL: "https://github.com/spring-projects/spring-petclinic", SHA: "500158f732419217507c7656904b8e6aa1bcc0d6", Recall: 0.945, MRR: 0.724, Questions: []Question{
+	{Name: "petclinic", URL: "https://github.com/spring-projects/spring-petclinic", SHA: "500158f732419217507c7656904b8e6aa1bcc0d6", Recall: 0.963, MRR: 0.724, Questions: []Question{
 		{Ask: "What is the entry point of the Spring Boot application?", Want: []string{"src/main/java/org/springframework/samples/petclinic/PetClinicApplication.java"}},
 		{Ask: "How are owners searched by last name and the results paginated?", Want: []string{"src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java", "src/main/java/org/springframework/samples/petclinic/owner/OwnerRepository.java"}},
 		{Ask: "What happens when the search finds exactly one owner?", Want: []string{"src/main/java/org/springframework/samples/petclinic/owner/OwnerController.java"}},

@@ -84,9 +84,25 @@ func (s *Store) SetImports(ctx context.Context, batch []Imports) error {
 }
 
 // configs is the SQL condition that a file is one whose content resolving
-// imports reads: go.mod, .NET project files, Cargo.toml, in any case.
+// imports and entries reads, at any depth and in any case: go.mod, .NET
+// project files, Cargo.toml, package.json and Maven's and Gradle's builds.
 const configs = `(f.language = 'go.mod' OR lower(f.path) GLOB '*.csproj' OR lower(f.path) GLOB '*.vbproj' OR lower(f.path) GLOB '*.fsproj'
-	OR lower(f.path) GLOB '*directory.build.props' OR lower(f.path) = 'cargo.toml' OR lower(f.path) GLOB '*/cargo.toml')`
+	OR lower(f.path) GLOB '*directory.build.props' OR lower(f.path) = 'cargo.toml' OR lower(f.path) GLOB '*/cargo.toml'
+	OR lower(f.path) IN ('package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts')
+	OR lower(f.path) GLOB '*/package.json' OR lower(f.path) GLOB '*/pom.xml' OR lower(f.path) GLOB '*/build.gradle' OR lower(f.path) GLOB '*/build.gradle.kts')`
+
+// Mains returns the paths of the snapshot's hand-written files declaring a
+// function or method named main or Main: where a program starts.
+func (s *Store) Mains(ctx context.Context, snap int64) ([]string, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT DISTINCT s.path FROM symbols s
+		JOIN source_files f ON f.snapshot_id = s.snapshot_id AND f.path = s.path
+		WHERE s.snapshot_id = ? AND s.name IN ('main', 'Main') AND s.kind IN ('function', 'method') AND NOT f.generated ORDER BY s.path`, snap)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanPaths(rows)
+}
 
 // Files passes file the path, language and stored imports of each of the
 // snapshot's hand-written files in langs.

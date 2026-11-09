@@ -47,6 +47,14 @@ func readCargo(dir, toml string) (crate, bool) {
 	return c, pkg
 }
 
+// Lib is the library root file of the package whose Cargo.toml in dir holds
+// toml, src/lib.rs unless [lib] path says another; false for a workspace
+// root with no [package] of its own.
+func Lib(dir, toml string) (string, bool) {
+	c, ok := readCargo(dir, toml)
+	return c.lib, ok
+}
+
 // str is a TOML string's text without its quotes, "" for any other value.
 func str(v string) string {
 	if len(v) < 2 || v[0] != '"' && v[0] != '\'' {

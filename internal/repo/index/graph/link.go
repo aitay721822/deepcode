@@ -35,7 +35,11 @@ func (g *Graph) Link(ctx context.Context, snap int64) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return g.save(ctx, snap, resolve(files, configs))
+	mains, err := g.Store.Mains(ctx, snap)
+	if err != nil {
+		return 0, err
+	}
+	return g.save(ctx, snap, resolve(files, configs, mains))
 }
 
 // LinkStale links the ready snapshots that have files with a grammar but no
@@ -78,7 +82,7 @@ func (g *Graph) readImports(ctx context.Context, snap int64) error {
 
 // load reads the snapshot's files with a grammar, generated ones aside, with
 // their imports, and the content of its configs by path: go.mod, .NET
-// project files and Cargo.toml.
+// project files, Cargo.toml, package.json and Maven's and Gradle's builds.
 func (g *Graph) load(ctx context.Context, snap int64) ([]file, map[string]string, error) {
 	var files []file
 	err := g.Store.Files(ctx, snap, analyzer.Grammars(), func(path, lang, imports string) {

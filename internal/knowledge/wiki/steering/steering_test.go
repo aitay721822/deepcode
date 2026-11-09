@@ -31,7 +31,7 @@ func TestParse(t *testing.T) {
 	}
 	many, _ := Parse(`{"pages":[` + strings.Repeat(`{"title":"P"},`, MaxPages) + `{"title":"P"}]}`)
 	long, _ := Parse(fmt.Sprintf(`{"repo_notes":[{"content":%q}],"pages":[{"title":%q,"purpose":%q}]}`,
-		strings.Repeat("Z", 2*MaxNotes), strings.Repeat("標", 200), strings.Repeat("q", 600)))
+		strings.Repeat("Z", 2*MaxNotes), strings.Repeat("標", 200), strings.Repeat("q", outline.MaxQuery+100)))
 	if len(many.Pages) != MaxPages || strings.Count(long.Notes, "Z") != MaxNotes-len("- ") ||
 		len(long.Pages) != 1 || len([]rune(long.Pages[0].Title)) != outline.MaxTitle || len(long.Pages[0].Query) != outline.MaxQuery {
 		t.Fatalf("%d pages listed; notes of %d characters; a long page %+v", len(many.Pages), len(long.Notes), long.Pages)

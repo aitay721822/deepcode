@@ -31,6 +31,40 @@ func TestFuse(t *testing.T) {
 	}
 }
 
+// TestSearchKeepsNamed: the search keeps a named file's best chunk, though
+// fusion ranks first what two searches find.
+func TestSearchKeepsNamed(t *testing.T) {
+	db := seeded(t, `INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'src/a.go', 1, 9, 'func alpha() { alpha() }', 'a'),
+		(1, 'src/b.go', 1, 9, 'func beta() { beta() }', 'b'), (1, 'src/c.go', 1, 9, 'func gamma() { gamma() }', 'c'), (1, 'docs/Pinned.cs', 1, 9, 'unrelated text', 'p')`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'src/a.go', 'alpha', 'alpha', 'function', 1, 1),
+		(1, 'src/b.go', 'beta', 'beta', 'function', 1, 1), (1, 'src/c.go', 'gamma', 'gamma', 'function', 1, 1)`)
+	if res, err := retriever(db).Search(context.Background(), 1, "alpha beta gamma docs/Pinned.cs", 1); err != nil || len(res.Hits) != 1 || res.Hits[0].Path != "docs/Pinned.cs" {
+		t.Fatalf("got %+v %v, want the named file's chunk", res.Hits, err)
+	}
+}
+
+// TestSure: each must ranked past the first n takes the last of those places
+// not held by another must, the rest moving down; none is lost.
+func TestSure(t *testing.T) {
+	for _, c := range []struct {
+		ids, must []int64
+		n         int
+		want      []int64
+	}{
+		{[]int64{1, 2, 3, 4, 5, 6}, []int64{6, 5}, 4, []int64{1, 2, 5, 6, 3, 4}},
+		{[]int64{1, 2, 3, 4, 5, 6}, []int64{4, 6}, 4, []int64{1, 2, 4, 6, 3, 5}}, // 4 already in place keeps it
+		{[]int64{1, 2, 3}, []int64{2}, 2, []int64{1, 2, 3}},
+		{[]int64{1, 2, 3, 4}, []int64{1, 3, 4}, 2, []int64{1, 3, 2, 4}}, // all must: the first n are must
+		{[]int64{1, 2, 3}, []int64{1, 2, 3}, 2, []int64{1, 2, 3}},       // the first n all must: the rest wait
+		{[]int64{1, 2, 3}, nil, 2, []int64{1, 2, 3}},
+		{nil, []int64{1}, 2, nil},
+	} {
+		if got := sure(slices.Clone(c.ids), c.must, c.n); !slices.Equal(got, c.want) {
+			t.Errorf("sure(%v, %v, %d) = %v, want %v", c.ids, c.must, c.n, got, c.want)
+		}
+	}
+}
+
 func TestFTSQuery(t *testing.T) {
 	if got, want := ftsQuery("How does the getUserName function work in auth_service?"), `"getusername"* OR "auth_service"* OR "user"* OR "name"*`; got != want {
 		t.Fatalf("got %s, want %s", got, want)
@@ -137,12 +171,14 @@ func TestFTSFindsWordsOfIdentifiers(t *testing.T) {
 }
 
 // TestSymbolSearch: % and _ in a query match only themselves, and names that
-// start with the query come before shorter ones that merely contain it.
+// start with the query come before shorter ones that merely contain it; a
+// guide's section is no symbol.
 func TestSymbolSearch(t *testing.T) {
 	db := seeded(t,
 		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES
 			(1, 'a.go', 'xa_', 'xa_', 'function', 1, 1), (1, 'a.go', 'a_bc', 'a_bc', 'function', 2, 2),
-			(1, 'a.go', 'a_', 'a_', 'function', 3, 3), (1, 'a.go', 'axb', 'axb', 'function', 4, 4)`,
+			(1, 'a.go', 'a_', 'a_', 'function', 3, 3), (1, 'a.go', 'axb', 'axb', 'function', 4, 4),
+			(1, 'README.md', 'a_ guide', 'a_ guide', 'section', 1, 9)`,
 	)
 	hits, err := retriever(db).Symbols(context.Background(), 1, "a_", 10)
 	var names []string
@@ -316,8 +352,8 @@ func TestSearchNamedFiles(t *testing.T) {
 		"(group)/(admin)/page.tsx, src/a.go:42:7, path=src/x.go|src/y.go 請看 App.java？ **src/b.go**. **c/d.go**:": {
 			"(group)/(admin)/page.tsx", "src/a.go", "src/x.go", "src/y.go", "App.java", "src/b.go", "c/d.go"},
 	} {
-		if got := fileNames(query); !slices.Equal(got, want) {
-			t.Errorf("fileNames(%q) = %q, want %q", query, got, want)
+		if got := FileNames(query); !slices.Equal(got, want) {
+			t.Errorf("FileNames(%q) = %q, want %q", query, got, want)
 		}
 	}
 	for in, want := range map[string]string{"(": "", "()": "", "[[]]": "", "(a]": "a", "(group)/(admin)": "(group)/(admin)", "((a/b))": "a/b", "a/b)": "a/b"} {
@@ -329,7 +365,7 @@ func TestSearchNamedFiles(t *testing.T) {
 		(1, 'src/app/Host.cs', 1, 9, 'var b = Builder.Create()', 'h0'), (1, 'app/[slug]/page.tsx', 1, 9, 'page', 'hp'),
 		(1, 'lib/App.java', 1, 9, 'class App', 'ha'), (1, 'tests/x/a.rs', 1, 9, 'fn t()', 'ht'),
 		(1, 'README.md', 1, 9, 'intro', 'hr'), (1, 'A/README.md', 1, 9, 'a', 'hra'), (1, 'B/README.md', 1, 9, 'b', 'hrb'),
-		(1, 'lib/Late.go', 20, 29, 'func later()', 'hl2'), (1, 'lib/Late.go', 10, 19, 'func late()', 'hl1')`}
+		(1, 'lib/Late.go', 20, 29, 'func later()', 'hl2'), (1, 'lib/Late.go', 10, 19, 'func late()', 'hl1'), (1, 'svc/a/Events/E.cs', 1, 9, 'class E', 'ev1'), (1, 'svc/b/Events/F.cs', 1, 9, 'class F', 'ev2')`}
 	for i := range 6 {
 		inserts = append(inserts, fmt.Sprintf(`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash)
 			VALUES (1, 'src/s%d/Extensions.cs', 1, 9, 'host app extensions host app', 'e%d')`, i, i))
@@ -362,44 +398,84 @@ func TestSearchNamedFiles(t *testing.T) {
 		}
 	}
 	ctx := context.Background()
-	if files, err := r.Store.Files(ctx, 1, []string{"app/[slug]/page.tsx", "tests/*.rs", "App.java", "README.md", "Nowhere.go"}, maxFiles); err != nil ||
+	filesOf := func(names []string, limit int) ([]string, error) {
+		groups, err := r.Store.Files(ctx, 1, names, limit)
+		if len(groups) != len(names) {
+			t.Errorf("Files(%q) = %d groups, want one a name", names, len(groups))
+		}
+		return slices.Concat(groups...), err
+	}
+	if files, err := filesOf([]string{"app/[slug]/page.tsx", "tests/*.rs", "App.java", "README.md", "Nowhere.go"}, maxFiles); err != nil ||
 		!slices.Equal(files, []string{"app/[slug]/page.tsx", "tests/x/a.rs", "lib/App.java", "README.md"}) {
 		t.Errorf("Files = %q %v, want a path with brackets, a glob's file, the one file of a name and the root's of another", files, err)
 	}
-	if files, err := r.Store.Files(ctx, 1, []string{"README.md"}, 1); err != nil || !slices.Equal(files, []string{"README.md"}) {
+	if files, err := filesOf([]string{"README.md"}, 1); err != nil || !slices.Equal(files, []string{"README.md"}) {
 		t.Errorf("Files = %q %v, want the root README.md though A/ and B/ sort before it", files, err)
 	}
-	if files, err := r.Store.Files(ctx, 1, []string{"Extensions.cs", "src/app/Host.cs"}, maxFiles); err != nil || !slices.Equal(files, []string{"src/app/Host.cs"}) {
-		t.Errorf("Files = %q %v, want Host.cs alone: six files named Extensions.cs are no one file", files, err)
+	if files, err := filesOf([]string{"Extensions.cs", "app/Host.cs", "x/", "s0/Extensions.cs", "Events/"}, maxFiles); err != nil ||
+		!slices.Equal(files, []string{"src/app/Host.cs", "tests/x/a.rs", "src/s0/Extensions.cs"}) {
+		t.Errorf("Files = %q %v, want what the one file or folder each path ends names: six Extensions.cs and two projects' Events/ none", files, err)
 	}
 	// A file named past the query's first 16 words still has its first chunk read.
 	words := "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
-	ids, err := r.named(ctx, 1, words+"lib/Late.go")
+	ids, _, err := r.named(ctx, 1, words+"lib/Late.go")
 	if hits, _ := r.Store.Chunks(ctx, ids); err != nil || len(hits) != 1 || hits[0].Content != "func late()" {
 		t.Errorf("named a file late: %+v %v, want its first chunk", hits, err)
 	}
-	if ids, err := r.named(ctx, 1, words+strings.Join(late, " ")); err != nil || len(ids) != namedLimit {
+	if ids, _, err := r.named(ctx, 1, words+strings.Join(late, " ")); err != nil || len(ids) != namedLimit {
 		t.Errorf("named eight files late: %d ids %v, want the first chunks of %d", len(ids), err, namedLimit)
 	}
-	// Each file's best chunk ahead of any file's second, namedPerFile a file and namedLimit in all.
+	// Six files named first take the places, though the seventh's words match best.
+	ids, firsts, err := r.named(ctx, 1, "host app extensions "+strings.Join(late[:6], " ")+" src/s0/Extensions.cs")
+	hits, _ := r.Store.Chunks(ctx, ids)
+	var paths []string
+	for _, h := range hits {
+		paths = append(paths, h.Path)
+	}
+	if err != nil || !slices.Equal(paths, late[:6]) || firsts != 6 {
+		t.Errorf("named seven files: %q %v, want the first six named", paths, err)
+	}
+	if ids, firsts, err := r.named(ctx, 1, "late later lib/Late.go far/L0.go"); err != nil || len(ids) != 3 || firsts != 2 {
+		t.Errorf("named two files, one found twice: %d ids, %d first %v; want 3 and 2", len(ids), firsts, err)
+	}
+	// Each file's best chunk ahead of any file's second, in the order of the
+	// files, namedPerFile a file and namedLimit in all.
 	hit := func(id int64, p string) Hit { return Hit{ChunkID: id, Path: p} }
 	for _, c := range []struct {
-		hits []Hit
-		want []int64
+		files []string
+		hits  []Hit
+		want  []int64
 	}{
-		{[]Hit{hit(1, "a"), hit(2, "a"), hit(3, "a"), hit(4, "a"), hit(5, "b"), hit(6, "c"), hit(7, "b"), hit(8, "d")}, []int64{1, 5, 6, 8, 2, 7}},
-		{[]Hit{hit(1, "a"), hit(2, "a"), hit(3, "a"), hit(4, "a"), hit(5, "a")}, []int64{1, 2, 3}},
-		{[]Hit{hit(1, "a"), hit(2, "b"), hit(3, "c"), hit(4, "d"), hit(5, "e"), hit(6, "f"), hit(7, "g")}, []int64{1, 2, 3, 4, 5, 6}},
-		{nil, []int64{}},
+		{[]string{"a", "b", "c", "d"}, []Hit{hit(1, "a"), hit(2, "a"), hit(3, "a"), hit(4, "a"), hit(5, "b"), hit(6, "c"), hit(7, "b"), hit(8, "d")}, []int64{1, 5, 6, 8, 2, 7}},
+		{[]string{"d", "c", "b", "a"}, []Hit{hit(1, "a"), hit(2, "a"), hit(5, "b"), hit(6, "c"), hit(8, "d")}, []int64{8, 6, 5, 1, 2}},
+		{[]string{"a"}, []Hit{hit(1, "a"), hit(2, "a"), hit(3, "a"), hit(4, "a"), hit(5, "a")}, []int64{1, 2, 3}},
+		{[]string{"a", "b", "c", "d", "e", "f", "g"}, []Hit{hit(1, "a"), hit(2, "b"), hit(3, "c"), hit(4, "d"), hit(5, "e"), hit(6, "f"), hit(7, "g")}, []int64{1, 2, 3, 4, 5, 6}},
+		{nil, nil, []int64{}},
 	} {
-		if got := byFile(c.hits); !slices.Equal(got, c.want) {
-			t.Errorf("byFile = %v, want %v", got, c.want)
+		if got, _ := byFile(c.files, c.hits); !slices.Equal(got, c.want) {
+			t.Errorf("byFile(%q) = %v, want %v", c.files, got, c.want)
 		}
 	}
-	if files, err := r.Store.Files(ctx, 1, []string{"src/app/Host.cs", "Host.cs", "src/"}, 6); err != nil || !slices.Equal(files, []string{"src/app/Host.cs"}) {
+	// Each name's next file in turn, a name's files by their best hit, those
+	// no word finds last; namedLimit files at most.
+	for _, c := range []struct {
+		groups [][]string
+		hits   []Hit
+		want   []string
+	}{
+		{[][]string{{"x/a", "x/b", "x/c"}, {"g"}, nil, {"h"}}, []Hit{hit(1, "x/c"), hit(2, "h"), hit(3, "x/a")}, []string{"x/c", "g", "h", "x/a", "x/b"}},
+		{[][]string{{"x/1", "x/2", "x/3", "x/4", "x/5", "x/6", "x/7", "x/8"}, {"g"}, {"h"}}, []Hit{hit(1, "x/8")}, []string{"x/8", "g", "h", "x/1", "x/2", "x/3"}},
+		{[][]string{{"a"}, {"b"}, {"c"}, {"d"}, {"e"}, {"f"}, {"g"}}, []Hit{hit(1, "g"), hit(2, "f")}, []string{"a", "b", "c", "d", "e", "f"}},
+		{nil, nil, nil},
+	} {
+		if got := pick(c.groups, c.hits); !slices.Equal(got, c.want) {
+			t.Errorf("pick(%q) = %q, want %q", c.groups, got, c.want)
+		}
+	}
+	if files, err := filesOf([]string{"src/app/Host.cs", "Host.cs", "src/"}, 6); err != nil || !slices.Equal(files, []string{"src/app/Host.cs"}) {
 		t.Errorf("Files = %q %v, want Host.cs once, src/ (six more files) too wide beside it", files, err)
 	}
-	if files, err := r.Store.Files(ctx, 1, []string{"src/app/Host.cs", "src/"}, 7); err != nil || len(files) != 7 || files[0] != "src/app/Host.cs" {
+	if files, err := filesOf([]string{"src/app/Host.cs", "src/"}, 7); err != nil || len(files) != 7 || files[0] != "src/app/Host.cs" {
 		t.Errorf("Files = %q %v, want Host.cs, then the six others under src/", files, err)
 	}
 }

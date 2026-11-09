@@ -99,45 +99,54 @@ func (s *Store) Following(ctx context.Context, snapshotID int64, p string, line 
 	return h, err == nil, err
 }
 
-// Files are the paths of the snapshot's indexed files that names name, at
-// most limit, a name's own in the order found: a path names its file
-// (src/app.ts) or the files under it (examples/, src/app), a glob those
-// matching it (tests/*.rs), a file name alone (App.java) the one file of
-// that name, at the root or else the only one, as every project's
-// appsettings.json is no one file. A name naming more files than are left of
-// limit names none, as too wide to say what a query is about.
-func (s *Store) Files(ctx context.Context, snapshotID int64, names []string, limit int) ([]string, error) {
-	var out []string
-	seen := map[string]bool{}
-	for _, n := range names {
-		exact, glob, bare := n, "*/"+escapeGlob(n), false
-		if strings.ContainsAny(n, "*?") {
-			exact, glob = "", n
-		} else if strings.Contains(n, "/") {
-			exact = strings.TrimSuffix(n, "/")
+// Files are the paths of the snapshot's indexed files that names name, each
+// name's in the order of names (none for a name naming none), at most limit
+// in all: a path names its file (src/app.ts) or the files under it
+// (examples/, src/app), a glob those matching it (tests/*.rs), a file name
+// alone (App.java) the one file of that name, at the root or else the only
+// one, as every project's appsettings.json is no one file. A path naming
+// nothing, a leading folder left out of it (jmeter/plan.jmx), names what the
+// one file or folder it ends with names. A name naming more files than are
+// left of limit names none, as too wide to say what a query is about, and a
+// file an earlier name named is that name's alone.
+func (s *Store) Files(ctx context.Context, snapshotID int64, names []string, limit int) ([][]string, error) {
+	out := make([][]string, len(names))
+	n, seen := 0, map[string]bool{}
+	// The exact path first, so that past limit files of a name the root's is kept.
+	find := func(exact, glob string) ([]string, error) {
+		return scanPaths(s.DB.QueryContext(ctx, `SELECT DISTINCT path FROM chunks
+			WHERE snapshot_id = ? AND (path = ? OR path GLOB ?) ORDER BY path = ? DESC, path LIMIT ?`, snapshotID, exact, glob, exact, limit+1))
+	}
+	for i, name := range names {
+		exact, glob, bare := name, "*/"+escapeGlob(name), false
+		if strings.ContainsAny(name, "*?") {
+			exact, glob = "", name
+		} else if strings.Contains(name, "/") {
+			exact = strings.TrimSuffix(name, "/")
 			glob = escapeGlob(exact) + "/*"
 		} else {
 			bare = true
 		}
-		// The exact path first, so that past limit files of a name the root's is kept.
-		paths, err := scanPaths(s.DB.QueryContext(ctx, `SELECT DISTINCT path FROM chunks
-			WHERE snapshot_id = ? AND (path = ? OR path GLOB ?) ORDER BY path = ? DESC, path LIMIT ?`, snapshotID, exact, glob, exact, limit+1))
+		paths, err := find(exact, glob)
+		if err == nil && len(paths) == 0 && !bare && exact != "" {
+			paths, err = ending(find, exact)
+		}
 		if err != nil {
 			return nil, err
 		}
-		if bare && slices.Contains(paths, n) {
-			paths = []string{n}
+		if bare && slices.Contains(paths, name) {
+			paths = []string{name}
 		} else if bare && len(paths) > 1 {
 			continue
 		}
 		paths = slices.DeleteFunc(paths, func(p string) bool { return seen[p] })
-		if len(out)+len(paths) > limit {
+		if n+len(paths) > limit {
 			continue
 		}
 		for _, p := range paths {
 			seen[p] = true
 		}
-		out = append(out, paths...)
+		out[i], n = paths, n+len(paths)
 	}
 	return out, nil
 }
@@ -176,6 +185,30 @@ func (s *Store) First(ctx context.Context, snapshotID int64, paths []string) ([]
 		}
 	}
 	return ids, rows.Err()
+}
+
+// ending is what find finds of the one file or folder whose path ends with
+// tail, after a folder, each path once: none when two do (two projects'
+// Events/).
+func ending(find func(exact, glob string) ([]string, error), tail string) ([]string, error) {
+	file, err := find("", "*/"+escapeGlob(tail))
+	if err != nil {
+		return nil, err
+	}
+	under, err := find("", "*/"+escapeGlob(tail)+"/*")
+	if err != nil {
+		return nil, err
+	}
+	paths, roots := slices.Compact(slices.Sorted(slices.Values(slices.Concat(file, under)))), map[string]bool{} // x/Events/Events is both
+	for _, p := range paths {
+		if i := strings.LastIndex(p+"/", "/"+tail+"/"); i >= 0 {
+			roots[p[:i]] = true
+		}
+	}
+	if len(roots) != 1 {
+		return nil, nil
+	}
+	return paths, nil
 }
 
 // escapeGlob writes p as a GLOB pattern matching p alone: a path may hold

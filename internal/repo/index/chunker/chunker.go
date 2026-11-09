@@ -112,6 +112,16 @@ func merge(spans []span) []span {
 	return out
 }
 
+// Names are the declarations a chunk named name holds, as joinNames listed
+// them; none for code outside any. ponytail: split on ", ", so a declaration
+// whose own name holds one (a generic's "Map<K, V>") splits too.
+func Names(name string) []string {
+	if name == "" {
+		return nil
+	}
+	return strings.Split(name, ", ")
+}
+
 // joinNames adds name b to the comma-separated list a, unless b ends it
 // already or a holds five.
 func joinNames(a, b string) string {

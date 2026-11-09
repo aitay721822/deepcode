@@ -53,7 +53,8 @@ func (s *Store) FTS(ctx context.Context, snapshotID int64, match string, paths [
 // or integration event are a question's nouns, and their classes rarely
 // answer it. Case does not count, except for members named like the nouns of
 // a question (C#'s Items, Order, Status properties) and constructors (their
-// class's name): only a name spelled as the code does finds those.
+// class's name): only a name spelled as the code does finds those. A guide's
+// section is no definition: its title is prose (Recipes, TypeScript).
 func (s *Store) Defining(ctx context.Context, snapshotID int64, names, runs []string, limit int) ([]int64, error) {
 	in, run := storage.Placeholders(len(names)), storage.Placeholders(len(runs))
 	args := []any{snapshotID}
@@ -66,7 +67,7 @@ func (s *Store) Defining(ctx context.Context, snapshotID int64, names, runs []st
 		SELECT c.id FROM symbols s
 		JOIN chunks c ON c.snapshot_id = s.snapshot_id AND c.path = s.path
 			AND c.start_line <= s.start_line AND c.end_line >= s.start_line
-		WHERE s.snapshot_id = ? AND (s.name COLLATE NOCASE IN (`+in+`)
+		WHERE s.snapshot_id = ? AND s.kind <> 'section' AND (s.name COLLATE NOCASE IN (`+in+`)
 				AND (s.kind NOT IN ('property', 'event', 'indexer', 'constructor') OR s.name IN (`+in+`))
 			OR s.name COLLATE NOCASE IN (`+run+`) AND s.kind IN ('method', 'function'))
 		GROUP BY c.id ORDER BY max(length(s.name)) DESC, c.id LIMIT ?`, append(args, limit)...))

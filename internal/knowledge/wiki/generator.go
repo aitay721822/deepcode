@@ -316,7 +316,8 @@ func group(p page) int {
 // altered, or its search now finds a declaration that is new: in a changed
 // file, or anywhere in a new file that belongs with p's group of pages
 // (change.Home), as a new file is for the pages nearest it. The same chunk
-// with other lines around it, or a manifest, it may find without harm.
+// with other lines around it, a declaration now in another chunk
+// (change.Novel), or a manifest, it may find without harm.
 func (g *Generator) touched(ctx context.Context, snap int64, p page, cites []evidence.Citation, u update) (bool, error) {
 	if slices.ContainsFunc(cites, func(c evidence.Citation) bool {
 		e, edited := u.edits[c.Path]
@@ -332,7 +333,7 @@ func (g *Generator) touched(ctx context.Context, snap int64, p page, cites []evi
 			return false
 		}
 		if symbols, held := u.known[h.Path]; held {
-			return !symbols[h.Symbol]
+			return change.Novel(h.Symbol, symbols)
 		}
 		return change.Home(h.Path, u.groups)[group(p)]
 	}), err

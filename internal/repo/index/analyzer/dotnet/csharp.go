@@ -66,8 +66,31 @@ func decl(x *syntax.Extractor, n *sitter.Node) []syntax.Symbol {
 		return named(x, "operator "+x.Text(t), "operator", n, t)
 	case "preproc_if", "preproc_elif", "preproc_else": // declarations under #if DEBUG
 		return x.Block(n)
+	case "global_statement":
+		return topLevel(x, n)
 	}
 	return nil
+}
+
+// topLevel is the one symbol a file's top-level statements make: Main, the
+// method the compiler makes of them and the program starts from, spanning
+// the first statement to the last, comments between them included. The
+// statements after the first make none.
+func topLevel(x *syntax.Extractor, n *sitter.Node) []syntax.Symbol {
+	for p := n.PrevNamedSibling(); p != nil; p = p.PrevNamedSibling() {
+		if p.Kind() == "global_statement" {
+			return nil
+		}
+	}
+	last := n
+	for s := n.NextNamedSibling(); s != nil; s = s.NextNamedSibling() {
+		if s.Kind() == "global_statement" {
+			last = s
+		}
+	}
+	s := x.Make("Main", "method", n, nil)
+	s.EndLine = syntax.Line(last.EndPosition())
+	return []syntax.Symbol{s}
 }
 
 // named is a symbol called name spanning n, its signature the line holding at

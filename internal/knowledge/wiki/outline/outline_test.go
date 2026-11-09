@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/repo/index/graph"
 )
 
@@ -26,7 +28,8 @@ func TestSize(t *testing.T) {
 // TestSections: the directories importing each other most per file merge
 // first, then siblings, into n sections largest first, the asides' among the
 // n; docs, examples, tests and tooling follow, a directory of only build and
-// configuration files and a README among the tooling.
+// configuration files and a README among the tooling, but a long root README
+// among the docs.
 func TestSections(t *testing.T) {
 	parts := map[string]string{"a/x.go": "a", "a/y.go": "a", "b/z.go": "b", "c/w.go": "c", "lib/p/q.go": "lib/p", "lib/r/s.go": "lib/r",
 		"a/x_test.go": "", "docs/guide.md": "", "examples/hello/main.go": "", "README.md": "", "build/pom.xml": "build"}
@@ -39,13 +42,20 @@ func TestSections(t *testing.T) {
 		{Kind: "tests", Files: []string{"a/x_test.go"}},
 		{Kind: "tooling", Files: []string{"README.md", "build/pom.xml"}},
 	}
-	if got := Sections(parts, edges, 6); !reflect.DeepEqual(got, want) {
+	if got := Sections(parts, edges, map[string]int{"README.md": 199}, 6); !reflect.DeepEqual(got, want) {
 		t.Errorf("6 sections: %+v", got)
 	}
-	if got := Sections(parts, edges, 12); len(got) != 9 || got[0].Dirs[0] != "a" || got[8].Kind != "tooling" {
+	// A root README as long as a long guide is one; another folder's is not.
+	parts["sub/README.md"] = ""
+	long := map[string]int{"README.md": 200, "sub/README.md": 900}
+	if got := Sections(parts, edges, long, 6); !slices.Equal(got[2].Files, []string{"README.md", "docs/guide.md"}) || !slices.Equal(got[5].Files, []string{"build/pom.xml", "sub/README.md"}) {
+		t.Errorf("a long README: %+v", got)
+	}
+	delete(parts, "sub/README.md")
+	if got := Sections(parts, edges, nil, 12); len(got) != 9 || got[0].Dirs[0] != "a" || got[8].Kind != "tooling" {
 		t.Errorf("more sections asked than directories: %+v", got)
 	}
-	if got := Sections(map[string]string{"x_test.go": ""}, nil, 3); len(got) != 1 || got[0].Kind != "tests" {
+	if got := Sections(map[string]string{"x_test.go": ""}, nil, nil, 3); len(got) != 1 || got[0].Kind != "tests" {
 		t.Errorf("tests alone: %+v", got)
 	}
 	// A monorepo of thousands of packages: past maxUnits the smallest go in as one, so it plans in no time.
@@ -61,7 +71,7 @@ func TestSections(t *testing.T) {
 		}
 	}
 	start := time.Now()
-	if got := Sections(many, chain, 11); len(got) != 11 || time.Since(start) > 5*time.Second {
+	if got := Sections(many, chain, nil, 11); len(got) != 11 || time.Since(start) > 5*time.Second {
 		t.Errorf("3000 packages: %d sections in %v", len(got), time.Since(start))
 	}
 }
@@ -179,7 +189,7 @@ func TestParse(t *testing.T) {
 	if got := ParsePages(`{"pages":[`+strings.Repeat(`{"title":"Page","query":"q"},`, 8)+`{"title":"One too many","query":"q"}]}`, 8); len(got) != 8 {
 		t.Fatalf("%d pages planned, want at most 8", len(got))
 	}
-	long := ParsePages(fmt.Sprintf(`{"pages":[{"title":%q,"query":%q}]}`, strings.Repeat("標", 200), strings.Repeat("q", 600)), 8)
+	long := ParsePages(fmt.Sprintf(`{"pages":[{"title":%q,"query":%q}]}`, strings.Repeat("標", 200), strings.Repeat("q", MaxQuery+100)), 8)
 	if len(long) != 1 || len([]rune(long[0].Title)) != MaxTitle || len(long[0].Query) != MaxQuery {
 		t.Fatalf("a long title and query: %+v", long)
 	}
@@ -193,5 +203,32 @@ func TestParse(t *testing.T) {
 	}
 	if _, _, ok := ParseHeads(`{"sections":[{"title":"Routing"}]}`, 9); ok {
 		t.Fatal("an outline without an overview was taken")
+	}
+}
+
+// TestFit: a query past MaxQuery loses the separators it starts with and the
+// word the cut falls in, a word ending where retrieval.FileNames splits names,
+// so every name left is whole; a cut on a separator keeps the word before
+// it; a query that is one word is cut where the cut falls.
+func TestFit(t *testing.T) {
+	var paths []string
+	for i := 0; len(strings.Join(paths, " ")) <= MaxQuery; i++ {
+		paths = append(paths, fmt.Sprintf("src/Ordering.API/Application/Commands/Command%d.cs", i))
+	}
+	for _, sep := range []string{" ", ",", ", ", "、"} {
+		got := Fit("  " + strings.Join(paths, sep))
+		if n := len(strings.FieldsFunc(got, retrieval.Separates)); utf8.RuneCountInString(got) > MaxQuery || got != strings.Join(paths[:n], sep) || n < len(paths)-2 {
+			t.Errorf("paths by %q: %d names kept of %d, %q", sep, n, len(paths), got[max(0, len(got)-60):])
+		}
+	}
+	onSpace := strings.Repeat("x", MaxQuery-2) + " a b"
+	if got := Fit(onSpace); got != strings.Repeat("x", MaxQuery-2)+" a" {
+		t.Errorf("a cut on a space: %q", got[len(got)-4:])
+	}
+	if got := Fit(" " + strings.Repeat("路", MaxQuery+5)); utf8.RuneCountInString(got) != MaxQuery {
+		t.Errorf("one word: %d characters", utf8.RuneCountInString(got))
+	}
+	if q := "short query"; Fit(q) != q {
+		t.Errorf("short: %q", Fit(q))
 	}
 }

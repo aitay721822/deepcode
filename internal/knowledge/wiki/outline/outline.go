@@ -11,16 +11,20 @@ import (
 	"slices"
 	"strings"
 
+	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/index/graph"
 )
 
 // A planned page's title and query, in characters: a prompt-injected README
-// could ask for one the size of a page, shown in the nav and the slug.
+// could ask for one the size of a page, shown in the nav and the slug. A
+// query holds the 16 names its search reads (retrieval.FileNames) at a .NET
+// or Java project's paths, 85 characters at most for nine in ten: at 500,
+// eShop's Ordering pages named six files each, cut off mid-path.
 const (
 	MaxTitle = 120
-	MaxQuery = 500
+	MaxQuery = 1400
 )
 
 // Page is a page to write: its title, what to search the code for, and its
@@ -34,8 +38,28 @@ type Page struct {
 // NewPage is a top-level page titled title, its words on one line and both
 // clipped; ok is false for a title with no words.
 func NewPage(title, query string) (p Page, ok bool) {
-	p = Page{Title: Clip(OneLine(title), MaxTitle), Query: Clip(query, MaxQuery), Parent: -1}
+	p = Page{Title: Clip(OneLine(title), MaxTitle), Query: Fit(query), Parent: -1}
 	return p, p.Title != ""
+}
+
+// Fit is query without the separators it starts with, clipped to MaxQuery
+// characters before the word the cut falls in, a word ending at what
+// retrieval.FileNames splits names at (a space, comma, full-width stop…): a
+// path cut short (…/CreateOrderDraftComm) would take one of the 16 names the
+// page search reads and name nothing; the separators it then ends with go
+// too. The cut word goes however long it is, unless no separator comes
+// before it: then the query is cut where the cut falls.
+func Fit(query string) string {
+	query = strings.TrimLeftFunc(query, retrieval.Separates)
+	r := []rune(query)
+	if len(r) <= MaxQuery {
+		return query
+	}
+	kept := string(r[:MaxQuery])
+	if i := strings.LastIndexFunc(kept, retrieval.Separates); i >= 0 && !retrieval.Separates(r[MaxQuery]) {
+		kept = kept[:i]
+	}
+	return strings.TrimRightFunc(kept, retrieval.Separates)
 }
 
 // OneLine joins the words of s with single spaces: a title goes into the
@@ -86,13 +110,17 @@ var asides = []string{analyzer.Docs, analyzer.Examples, analyzer.Tests, analyzer
 // together, then those whose largest folders share a parent, then the
 // smallest. The docs, examples, tests and tooling then follow in a section
 // each; tooling takes a directory of only build and configuration files
-// (analyzer.Config) too, so a manifest is no section of its own. The code's
-// sections go largest first.
-func Sections(parts map[string]string, edges []graph.DirEdge, n int) []Section {
+// (analyzer.Config) too, so a manifest is no section of its own, but a root
+// README as long as a long guide (lines holds each file's) is a guide: the
+// overview reads its start only. The code's sections go largest first.
+func Sections(parts map[string]string, edges []graph.DirEdge, lines map[string]int, n int) []Section {
 	byDir, aside := map[string][]string{}, map[string][]string{}
 	for f, d := range parts {
 		if d == "" {
 			k := cmp.Or(analyzer.Aside(f), analyzer.Docs) // what Parts set aside, under a name of its own
+			if k == analyzer.Tooling && !strings.Contains(f, "/") && strings.HasPrefix(strings.ToLower(f), "readme") && lines[f] >= 2*linesPerPage {
+				k = analyzer.Docs
+			}
 			aside[k] = append(aside[k], f)
 		} else {
 			byDir[d] = append(byDir[d], f)

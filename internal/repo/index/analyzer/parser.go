@@ -13,6 +13,7 @@ import (
 
 	"deepcode/internal/repo/index/analyzer/dotnet"
 	"deepcode/internal/repo/index/analyzer/jvm"
+	"deepcode/internal/repo/index/analyzer/markdown"
 	"deepcode/internal/repo/index/analyzer/rust"
 	"deepcode/internal/repo/index/analyzer/syntax"
 )
@@ -58,10 +59,11 @@ type File struct {
 // Version is raised whenever what Detect, Generated or Parse make of a file
 // changes: a snapshot an older version indexed lends the next none of its
 // files' rows, so each is read again. 1 added C#, Java and Rust; 2, JMeter
-// test plans.
-const Version = 2
+// test plans; 3, C#'s top-level statements as Main and Markdown's sections.
+const Version = 3
 
-// HasGrammar reports whether Parse reads lang; it finds nothing in others.
+// HasGrammar reports whether Parse reads lang's declarations and imports with
+// a grammar; Markdown's sections it reads without (markdown.Sections).
 func HasGrammar(lang string) bool { return languages[lang] != nil }
 
 // Grammars lists the languages Parse reads, sorted.
@@ -74,8 +76,12 @@ func Grammars() []string {
 	return out
 }
 
-// Parse reads src as lang, in one pass for its symbols and its imports.
+// Parse reads src as lang, in one pass for its symbols and its imports; a
+// Markdown file has its sections and no imports.
 func (p *Parser) Parse(lang string, src []byte) File {
+	if lang == "markdown" {
+		return File{Symbols: markdown.Sections(src)}
+	}
 	g := languages[lang]
 	if g == nil {
 		return File{}

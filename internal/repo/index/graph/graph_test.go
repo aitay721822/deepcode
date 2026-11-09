@@ -38,13 +38,16 @@ func TestResolve(t *testing.T) {
 	configs := map[string]string{"go.mod": "module example.com/m\n", "lib/go.mod": "module example.com/other\n",
 		"tools/go.mod": "// tools\nmodule \"example.com/m/tools/v2\"\n\ngo 1.22\n"}
 	var got []string
-	for _, e := range resolve(files, configs) {
+	// Each main is its nearest go.mod's entry; a test's main is none.
+	for _, e := range resolve(files, configs, []string{"main.go", "tools/x/x.go", "pkg/a_test.go"}) {
 		got = append(got, e.Src+" > "+e.Dst)
 	}
 	want := []string{
+		"go.mod > main.go",
 		"index.js > web/src/util.ts",
 		"main.go > lib/y/y.go", "main.go > pkg/a.go", "main.go > pkg/b.go", "main.go > tools/x/x.go", "main.go > util.go",
 		"pkg/a_test.go > pkg/a.go", "pkg/a_test.go > pkg/b.go",
+		"tools/go.mod > tools/x/x.go",
 		"web/src/app.ts > web/lib/index.tsx", "web/src/app.ts > web/src/esm.ts", "web/src/app.ts > web/src/plain.js", "web/src/app.ts > web/src/util.ts",
 	}
 	if !reflect.DeepEqual(got, want) {

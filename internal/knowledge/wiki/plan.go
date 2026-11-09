@@ -45,7 +45,7 @@ The overview introduces the whole repository. Then give exactly one section for 
 
 const sectionPrompt = `You plan the pages of one section of a technical wiki for a code repository. Reply with JSON only, no prose:
 {"pages":[{"title":"…","query":"keywords, paths and identifiers to search the code for this page"}]}
-Plan exactly as many pages as the user's message asks for: where the section's files hold fewer separate subjects, give its larger files, workflows, options and error handling pages of their own. Each covers one distinct component, workflow, feature or concept of the section's files, named plainly in its title; no two pages share a subject, and none repeats the section's overview or another section's subject. Tests, examples, guides and configuration files are grouped by the feature, workflow or tool they serve, never one page per file, and between them the pages' queries name every example, guide and folder of tests listed. Queries name concrete files, types or functions from the files listed.`
+Plan exactly as many pages as the user's message asks for: where the section's files hold fewer separate subjects, give its larger files, workflows, options and error handling pages of their own. Each covers one distinct component, workflow, feature or concept of the section's files, named plainly in its title; no two pages share a subject, and none repeats the section's overview or another section's subject. Tests, examples, guides and configuration files are grouped by the feature, workflow or tool they serve, never one page per file, and between them the pages' queries name every example, guide and folder of tests listed. A guide is listed with its sections, each a subject too: a page on a guide names in its query the guide and the sections it covers. Queries name concrete files, types or functions from the files listed.`
 
 // plannedPages returns the snapshot's pages. When there are none yet, it
 // stores them first: carried over from the previous wiki, else the pages
@@ -67,6 +67,9 @@ func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, src so
 		} else {
 			progress.Logf("planning the wiki pages")
 			if plan, err = g.plan(ctx, snap, repo, steer.Notes, progress); err != nil {
+				return nil, err
+			}
+			if plan, err = g.readme(ctx, snap, plan, progress); err != nil {
 				return nil, err
 			}
 		}
@@ -114,11 +117,11 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 	if err != nil {
 		return nil, err
 	}
-	sections := outline.Sections(parts, edges, n)
 	lines, err := g.Store.Lines(ctx, snap) // what a section's pages are shared out by
 	if err != nil {
 		return nil, err
 	}
+	sections := outline.Sections(parts, edges, lines, n)
 	budgets := outline.Budgets(sections, lines, total-1)
 	var groups strings.Builder
 	for i, s := range sections {
@@ -142,7 +145,7 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 		}
 		if heads[i].Title == "" { // the model named none: named after its folders, or what it holds, and searching for them
 			query := cmp.Or(strings.Join(sections[i].Dirs, " "), strings.Join(outline.Pick(sections[i].Files, lines, 12), " "))
-			heads[i] = outline.Page{Title: sectionName(sections[i]), Query: outline.Clip(query, outline.MaxQuery), Parent: -1}
+			heads[i] = outline.Page{Title: sectionName(sections[i]), Query: outline.Fit(query), Parent: -1}
 		}
 	}
 	declared, err := g.declared(ctx, snap)
@@ -163,6 +166,7 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 		if budgets[i] == 2 {
 			want = 2
 		} else if want == 0 {
+			g.cover(heads[i:i+1], sections[i], lines, progress)
 			outline.Spread(heads[i:i+1], units)
 			return nil
 		}
@@ -177,7 +181,7 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 		if err != nil {
 			return err
 		}
-		children[i] = outline.Spread(outline.ParsePages(out, want), units)
+		children[i] = outline.Spread(g.cover(outline.ParsePages(out, want), sections[i], lines, progress), units)
 		return nil
 	}); err != nil {
 		return nil, err
@@ -194,6 +198,40 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, pr
 			c.Parent = at
 			plan = append(plan, c)
 		}
+	}
+	return plan, nil
+}
+
+// cover has the pages of code section s name each of its code files
+// (outline.Cover): the model planning them names some files only. A file no
+// page has room for is reported in the job's output.
+func (g *Generator) cover(pages []outline.Page, s outline.Section, lines map[string]int, progress jobs.Progress) []outline.Page {
+	if s.Kind != "" {
+		return pages
+	}
+	pages, left := outline.Cover(pages, s.Files, lines)
+	if len(left) > 0 {
+		progress.Logf("%d code files of %s are named by no page, for want of room in their queries: %s",
+			len(left), sectionName(s), strings.Join(left[:min(len(left), 20)], ", "))
+	}
+	return pages
+}
+
+// readme has the pages name each recipe of the snapshot's README
+// (outline.Readme): the plan follows the code, and the README, a library's
+// own guide, is the project's tooling to planning. A recipe no page has room
+// for is reported in the job's output.
+func (g *Generator) readme(ctx context.Context, snap int64, plan []outline.Page, progress jobs.Progress) ([]outline.Page, error) {
+	root, err := g.Store.RootFiles(ctx, snap)
+	if err != nil || len(root) == 0 {
+		return plan, err
+	}
+	if lang, _ := analyzer.Detect(root[0].Path); lang != "markdown" || !strings.HasPrefix(strings.ToLower(root[0].Path), "readme") {
+		return plan, nil
+	}
+	plan, left := outline.Readme(plan, root[0].Path, outline.Recipes(root[0].Content))
+	if len(left) > 0 {
+		progress.Logf("%d sections of %s are named by no page, for want of room in their queries: %s", len(left), root[0].Path, strings.Join(left, " | "))
 	}
 	return plan, nil
 }
@@ -233,11 +271,16 @@ func sectionName(s outline.Section) string {
 }
 
 // declared is, for each of the snapshot's files, the first types and
-// functions it declares, at most 6: what a section's pages can be about.
+// functions it declares, at most 6, or a guide's first 24 sections: what a
+// section's pages can be about, a long README's recipes each a subject.
 func (g *Generator) declared(ctx context.Context, snap int64) (map[string][]string, error) {
 	out := map[string][]string{}
 	err := g.Store.Declared(ctx, snap, func(p, name string) {
-		if len(out[p]) < 6 && !slices.Contains(out[p], name) {
+		most := 6
+		if lang, _ := analyzer.Detect(p); lang == "markdown" {
+			most = 24
+		}
+		if len(out[p]) < most && !slices.Contains(out[p], name) {
 			out[p] = append(out[p], outline.Clip(name, 60))
 		}
 	})

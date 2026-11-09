@@ -19,12 +19,13 @@ type SymbolHit struct {
 
 // Symbols returns up to limit of the snapshot's symbols whose name or
 // qualified name holds q (% and _ only as themselves): exact matches first,
-// then prefixes, then shorter names.
+// then prefixes, then shorter names. A guide's section is no definition: its
+// title is prose.
 func (s *Store) Symbols(ctx context.Context, snapshotID int64, q string, limit int) ([]SymbolHit, error) {
 	esc := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT name, qualified_name, kind, path, start_line, end_line, signature FROM symbols
-		WHERE snapshot_id = ?1 AND (name LIKE ?2 ESCAPE '\' OR qualified_name LIKE ?2 ESCAPE '\')
+		WHERE snapshot_id = ?1 AND kind <> 'section' AND (name LIKE ?2 ESCAPE '\' OR qualified_name LIKE ?2 ESCAPE '\')
 		ORDER BY name = ?3 COLLATE NOCASE DESC, name LIKE ?4 ESCAPE '\' DESC, length(name), name, path
 		LIMIT ?5`, snapshotID, "%"+esc+"%", q, esc+"%", limit)
 	if err != nil {

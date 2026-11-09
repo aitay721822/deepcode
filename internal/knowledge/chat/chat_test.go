@@ -248,14 +248,15 @@ func TestRecheck(t *testing.T) {
 		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
 			(1, 'src/store.ts', 1, 9, 'const subscribe = (fn) => add(fn)', 'h1'), (1, 'src/set.ts', 1, 9, 'const registry = new Set()', 'h2'),
 			(1, 'route.go', 1, 3, 'func RoutePattern() string { return pattern }', 'h3')`,
-		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'route.go', 'RoutePattern', 'RoutePattern', 'function', 1, 3)`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'route.go', 'RoutePattern', 'RoutePattern', 'function', 1, 3),
+			(1, 'README.md', 'OtherThing', 'OtherThing', 'section', 1, 3)`, // a guide's section defines no OtherThing
 	} {
 		if _, err := db.ExecContext(ctx, q); err != nil {
 			t.Fatal(err)
 		}
 	}
 	drafts := map[string][]string{ // by question, as written in turn
-		"How does subscribe work?": {"It subscribes [src/store.ts:1-1]; see `RoutePattern` and `Other` too.",
+		"How does subscribe work?": {"It subscribes [src/store.ts:1-1]; see `RoutePattern` and `OtherThing` too.",
 			"It reads the pattern [route.go:1-1]. The registry is not shown in these sources.", "It reads the pattern [route.go:1-1] into a registry [src/set.ts:1-1]."},
 		"Where does subscribe add?": {"It adds [src/store.ts:1-1]. The registry it adds to is not shown in these sources.", "It adds into a registry."},
 		"Does subscribe return?":    {"Wait, it adds. Let me check the sources again. It adds [src/store.ts:1-1].", "It adds [src/store.ts:1-1]."},

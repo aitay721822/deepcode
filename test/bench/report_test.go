@@ -26,15 +26,16 @@ type result struct {
 	Base string `json:"base"`
 	Head string `json:"head"`
 	// The head snapshot, after the update.
-	Files         int `json:"files"`
-	Generated     int `json:"generatedFiles"`
-	Languages     int `json:"languages"`
-	Chunks        int `json:"chunks"`
-	Symbols       int `json:"symbols"`
-	Edges         int `json:"importEdges"`
-	DiagramEdges  int `json:"diagramEdges"` // the arrows the overview's diagram draws
-	Pages         int `json:"pages"`
-	PageCitations int `json:"pageCitations"`
+	Files         int          `json:"files"`
+	Generated     int          `json:"generatedFiles"`
+	Languages     int          `json:"languages"`
+	Chunks        int          `json:"chunks"`
+	Symbols       int          `json:"symbols"`
+	Edges         int          `json:"importEdges"`
+	DiagramEdges  int          `json:"diagramEdges"` // the arrows the overview's diagram draws
+	Pages         int          `json:"pages"`
+	PageCitations int          `json:"pageCitations"`
+	CitationSpan  citationSpan `json:"citationSpan"` // lines per page citation
 
 	IndexFailed  bool      `json:"indexFailed"`  // the base was not indexed: nothing else was measured
 	IndexSeconds float64   `json:"indexSeconds"` // the first index, at base
@@ -133,7 +134,7 @@ func (rep report) markdown() string {
 			atHead(r, "languages", r.Languages), atHead(r, "chunks", r.Chunks), atHead(r, "symbols", r.Symbols), atHead(r, "edges", r.Edges),
 			atHead(r, "diagram", r.DiagramEdges), index, len(r.Errors))
 	}
-	p("\n## First wiki (base)\n\nTime by pages written at a time; the rest is the last run's.\n\n| Repository | Time | Pages | Model calls | Input tokens | Cached input | Output tokens | Input chars | Output chars | Page citations (head) |\n|---|---|---|---|---|---|---|---|---|---|")
+	p("\n## First wiki (base)\n\nTime by pages written at a time; the rest is the last run's. Lines per citation: the median and the most a page citation spans.\n\n| Repository | Time | Pages | Model calls | Input tokens | Cached input | Output tokens | Input chars | Output chars | Page citations (head) | Lines per citation (head) |\n|---|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
 		if w := r.Wiki; w != nil {
 			times := make([]string, len(r.WikiRuns))
@@ -144,8 +145,14 @@ func (rep report) markdown() string {
 			if w.InTokens > 0 {
 				cached = fmt.Sprintf("%d (%d%%)", w.CachedTokens, 100*w.CachedTokens/w.InTokens)
 			}
-			p("| %s | %s | %s | %d | %s | %s | %s | %d | %d | %s |", r.Repo, cmp.Or(strings.Join(times, " · "), took(w)), count(r, "base pages", w.Pages), w.Calls,
-				tokens(w.InTokens), cached, tokens(w.OutTokens), w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations))
+			lines := fmt.Sprintf("%d, at most %d", r.CitationSpan.Median, r.CitationSpan.Max)
+			if atHead(r, "citation span", 0) == "failed" || atHead(r, "page citations", 0) == "failed" { // no count to read "–" from
+				lines = "failed"
+			} else if r.PageCitations == 0 {
+				lines = "–" // no citation to measure
+			}
+			p("| %s | %s | %s | %d | %s | %s | %s | %d | %d | %s | %s |", r.Repo, cmp.Or(strings.Join(times, " · "), took(w)), count(r, "base pages", w.Pages), w.Calls,
+				tokens(w.InTokens), cached, tokens(w.OutTokens), w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations), lines)
 		}
 	}
 	p("\n## Update by one commit (base → head)\n\n| Repository | Changed files | Index | Wiki | Pages rewritten | Model calls |\n|---|---|---|---|---|---|")
@@ -164,11 +171,18 @@ func (rep report) markdown() string {
 		}
 		p("| %s | %s | %s | %s | %s | %s |", r.Repo, changed, index, wiki, pages, calls)
 	}
-	p("\n## Topic coverage (head)\n\nDeepWiki's topics a page title or \"##\" or \"###\" heading names, a word of a name like WelcomeController counting; test and tooling pages cite only tests, CI, manifests or editor settings.\n\n| Repository | Covered | Pages | Test and tooling pages | Missing |\n|---|---|---|---|---|")
+	p("\n## Topic coverage (head)\n\nDeepWiki's topics a page title or \"##\" or \"###\" heading names, a word of a name like WelcomeController counting; test and tooling pages cite only tests, CI, manifests or editor settings; unnamed code files are those no page's title or focus names.\n\n| Repository | Covered | Pages | Test and tooling pages | Missing | Unnamed code files |\n|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
 		if c := r.Topics; c != nil {
-			p("| %s | %d of %d (%d%%) | %d | %d (%d%%) | %s |", r.Repo, c.Covered, c.Topics, 100*c.Covered/max(c.Topics, 1), r.Pages,
-				c.ToolingPages, 100*c.ToolingPages/max(r.Pages, 1), cmp.Or(strings.Join(c.Missing, ", "), "–"))
+			left := fmt.Sprint(len(c.Unnamed))
+			if len(c.Unnamed) > 0 {
+				left += ": " + strings.Join(c.Unnamed[:min(len(c.Unnamed), 10)], ", ")
+			}
+			if len(c.Unnamed) > 10 {
+				left += ", …"
+			}
+			p("| %s | %d of %d (%d%%) | %d | %d (%d%%) | %s | %s |", r.Repo, c.Covered, c.Topics, 100*c.Covered/max(c.Topics, 1), r.Pages,
+				c.ToolingPages, 100*c.ToolingPages/max(r.Pages, 1), cmp.Or(strings.Join(c.Missing, ", "), "–"), left)
 		}
 	}
 	p("\n## Retrieval eval (head)\n\n| Repository | Questions | recall@10 | MRR |\n|---|---|---|---|")
@@ -283,11 +297,12 @@ func TestMarkdown(t *testing.T) {
 	broken.Answers = []answer{{Question: "q", Error: "timeout"}}
 	ok.Answers = []answer{{Question: "k", Citations: 2, Missing: []string{"Mount"}, SelfTalk: true, OtherLanguage: true}}
 	ok.WikiRuns, ok.Tree = []wikiRun{{Parallel: 1, Seconds: 20}, {Parallel: 2, Seconds: 12}}, []string{"- 1 Overview", "- 2 Core", "  - 2.1 Mux"}
-	ok.Pages, ok.Topics = 10, &coverage{Topics: 4, Covered: 3, Missing: []string{"SSE"}, ToolingPages: 2}
-	md := report{Repos: []result{ok, broken}}.markdown()
+	ok.Pages, ok.Topics, ok.CitationSpan, ok.PageCitations = 10, &coverage{Topics: 4, Covered: 3, Missing: []string{"SSE"}, ToolingPages: 2}, citationSpan{3, 40}, 7
+	uncited, uncounted := result{Repo: "uncited", Wiki: &wikiRun{}}, result{Repo: "uncounted", Wiki: &wikiRun{}, Failed: []string{"page citations"}}
+	md := report{Repos: []result{ok, broken, uncited, uncounted}}.markdown()
 	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
 		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 0.0 s | 0.0 s | 2 | fail: no Mount | yes | other |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
-		"0 of 2 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |"} {
+		"0 of 2 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |", "| 0 | 0 | 7 | 3, at most 40 |", "| 0 | 0 | failed | failed |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed |"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the report lacks %q:\n%s", want, md)
 		}

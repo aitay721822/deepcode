@@ -2,6 +2,7 @@ package chunker
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -79,5 +80,16 @@ func TestChunksSkipBlankRegions(t *testing.T) {
 	}
 	if got := Chunks([]string{"", "  "}, nil); len(got) != 0 {
 		t.Fatalf("blank file produced chunks: %+v", got)
+	}
+}
+
+// TestNames: a merged chunk's name lists its declarations; code outside any
+// has none.
+func TestNames(t *testing.T) {
+	if got := Names(joinNames(joinNames("A", "A.b"), "C")); !slices.Equal(got, []string{"A", "A.b", "C"}) {
+		t.Errorf("Names = %q", got)
+	}
+	if got := Names(""); got != nil {
+		t.Errorf("Names(\"\") = %q", got)
 	}
 }

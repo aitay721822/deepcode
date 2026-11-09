@@ -24,7 +24,9 @@ var (
 // do, as what the query names is what it asks for, and a lower weight let
 // every project's Extensions.cs, found by the symbol search too, push eShop's
 // AppHost.cs out of its page again; a question naming package.json gives it
-// three of ten places at most, and the code it asks about the rest.
+// three of ten places at most, and the code it asks about the rest. Each
+// file's best chunk is sure of a place (sure), as fusion ranks a chunk only
+// the named list finds below any two searches find.
 const (
 	maxFiles     = 40
 	namedPerFile = 3
@@ -45,12 +47,22 @@ func toSet(s string) map[string]bool {
 	return m
 }
 
-// ftsQuery turns a question into an OR of at most 16 prefix terms, so
-// "authentication token" also matches authenticateUser and tokens. The words
-// of its compound identifiers follow its own words (userToken: user, token),
-// so they never crowd out the question's own words; the terms column holds
-// them for every identifier made of them, refreshUserToken's included.
+// ftsQuery turns a question into an OR of its Terms as prefixes, so
+// "authentication token" also matches authenticateUser and tokens.
 func ftsQuery(q string) string {
+	terms := Terms(q)
+	for i, t := range terms {
+		terms[i] = `"` + t + `"*`
+	}
+	return strings.Join(terms, " OR ")
+}
+
+// Terms are the words a search looks for of query, at most 16, lowercased:
+// what a query asks past them, the search does not see. The words of its
+// compound identifiers follow its own words (userToken: user, token), so they
+// never crowd out the question's own words; the terms column holds them for
+// every identifier made of them, refreshUserToken's included.
+func Terms(q string) []string {
 	words := wordRe.FindAllString(q, -1)
 	candidates := make([]string, 0, 2*len(words))
 	for _, w := range words {
@@ -66,12 +78,12 @@ func ftsQuery(q string) string {
 			continue
 		}
 		seen[w] = true
-		terms = append(terms, `"`+w+`"*`)
+		terms = append(terms, w)
 		if len(terms) == 16 {
 			break
 		}
 	}
-	return strings.Join(terms, " OR ")
+	return terms
 }
 
 // fts ranks the snapshot's chunks by BM25 for the words of query
@@ -84,86 +96,123 @@ func (r *Retriever) fts(ctx context.Context, snapshotID int64, query string, pat
 	return r.Store.FTS(ctx, snapshotID, m, paths, limit)
 }
 
-// named ranks, by the query's words, the chunks of the files the query names
-// (fileNames), each file's best first (byFile): a wiki page's focus lists the
-// files it is about, and their words alone may rank them nowhere, as eShop's
-// AppHost.cs under every project's Extensions.cs.
-func (r *Retriever) named(ctx context.Context, snapshotID int64, query string) ([]int64, error) {
-	names := fileNames(query)
+// named ranks the chunks of the files the query names (FileNames): the files
+// named first (pick), each file's best chunk by the query's words first
+// (byFile), and returns how many lead it, one a file. A wiki page's focus
+// lists the files it is about, the main ones and the examples placed in it
+// first, and their words alone may rank them nowhere, as eShop's AppHost.cs
+// under every project's Extensions.cs.
+func (r *Retriever) named(ctx context.Context, snapshotID int64, query string) ([]int64, int, error) {
+	names := FileNames(query)
 	if len(names) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
-	files, err := r.Store.Files(ctx, snapshotID, names, maxFiles)
+	groups, err := r.Store.Files(ctx, snapshotID, names, maxFiles)
+	files := slices.Concat(groups...)
 	if err != nil || len(files) == 0 {
-		return nil, err
+		return nil, 0, err
 	}
 	ids, err := r.fts(ctx, snapshotID, query, files, ftsLimit)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	hits, err := r.Store.Chunks(ctx, ids)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	// A file none of the query's first words find, as one listed late in a
-	// long focus, still has its first chunk read, while places are left.
-	var missing []string
+	picked := pick(groups, hits)
+	// A picked file none of the query's words find has its first chunk read.
 	found := map[string]bool{}
 	for _, h := range hits {
 		found[h.Path] = true
 	}
-	for _, f := range files {
-		if !found[f] && len(found)+len(missing) < namedLimit {
-			missing = append(missing, f)
-		}
-	}
+	missing := slices.DeleteFunc(slices.Clone(picked), func(f string) bool { return found[f] })
 	if len(missing) > 0 {
 		first, err := r.Store.First(ctx, snapshotID, missing)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		more, err := r.Store.Chunks(ctx, first)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		hits = append(hits, more...)
 	}
-	return byFile(hits), nil
+	ids, firsts := byFile(picked, hits)
+	return ids, firsts, nil
 }
 
-// byFile is the ids of ranked hits, each file's first ahead of any file's
-// second, and so on, at most namedPerFile a file and namedLimit in all: a
-// file whose words match best does not push the others' best chunks out of
-// reach, nor fill the list alone.
-func byFile(hits []Hit) []int64 {
-	nth := map[string]int{}
-	var order []int // of hits, by the file's how-manyth chunk each is
-	rank := make([]int, len(hits))
+// pick are the files the named list reads, at most namedLimit, of groups
+// (each name's files, in the query's order): each name's next file in turn,
+// a name's files by their best of the ranked hits, those no word finds last.
+// What a query names first is what it is about, not what its words match
+// best: a page's focus that lists two examples ahead of seven files of a
+// third reads the two.
+func pick(groups [][]string, hits []Hit) []string {
+	rank := map[string]int{}
 	for i, h := range hits {
-		if rank[i] = nth[h.Path]; rank[i] < namedPerFile {
-			order = append(order, i)
+		if _, ok := rank[h.Path]; !ok {
+			rank[h.Path] = i
 		}
-		nth[h.Path]++
 	}
-	slices.SortStableFunc(order, func(a, b int) int { return rank[a] - rank[b] })
-	ids := make([]int64, 0, namedLimit)
-	for _, j := range order[:min(len(order), namedLimit)] {
-		ids = append(ids, hits[j].ChunkID)
+	at := func(f string) int {
+		if i, ok := rank[f]; ok {
+			return i
+		}
+		return len(hits)
 	}
-	return ids
+	for _, g := range groups {
+		slices.SortStableFunc(g, func(a, b string) int { return at(a) - at(b) })
+	}
+	var out []string
+	for k := 0; len(out) < namedLimit; k++ {
+		n := len(out)
+		for _, g := range groups {
+			if k < len(g) && len(out) < namedLimit {
+				out = append(out, g[k])
+			}
+		}
+		if len(out) == n {
+			break
+		}
+	}
+	return out
 }
 
-// fileNames are the first 16 words of query that may name files or folders,
+// byFile is the ids of hits of files, in the order of files, each file's
+// best ahead of any file's second, and so on, at most namedPerFile a file and
+// namedLimit in all: a file whose words match best does not push the others'
+// best chunks out of reach, nor fill the list alone. It also returns how
+// many lead the list, the files' best.
+func byFile(files []string, hits []Hit) ([]int64, int) {
+	of := map[string][]int64{}
+	for _, h := range hits {
+		of[h.Path] = append(of[h.Path], h.ChunkID)
+	}
+	ids, firsts := make([]int64, 0, namedLimit), 0
+	for k := range namedPerFile {
+		for _, f := range files {
+			if k < len(of[f]) && len(ids) < namedLimit {
+				ids = append(ids, of[f][k])
+			}
+		}
+		if k == 0 {
+			firsts = len(ids)
+		}
+	}
+	return ids, firsts
+}
+
+// FileNames are the first 16 words of query that may name files or folders,
 // each once: a path (src/app.ts, examples/, app/[slug]), a glob (tests/*.rs)
 // or the name of a file of an indexed language (App.java, go.mod; not
 // res.send or .NET), never a URL. Quotes, full-width punctuation and stops
 // around a word go, as do markdown's bold, brackets wrapping it or left
 // unpaired, the line after it (a.go:42, a.go#L42) and a leading ./ or /.
-func fileNames(query string) []string {
+// They are all of a query's names the search reads.
+func FileNames(query string) []string {
 	var out []string
-	for _, w := range strings.FieldsFunc(query, func(r rune) bool {
-		return unicode.IsSpace(r) || strings.ContainsRune(",;`'\"|=<>，、；：。？！（）「」『』《》", r)
-	}) {
+	for _, w := range strings.FieldsFunc(query, Separates) {
 		w = strings.ReplaceAll(w, `\`, "/")
 		for prev := ""; prev != w; { // **a.go**. as much as **a.go.**
 			prev, w = w, strings.TrimRight(strings.Trim(w, "*"), ".:!?")
@@ -176,6 +225,12 @@ func fileNames(query string) []string {
 		}
 	}
 	return out
+}
+
+// Separates reports whether r ends a word FileNames reads: a space, or
+// punctuation no path holds, full-width too.
+func Separates(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune(",;`'\"|=<>，、；：。？！（）「」『』《》", r)
 }
 
 // unwrap drops the brackets around w, and one at an end that w leaves

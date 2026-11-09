@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"deepcode/internal/repo/index/graph/dotnet"
+	"deepcode/internal/repo/index/graph/entry"
 	"deepcode/internal/repo/index/graph/jvm"
 	"deepcode/internal/repo/index/graph/rust"
 	"deepcode/internal/repo/index/graph/store"
@@ -41,11 +42,12 @@ var jsExts = []string{".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs", ".m
 // Go import path names a directory through a go.mod's module path, and every
 // Go file of that package, tests aside; a JavaScript or TypeScript specifier
 // starting with . names a file relative to the importer, as Node and
-// TypeScript look it up.
+// TypeScript look it up. Each project file also uses the files its build
+// starts from (entry.Edges): of mains, those declaring a main.
 // ponytail: package names (react, @/components via tsconfig paths, Go
 // modules of a go.work) stay unresolved; read tsconfig.json's paths if
 // repositories that rely on them lose their graph.
-func resolve(files []file, configs map[string]string) []edge {
+func resolve(files []file, configs map[string]string, mains []string) []edge {
 	modules := map[string]string{} // each go.mod's directory → its module path
 	for p, content := range configs {
 		if path.Base(p) == "go.mod" {
@@ -96,6 +98,13 @@ func resolve(files []file, configs map[string]string) []edge {
 				out = append(out, edge{Src: e[0], Dst: e[1]})
 			}
 		}
+	}
+	langs := map[string]string{}
+	for _, f := range files {
+		langs[f.path] = f.lang
+	}
+	for _, e := range entry.Edges(langs, configs, mains, func(src, spec string) string { return jsTarget(src, spec, code) }) {
+		out = append(out, edge{Src: e[0], Dst: e[1]})
 	}
 	// Sorted, then each once: two specifiers can name one file (./a, ./a.ts). No set: a monorepo has millions.
 	slices.SortFunc(out, func(a, b edge) int { return cmp.Or(cmp.Compare(a.Src, b.Src), cmp.Compare(a.Dst, b.Dst)) })

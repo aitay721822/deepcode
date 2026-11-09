@@ -63,7 +63,7 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 	if err != nil {
 		return res, err
 	}
-	named, err := r.named(ctx, snapshotID, query)
+	named, firsts, err := r.named(ctx, snapshotID, query)
 	if err != nil {
 		return res, err
 	}
@@ -76,7 +76,7 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 			log.Printf("retrieval: vector search unavailable, using FTS5 and symbols only: %v", err)
 		}
 	}
-	ids := fuse(fts, vec, sym, named)
+	ids := sure(fuse(fts, vec, sym, named), named[:firsts], head(limit))
 	near, err := r.near(ctx, snapshotID, query, ids)
 	if err != nil {
 		return res, err
@@ -149,7 +149,7 @@ func (r *Retriever) near(ctx context.Context, snapshotID int64, query string, ra
 // instead of them. A fused list would put any hit found both ways first,
 // however weak. It also returns how many places near took.
 func supplement(ranked, near []int64, limit int) ([]int64, int) {
-	head := min(len(ranked), max(limit-nearSlots, 1))
+	head := min(len(ranked), head(limit))
 	out := slices.Clone(ranked[:head])
 	seen := map[int64]bool{}
 	for _, id := range out {
@@ -170,6 +170,51 @@ func supplement(ranked, near []int64, limit int) ([]int64, int) {
 	took := len(out) - head
 	add(ranked[head:], limit)
 	return out, took
+}
+
+// head is how many of a search's limit places the ranked chunks hold before
+// the code they import may take the rest (supplement).
+func head(limit int) int { return max(limit-nearSlots, 1) }
+
+// sure is ids with each of must among the first n: one ranked past them takes
+// the last of those places not held by another of must, the ids it displaces
+// moving down. must are the best chunks of the files a query names, which
+// fusion ranks below any chunk two searches find: eShop's AppHost.cs, a long
+// file few of its page's words match, or an example placed in a page about
+// another, whose words it shares with none.
+func sure(ids, must []int64, n int) []int64 {
+	n = min(n, len(ids))
+	is := map[int64]bool{}
+	for _, id := range must {
+		is[id] = true
+	}
+	var late []int64
+	for _, id := range ids[n:] {
+		if is[id] {
+			late = append(late, id)
+		}
+	}
+	if len(late) == 0 {
+		return ids
+	}
+	head := slices.Clone(ids[:n])
+	room := len(late)
+	for i := len(head) - 1; i >= 0 && room > 0; i-- {
+		if !is[head[i]] {
+			head, room = slices.Delete(head, i, i+1), room-1
+		}
+	}
+	out := append(head, late[:len(late)-room]...)
+	placed := map[int64]bool{}
+	for _, id := range out {
+		placed[id] = true
+	}
+	for _, id := range ids {
+		if !placed[id] {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // fuse ranks ids by Reciprocal Rank Fusion: score = Σ 1/(k + rank).

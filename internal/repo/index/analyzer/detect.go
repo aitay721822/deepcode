@@ -157,6 +157,7 @@ var (
 		"*Tests.cs", "*Test.cs", "*Tests.vb", "*Test.java", "*Tests.java", "*IT.java", // C#, VB, Java (src/test/ below)
 		"test/*", "*/test/*", "tests/*", "*/tests/*", "__tests__/*", "*/__tests__/*", "spec/*", "*/spec/*", "e2e/*", "*/e2e/*",
 		"*Tests/*", "benches/*", "*/benches/*", // .NET test projects (Foo.UnitTests/), Rust benchmarks
+		"test-*/*", "*/test-*/*", // test modules: gson's test-shrinker/, test-jpms/
 	}
 	exampleGlobs = []string{"examples/*", "*/examples/*", "_examples/*", "*/_examples/*"}
 	docGlobs     = []string{"docs/*", "*/docs/*"}

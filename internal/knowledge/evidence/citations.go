@@ -32,6 +32,9 @@ var (
 	rangeRe = regexp.MustCompile(`^L?\d+(?:-L?\d+)?$`)
 	// labelRe matches a label some models put before a reference: [source: a.go:3-9].
 	labelRe = regexp.MustCompile(`(?i)^sources?:\s*`)
+	// tagRe matches a source block's opening (Format) copied as a citation,
+	// [source path="a.go" lines="3-9"], its symbol too.
+	tagRe = regexp.MustCompile(`^\s*source path="([^"]+)" lines="(\d+(?:-\d+)?)"(?: symbol="[^"]*")?\s*$`)
 	// pathlessRe matches lines cited without their file, [55-64], or after a
 	// source's number, [5:1-29].
 	pathlessRe = regexp.MustCompile(`\[(?:\d+:)?L?\d+(?:-L?\d+)?\]`)
@@ -143,9 +146,13 @@ func inside(spans [][]int, i int) bool {
 	return false
 }
 
-// parseRefs reads the inside of a bracket group. ok is false unless every part
-// is a file reference, so arr[i:2] or [see below] are not citations.
+// parseRefs reads the inside of a bracket group, or a source block's opening
+// copied into one. ok is false unless every part is a file reference, so
+// arr[i:2] or [see below] are not citations.
 func parseRefs(group string) ([]ref, bool) {
+	if m := tagRe.FindStringSubmatch(group); m != nil {
+		group = m[1] + ":" + m[2]
+	}
 	var refs []ref
 	for _, part := range strings.FieldsFunc(group, func(r rune) bool { return r == ',' || r == ';' }) {
 		part = labelRe.ReplaceAllString(strings.TrimSpace(strings.ReplaceAll(part, `\_`, "_")), "") // Markdown-escaped underscores

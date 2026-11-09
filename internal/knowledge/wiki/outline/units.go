@@ -5,8 +5,11 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
+	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/repo/index/analyzer"
+	"deepcode/internal/repo/index/analyzer/markdown"
 )
 
 // perPage is how many units Spread adds to one page at most, so that what the
@@ -71,7 +74,7 @@ func Spread(pages []Page, units []string) []Page {
 			break
 		}
 		given[i]++
-		pages[i].Query = Clip(short(u)+" "+pages[i].Query, MaxQuery)
+		pages[i].Query = Fit(short(u) + " " + pages[i].Query)
 	}
 	return pages
 }
@@ -105,4 +108,111 @@ func named(text, name string) bool {
 func short(u string) string {
 	parts := strings.Split(u, "/")
 	return strings.Join(parts[max(0, len(parts)-2):], "/")
+}
+
+// Recipes are the subjects of the sections of README text src, its # and ##
+// headings, that show code, a fenced block before the next of those: each
+// title up to its first ( ? ! : , or ;, "Transient updates" for zustand's
+// "Transient updates (for often occurring state-changes)". A section of
+// prose, features, credits or a licence, is no subject of the code's, nor is
+// a ### one's, Steps or Optional, nor the README's # title, the project's
+// name over its install line.
+func Recipes(src string) []string {
+	lines := strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n")
+	var out []string
+	var walk func([]analyzer.Symbol)
+	walk = func(ss []analyzer.Symbol) {
+		for _, s := range ss {
+			if strings.HasPrefix(s.Signature, "###") {
+				continue
+			}
+			end := s.EndLine
+			if i := slices.IndexFunc(s.Children, func(c analyzer.Symbol) bool { return !strings.HasPrefix(c.Signature, "###") }); i >= 0 {
+				end = s.Children[i].StartLine - 1
+			}
+			own := strings.Join(lines[min(s.StartLine, len(lines)):min(end, len(lines))], "\n") // after its heading line
+			title := strings.NewReplacer("`", "", "*", "").Replace(s.Name)
+			if i := strings.IndexAny(title, "(?!:,;"); i >= 0 {
+				title = title[:i]
+			}
+			if title = strings.TrimSpace(title); title != "" && (strings.Contains(own, "```") || strings.Contains(own, "~~~")) && !slices.Contains(out, title) {
+				out = append(out, title)
+			}
+			walk(s.Children)
+		}
+	}
+	secs := markdown.Sections([]byte(src))
+	if len(secs) > 0 && strings.HasPrefix(secs[0].Signature, "# ") { // the title: its sections only
+		walk(secs[0].Children)
+		secs = secs[1:]
+	}
+	walk(secs)
+	return out
+}
+
+// Readme names in pages' queries each of subjects, a README's recipes, that
+// no page's search reaches (each of its retrieval.Terms among the page's, of
+// its title and query: a recipe listed past them is read by none): in front
+// of the query of the page naming most of its words, then given fewest,
+// behind readme, the README's path, which the page search then reads, while
+// the query has room, its search reaches the recipe and still reads every
+// name it read (retrieval.FileNames: Cover's 16th is no 17th) and every
+// recipe it reached, at most perPage a page. The query's other last words go
+// past the search's terms as Spread's do, the recipe being the page's to
+// explain. A page writer gives each subject its focus names a heading
+// (writePrompt). The overview and a section's own page, which leave the
+// details to its pages, take none; a subject with no word the search looks
+// for (Go), none. It returns the subjects left for want of room.
+func Readme(pages []Page, readme string, subjects []string) ([]Page, []string) {
+	head := map[int]bool{0: true}
+	for _, p := range pages {
+		if p.Parent >= 0 {
+			head[p.Parent] = true
+		}
+	}
+	given := make([]int, len(pages))
+	var left []string
+	for _, s := range subjects {
+		words := retrieval.Terms(s)
+		count := func(p Page) int {
+			n := 0
+			for _, w := range words {
+				if named(p.Title+" "+p.Query, w) {
+					n++
+				}
+			}
+			return n
+		}
+		if len(words) == 0 || slices.ContainsFunc(pages, func(p Page) bool { return reaches(p.Title, p.Query, s) }) {
+			continue
+		}
+		with := func(q string) string { return readme + " " + s + " " + strings.TrimPrefix(q, readme+" ") }
+		best, most := -1, -1
+		for i, p := range pages {
+			q := with(p.Query)
+			if head[i] || given[i] == perPage || utf8.RuneCountInString(q) > MaxQuery || !reaches(p.Title, q, s) ||
+				slices.ContainsFunc(retrieval.FileNames(p.Query), func(n string) bool { return !slices.Contains(retrieval.FileNames(q), n) }) ||
+				slices.ContainsFunc(subjects, func(o string) bool { return reaches(p.Title, p.Query, o) && !reaches(p.Title, q, o) }) {
+				continue
+			}
+			if n := count(p); n > most || n == most && given[i] < given[best] {
+				best, most = i, n
+			}
+		}
+		if best < 0 {
+			left = append(left, s)
+			continue
+		}
+		pages[best].Query = with(pages[best].Query)
+		given[best]++
+	}
+	return pages, left
+}
+
+// reaches reports whether a page titled title searching query looks for each
+// word of subject the search would (retrieval.Terms): none past its 16th.
+func reaches(title, query, subject string) bool {
+	terms := retrieval.Terms(title + "\n" + query)
+	words := retrieval.Terms(subject)
+	return len(words) > 0 && !slices.ContainsFunc(words, func(w string) bool { return !slices.Contains(terms, w) })
 }

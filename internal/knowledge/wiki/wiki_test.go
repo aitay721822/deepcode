@@ -96,35 +96,42 @@ func TestRunReplansOtherLanguage(t *testing.T) {
 }
 
 // fakeModel answers the planner with the one page Planned and a page's writer
-// with "Written.", keeping the user message of every request; when pathless,
-// "Written [1-1].", and asked again, cites the example it was shown.
+// with draft's page, keeping the user message of every request; when first is
+// set, a page's first draft is first and, asked again, cites the example shown.
 type fakeModel struct {
 	mu            sync.Mutex
 	plans, writes []string
-	pathless      bool
+	first         string
 }
 
 func (f *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Messages []ai.Message `json:"messages"`
-	}
+	var body struct{ Messages []ai.Message }
 	json.NewDecoder(r.Body).Decode(&body)
-	reply := "Written."
 	f.mu.Lock()
+	reply := draft(body.Messages[1].Content)
 	if body.Messages[0].Content == planPrompt {
 		f.plans = append(f.plans, body.Messages[1].Content)
 		reply = `{"pages":[{"title":"Planned","query":"gizmo"}]}`
 	} else {
 		f.writes = append(f.writes, body.Messages[1].Content)
-		if _, example, again := strings.Cut(body.Messages[len(body.Messages)-1].Content, "as in "); f.pathless && again && len(body.Messages) > 2 {
+		if _, example, again := strings.Cut(body.Messages[len(body.Messages)-1].Content, "as in "); f.first != "" && again && len(body.Messages) > 2 {
 			reply = "Written " + example
-		} else if f.pathless {
-			reply = "Written [1-1]."
+		} else if f.first != "" {
+			reply = f.first
 		}
 	}
 	f.mu.Unlock()
 	b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
 	fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", b)
+}
+
+// draft is a page citing the first <source> block request shows, as a writer is asked to.
+func draft(request string) string {
+	if _, block, ok := strings.Cut(request, `<source path="`); ok {
+		path, rest, _ := strings.Cut(block, `" lines="`)
+		return "Written. See [" + path + ":" + strings.SplitN(rest, `"`, 2)[0] + "]."
+	}
+	return "Written."
 }
 
 // basePages are the pages of carryDB's base wiki, each citing line 1 of its file.
@@ -285,7 +292,7 @@ func TestRunCarriesPages(t *testing.T) {
 				} else if c.contents[i] == "Written." {
 					written++
 				}
-				if !strings.HasPrefix(p.Content, c.contents[i]) || p.Query != b.query || !slices.Equal(cites[p.ID], want) {
+				if !strings.HasPrefix(p.Content, c.contents[i]) || p.Query != b.query || !slices.Equal(cites[p.ID], want) && (c.contents[i] != "Written." || len(cites[p.ID]) == 0) {
 					t.Errorf("page %s: %q, query %q, citations %v; want %q, %q, %v", p.Title, p.Content, p.Query, cites[p.ID], c.contents[i], b.query, want)
 				}
 			}
@@ -317,6 +324,7 @@ func TestRunFollowsImports(t *testing.T) {
 	}{
 		"declaration": {next, "func H() {", "func H(n int) {", "b.go>h.go", 0, 1},
 		"pathless":    {next, "func H() {", "func H(n int) {", "b.go>h.go", 0, 2}, // its citations leave out their file: asked again
+		"uncited":     {next, "func H() {", "func H(n int) {", "b.go>h.go", 0, 2}, // it cites nothing: asked again
 		"body":        {next, "func H() {", "func H() {", "b.go>h.go", 0, 0},
 		"subsystem":   {withDir, "func H() {", "func H() {", "a.go>tools/gen/x.go", 1, 1},
 	} {
@@ -328,24 +336,19 @@ func TestRunFollowsImports(t *testing.T) {
 					(2, 'h.go', 'H', 'H', 'function', 1, 1, '` + c.before + `'), (6, 'h.go', 'H', 'H', 'function', 1, 1, '` + c.after + `')`); err != nil {
 				t.Fatal(err)
 			}
-			model := &fakeModel{pathless: name == "pathless"}
+			model := &fakeModel{first: map[string]string{"pathless": "Written [1-1].", "uncited": "Written."}[name]}
 			srv := httptest.NewServer(model)
 			defer srv.Close()
 			g := generator(db, &ai.OpenAI{BaseURL: srv.URL, ModelName: "m"})
 			if err := g.Run(context.Background(), 1, "next", jobs.Progress{}); err != nil {
 				t.Fatal(err)
 			}
-			if len(model.plans) != c.plans || len(model.writes) != c.writes {
-				t.Fatalf("%d plans and %d pages written, want %d and %d", len(model.plans), len(model.writes), c.plans, c.writes)
+			if cites, _ := g.Store.Citations(context.Background(), 6); len(model.plans) != c.plans || len(model.writes) != c.writes || model.first != "" && len(cites) != 4 {
+				t.Fatalf("%d plans and %d pages written, citing %v; want %d and %d", len(model.plans), len(model.writes), cites, c.plans, c.writes)
 			}
-			if cites, _ := g.Store.Citations(context.Background(), 6); model.pathless && len(cites) != 4 {
-				t.Fatalf("written again, the page cites nothing: %v", cites)
-			}
-			if c.plans > 0 && (!strings.Contains(model.plans[0], "./ → tools/gen/ (1)") || !strings.Contains(model.writes[0], drawnNote)) {
-				t.Fatalf("plan request %q\nwrite request %q", model.plans[0], model.writes[0])
-			}
-			if c.writes == 1 && c.plans == 0 && strings.Contains(model.writes[0], drawnNote) {
-				t.Fatal("a page past the overview was told of the diagram")
+			if drawn := c.writes > 0 && strings.Contains(model.writes[0], drawnNote); c.plans > 0 && (!strings.Contains(model.plans[0], "./ → tools/gen/ (1)") || !drawn) ||
+				c.plans == 0 && c.writes == 1 && drawn {
+				t.Fatalf("plan requests %q\nwrite requests %q", model.plans, model.writes)
 			}
 		})
 	}
@@ -370,12 +373,10 @@ func TestRunPlansSections(t *testing.T) {
 	var writes []string
 	prose := true // Entry's first plan comes back as prose, and is asked again
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Messages []ai.Message `json:"messages"`
-		}
+		var body struct{ Messages []ai.Message }
 		json.NewDecoder(r.Body).Decode(&body)
 		system, user := body.Messages[0].Content, body.Messages[1].Content
-		reply := "Written."
+		reply := draft(user)
 		mu.Lock()
 		switch {
 		case system == outlinePrompt:
@@ -419,11 +420,10 @@ func TestRunPlansSections(t *testing.T) {
 	if strings.Join(got, " ") != want || !slices.Equal(asked, []int{2, 3, 12}) || len(writes) != len(pages)-2 || !strings.HasPrefix(pages[17].Query, "docs/d") {
 		t.Fatalf("pages %q after asking for %v pages, %d written", got, asked, len(writes))
 	}
-	if !slices.ContainsFunc(writes, func(u string) bool {
-		return strings.Contains(u, "This page opens a section whose pages are: Core 1 | Core 2 | Core 3 |")
-	}) ||
-		!slices.ContainsFunc(writes, func(u string) bool { return strings.Contains(u, `This page is part of the section "Core"`) }) {
-		t.Fatal("no page was told of its section")
+	for _, s := range []string{"This page opens a section whose pages are: Core 1 | Core 2 | Core 3 |", `This page is part of the section "Core"`} {
+		if !slices.ContainsFunc(writes, func(u string) bool { return strings.Contains(u, s) }) {
+			t.Fatalf("no page was told %q", s)
+		}
 	}
 	// Sections are written before their pages, which share their sources ahead of what is their own.
 	for i, u := range writes {
@@ -434,11 +434,11 @@ func TestRunPlansSections(t *testing.T) {
 			t.Fatalf("write %d shares no sources ahead of its request:\n%s", i+1, u)
 		}
 	}
-	// The nav, and the overview's diagram of the imports; a page without citations has [] of them.
+	// The nav, and the overview's diagram of the imports; the overview, its search finding nothing, has [] of citations.
 	db.Exec(`UPDATE snapshots SET wiki_status = 'ready'`)
 	w, err := (Reader{Store: g.Store, Graph: g.Graph}).Load(context.Background(), 1)
 	if b, _ := json.Marshal(w.Pages[1]); err != nil || w.Pages[1].Parent != "" || w.Pages[2].Parent != w.Pages[1].Slug ||
-		!strings.Contains(w.Pages[0].Diagram, `["api"]`) || !strings.Contains(string(b), `"citations":[]`) || strings.Contains(string(b), "diagram") {
+		!strings.Contains(w.Pages[0].Diagram, `["api"]`) || w.Pages[0].Citations == nil || len(w.Pages[0].Citations) > 0 || strings.Contains(string(b), "diagram") {
 		t.Fatalf("the nav: %+v %v", w.Pages[:3], err)
 	}
 }

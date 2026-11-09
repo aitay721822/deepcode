@@ -52,10 +52,11 @@ func (s *Store) Lines(ctx context.Context, snap int64) (map[string]int, error) {
 }
 
 // Declared calls each with the path and name of every type and function the
-// snapshot's files declare, by path and then line.
+// snapshot's files declare, and every section of its guides, by path and
+// then line.
 func (s *Store) Declared(ctx context.Context, snap int64, each func(path, name string)) error {
 	rows, err := s.DB.QueryContext(ctx, `SELECT path, name FROM symbols WHERE snapshot_id = ?
-		AND kind IN ('class', 'struct', 'interface', 'trait', 'enum', 'record', 'type', 'function', 'macro', 'union') ORDER BY path, start_line`, snap)
+		AND kind IN ('class', 'struct', 'interface', 'trait', 'enum', 'record', 'type', 'function', 'macro', 'union', 'section') ORDER BY path, start_line`, snap)
 	if err != nil {
 		return err
 	}
@@ -101,7 +102,8 @@ func (s *Store) Symbols(ctx context.Context, snap int64, paths []string) (map[st
 type File struct{ Path, Content string }
 
 // RootFiles returns the snapshot's top-level README and build manifests, the
-// README first.
+// README first, a Markdown one before others and the shortest named so
+// (README.md before README and README.zh-CN.md).
 func (s *Store) RootFiles(ctx context.Context, snap int64) ([]File, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT f.path, c.content FROM source_files f JOIN file_contents c ON c.hash = f.content_hash
@@ -109,7 +111,7 @@ func (s *Store) RootFiles(ctx context.Context, snap int64) ([]File, error) {
 		  AND (lower(f.path) LIKE 'readme%' OR lower(f.path) IN ('package.json', 'go.mod', 'cargo.toml', 'pyproject.toml',
 		    'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts')
 		    OR lower(f.path) LIKE '%.sln' OR lower(f.path) LIKE '%.slnx')
-		ORDER BY lower(f.path) LIKE 'readme%' DESC`, snap)
+		ORDER BY lower(f.path) LIKE 'readme%' DESC, lower(f.path) LIKE '%.md' DESC, length(f.path), f.path`, snap)
 	if err != nil {
 		return nil, err
 	}

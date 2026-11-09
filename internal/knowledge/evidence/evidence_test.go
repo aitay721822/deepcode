@@ -67,6 +67,10 @@ func TestLinkCitations(t *testing.T) {
 		"Reversed [README.md:4-2]":                               "Reversed " + link("README.md", 2, 4),
 		"Rooted [./README.md:3; /README.md:5]":                   "Rooted " + link("README.md", 3, 3) + " " + link("README.md", 5, 5),
 		"Labelled [source: README.md:3-4; sources: async.ts:12]": "Labelled " + link("README.md", 3, 4) + " " + link("src/vs/base/async.ts", 12, 12),
+		// A source block's opening copied as the citation (chi's pages), its symbol's commas too.
+		`Tag [source path="README.md" lines="2-4"]`:                               "Tag " + link("README.md", 2, 4),
+		`Symbol [source path="src/vs/base/async.ts" lines="12-13" symbol="F, G"]`: "Symbol " + link("src/vs/base/async.ts", 12, 13),
+		`Not a tag [source path="README.md"]`:                                     `Not a tag [source path="README.md"]`,
 		// Folders put in front of a shown path: the longest it ends with.
 		"Prefixed [src/_examples/rest/main.go:2-3]": "Prefixed " + link("_examples/rest/main.go", 2, 3),
 		"Not a suffix [lib/vs/base/async.ts:12]":    "Not a suffix ",
