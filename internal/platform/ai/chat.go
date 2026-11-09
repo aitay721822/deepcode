@@ -3,6 +3,7 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
@@ -25,6 +26,14 @@ const maxAnswer = 1 << 20
 
 // StripThinking drops <think> blocks that some servers leave in the content.
 func StripThinking(s string) string { return strings.TrimSpace(thinkRe.ReplaceAllString(s, "")) }
+
+// ParseJSON reads the JSON object in a model's answer s into v, past any
+// reasoning, prose or code fence around it, and reports whether it could.
+func ParseJSON(s string, v any) bool {
+	s = StripThinking(s)
+	i, j := strings.Index(s, "{"), strings.LastIndex(s, "}")
+	return i >= 0 && j > i && json.Unmarshal([]byte(s[i:j+1]), v) == nil
+}
 
 // Generate returns the model's whole answer to messages.
 func (c *OpenAI) Generate(ctx context.Context, messages []Message) (string, error) {

@@ -96,7 +96,9 @@ trusted_proxies: [127.0.0.1, 10.0.0.0/8]
 2. 首頁 **新增 Repository** 接受 `owner/repo`（第一個 Git 伺服器，預設為 GitHub）、任一已設定伺服器上的網址（例如 `https://gitlab.example.com/group/sub/project`），或選擇伺服器後輸入 `group/sub/project`。
 3. Repository 頁顯示索引進度（Fetch → Parse → Embed → Publish），接著生成 Wiki（Plan → Write），頁面寫完一頁出現一頁。頁數依 Repository 大小而定：檔案數（最多算 16）加上檔案數的四分之一，最多 `DEEPCODE_WIKI_MAX_PAGES` 頁（例如 104 個檔案是 16 + 26 = 42 頁）。12 頁以上的 Wiki 分成兩層：程式依目錄分組（取到分組夠多的深度，只通往一個子資料夾的資料夾不算一層），彼此 import 最多的目錄（以檔案數平均）合成一節，沒有 import 時同一上層資料夾的先合，約每 6 頁一節、最多 12 節；文件（`docs/` 與其他 Markdown 指南，例如 gson 的 `UserGuide.md`）、範例、測試與工具（隱藏資料夾裡 `.github/` 這類 CI 與編輯器設定，README、CHANGELOG、CONTRIBUTING、SECURITY 這類專案說明與社群檔案，以及只有建置與設定檔的目錄，例如只剩 `pom.xml` 的子專案）依序各成一節接在程式之後，所以 manifest 不會自成一節。頁數依行數分給各節，節自己的頁面也算一頁：每節先一頁，有兩個以上目錄的節再依目錄數各多一頁，其餘逐頁給目前每行分到最少頁的節（一個檔案最多算 2000 行，程式節裡的樣式表、SQL 與設定檔只算四分之一；每多一頁至少要 100 行，約是 DeepWiki 一頁涵蓋的量，所以許多短檔案的節不會攤成彼此重述的頁面；程式節不超過程式檔數的三倍加一）；文件與範例的行數只算三分之一，最多分到總頁數的三分之一與五分之一，文件先為每份 200 行以上的指南各給一頁（最多 3 頁：指南本身就是主題）；測試與工具各最多十二分之一、且不超過 4 頁與 3 頁，合計不超過五分之一：讀者要看的是程式。只分到 2 頁的節直接寫成兩個最上層的頁面（節的總覽只會重複它們）。模型先為概覽與每一節命名（每節附最多 12 個檔案：各目錄輪流取最長的，總行數多的目錄先取，所以不會只看到依字母排在前面的子專案），再依該節的檔案（最多 200 個，同樣輪流取）與其中宣告的型別、函式規劃該節分到的頁數（主題不夠分時，較大的檔案、流程、選項與錯誤處理各成一頁；測試、範例、指南與設定檔依它們服務的功能、流程或工具分組，不會一個檔案一頁；範例（`examples/` 下的每個資料夾）、指南（每份文件）與每個測試資料夾各是一個主題，規劃的頁面標題與焦點都沒以完整字詞提到的（`basic-auth` 不算提到 `basic`），由大到小補進該節目前補得最少的頁面焦點最前面，每頁最多 2 個，以最後兩層路徑寫入（檢索只取前面的字），撰寫時焦點列出的每個範例、指南或測試資料夾各成一個 `##` 段落（或所屬段落下的 `###`），以指南自己的標題或範例資料夾的名稱命名、不用它其中一段的標題（那些段落在它下面用 `###`），每個標題下都要有自己的文字：每個範例都找得到，不必各占一頁）；程式節裡沒有頁面的標題或焦點提到的程式檔（以路徑、檔名、三個字母以上的檔名主幹作為完整字詞，或包含它、最多 8 個檔案的資料夾都算提到），規劃後補進焦點：同一資料夾有兩個以上、資料夾又不超過 8 個檔案時寫資料夾，否則寫檔案，由大到小補到焦點與它共用最多層目錄的頁面，同分時補給補得最少的；焦點要放得下（1400 字以內，夠寫 16 個 .NET 或 Java 專案的完整路徑，且在檢索讀的前 16 個名稱之內；模型寫的焦點超過時，截在被切到的那個字之前，以空白、逗號或全形標點分字，不留半個路徑），放不下的寫進工作輸出；200 行以上的根目錄 README 跟文件一起規劃（概覽只讀它的開頭），指南的各節（Markdown 的標題）是規劃的主題；根目錄 README（名稱最短的那份 Markdown）裡帶程式碼區塊的 `#`、`##` 段落（README 自己的 `#` 標題除外；`###` 的程式碼算它上一層的）各是一個主題，取標題到第一個 `(`、`?`、`!`、`:`、`,` 或 `;` 之前（去掉反引號與星號）：沒有頁面的檢索讀得到它（它的每個檢索詞都在某頁標題加焦點的前 16 個檢索詞裡）時，補到焦點最前面（README 路徑之後），選提到它最多字的頁面，同分時選補得最少的；不補給概覽與節的頁面，每頁最多 2 個，且不能擠掉焦點原本讀得到的檔名或主題，放不下的寫進工作輸出；節的頁面寫成該節的總覽，其下的頁面只寫自己的主題；`##` 段落以它說明的功能、元件或函式命名，概覽另有一段技術堆疊（語言、框架與主要依賴）。頁面的引用全都沒寫檔名（`[55-64]`，或來源的編號 `[5:1-29]`）時，附上一個正確的例子請模型再寫一次，再寫失敗時保留原本的頁面。撰寫時，同一節的頁面共用以該節標題與焦點檢索到的來源（最多約一半的篇幅），再加上自己檢索到的來源；概覽與各節的頁面先寫，其下的頁面後寫。送給模型的提示詞一律由不變到變動排列：固定的指示，這份 Wiki 共同的內容（Repository、Commit、語言、頁面清單、`.devin/wiki.json` 的說明），該節共用的來源，最後才是這一頁的要求與來源；問答則是固定的指示、先前的對話、這次的 Repository、來源與問題，最後一行要求以反引號寫出答案依據的型別、呼叫與 annotation（小模型最常改寫成描述，例如把 `JsonToken` 寫成「token 的型別」），並指定回答的語言（程式碼區塊、反引號與 「」、“”、’、"" 引起來的文字以外，有假名時是日文、有漢字時是中文，不論夾了多少英文識別字、路徑或錯誤訊息；大多是其他文字時依問題的語言；否則有 how、what、the、do 這類英文字時是英文，有其他非英文字母的字時依問題的語言；識別字與路徑（`src/a/main.go`、`x_on_y`）不算字；都看不出來時（例如「？」「Route?」）沿用對話中上一個看得出來的問題。Wiki 與來源的語言不會帶偏回答；英文問題裡沒加引號的中文會讓它以中文回答），先前的對話至少保留 6 則、累積到 12 則才一次捨棄最舊的 6 則。這樣模型服務的提示詞快取（DeepSeek 與 OpenAI 的 prefix cache、llama.cpp 的 `cache_prompt`）能重用前段，計費的輸入 token 較少。較小的 Repository 照舊是 4～8 頁的單層清單。後台 **工作** 可即時看每個工作的輸出，包括模型正在寫的 Wiki 內容。
 4. 左側 **Wiki** 列出頁面（節的頁面編號 2、3…，其下的頁面縮排、編號 2.1、2.2…），**檔案** 是檔案樹與 Symbol 搜尋（建立 Symbol 與檔案關係的語言見「語言」；其他語言以純文字切塊，仍可全文與向量檢索）。文中的來源標籤會開啟檔案並標出行號範圍；連往 GitHub 或 GitLab 的連結都綁定 Commit SHA。概覽頁附一張目錄之間的 import 關係圖，由索引的 import 直接畫出、不經模型，測試、範例、文件與隱藏資料夾不算；最多 14 個目錄、24 條箭頭，目錄取到最多三層、節點仍放得下的深度。分層時，只通往一個子資料夾、本身沒有程式的資料夾併入下一層；所有程式都在其下的資料夾（例如只有 `src/` 有程式時的 `src/`，或 Java 的 `src/main/java/org/acme/app/`）不算一層。標籤省略各節點共同的上層資料夾，三個以上併成一層的資料夾只寫頭尾（`gson/…/gson/internal`）。說明架構、分層或資料流的頁面，模型會附一張 Mermaid 圖。Mermaid 第一次需要畫圖時才載入；語法錯誤、或含有會隱藏文字的字元時，顯示原文。
-5. 在底部輸入問題進入問答頁：左側串流答案與來源，右側顯示被引用的程式碼。可以繼續追問，`/repos/{id}/search/{conversation}` 能重新開啟對話（只有發問者看得到）。問題裡的字詞與名稱都對不上程式碼時（例如全中文的問題），會先請模型把問題轉成英文搜尋詞與可能的識別字再找一次，多一次模型呼叫；仍無證據時回答「無法從目前程式碼確認」。每位使用者同時最多 2 個回答在生成（不論開了幾個分頁），再問會請他等其中一個寫完。提問框的 **Deep** 開關：檢索後讓模型看已找到的來源（檔案、行號、Symbol），說出還缺的程式碼要搜什麼，最多再搜 2 輪（回答 DONE、或找不到新的程式碼就停）；證據上限從 40000 提高到 64000 字元，並把同一 Repository 的 Wiki 中與問題共用字詞最多的一頁（標題中的字算三倍；中文以相鄰兩字比對；每頁都有的字不算）當背景放進提示詞，只供參考、不能引用。回答約慢 2～3 倍，檢索步驟會顯示每一輪搜尋的字詞。不論是否 Deep，答案寫完先檢查一次：說了某段程式碼沒提供（系統提示要求寫成「not in the provided sources」「不在提供的來源中」，或整題無法回答時的「This can't be confirmed from the current code」「無法從目前程式碼確認」，也接受「I can't confirm this from the current code」這種主動句；完整的答案談程式碼、不談拿到了什麼，所以只能指來源的說法（「the provided sources」「提供的來源」「你提供的片段」；「user-provided sources」、搜尋引擎的「retrieved sources」、「使用者提供的來源」、答案自己的「上述程式碼」、可能是在評論程式碼的「你提供的程式碼」不算）在同一子句裡被否定經由「in」「from」「中」指到，或開頭說它沒有包含什麼，都算，例如「No handler was found in the provided sources」「The provided sources say nothing about retries」「提供的來源中並無付款的處理」；可能另有所指的「the provided code」（授權碼）、「these sources」（CORS 來源）、單獨的「提供的程式碼」（模組提供的程式碼）只認規定的句型，且來源一詞須結束子句，所以「if the token is not provided, the code returns 401」「not in the sources directory」「not in the source files」不算），或在行內程式碼中提到 Repository 有定義、但來源裡沒有的名稱（例如 `RoutePattern`），就再搜一輪：那些名稱，加上請模型就缺的部分說出的類別、函式或 handler；並沿 import 關係找出 import 了定義這些名稱（由兩個以上單字組成的）的檔案、且用到它們的程式碼（例如事件的 handler）。重寫時答案引用過的來源與新找到的輪流排在最前，其餘在後：證據有字數上限，兩者都不會被對方整個擠掉；答案自言自語（「Wait」「Let me check」「等等」這類句子兩句以上）時也以同樣的來源重寫。重寫的答案再檢查一次，最多重寫兩次；畫面上原本的答案被清掉，重新串流。檢查或重寫失敗（例如模型沒回應）時保留原本的答案。答案中寫在方括號外（`a.go:10-20`、` `a.go:10-20` `）或程式碼區塊裡的行號範圍，對得上來源時也算引用（程式碼區塊裡的列在答案最後的「來源：」）；方括號內加了 `source:` 標籤、照抄來源區塊的開頭（`[source path="a.go" lines="3-9"]`）、或路徑前多了資料夾（`src/lib/express.js` 指提供的 `lib/express.js`，取最長的相符路徑，且提供的路徑本身要在資料夾裡：根目錄的 `main.go` 不算 `cmd/foo/main.go`）也算；最後仍沒有任何有效引用時，答案結尾註明沒有引用任何已索引的原始碼。
+5. 在底部輸入問題進入問答頁：左側串流答案與來源，右側顯示被引用的程式碼。可以繼續追問，`/repos/{id}/search/{conversation}` 能重新開啟對話（只有發問者看得到）。問題裡的字詞與名稱都對不上程式碼時（例如全中文的問題），會先請模型把問題轉成英文搜尋詞與可能的識別字再找一次，多一次模型呼叫；仍無證據時回答「無法從目前程式碼確認」。每位使用者同時最多 2 個回答在生成（不論開了幾個分頁），再問會請他等其中一個寫完。提問框可選 **Fast**、**Deep**、**Codemap**。**Deep**：檢索後讓模型看已找到的來源（檔案、行號、Symbol），說出還缺的程式碼要搜什麼，最多再搜 2 輪（回答 DONE、或找不到新的程式碼就停）；證據上限從 40000 提高到 64000 字元，並把同一 Repository 的 Wiki 中與問題共用字詞最多的一頁（標題中的字算三倍；中文以相鄰兩字比對；每頁都有的字不算）當背景放進提示詞，只供參考、不能引用。回答約慢 2～3 倍，檢索步驟會顯示每一輪搜尋的字詞。不論是否 Deep，答案寫完先檢查一次：說了某段程式碼沒提供（系統提示要求寫成「not in the provided sources」「不在提供的來源中」，或整題無法回答時的「This can't be confirmed from the current code」「無法從目前程式碼確認」，也接受「I can't confirm this from the current code」這種主動句；完整的答案談程式碼、不談拿到了什麼，所以只能指來源的說法（「the provided sources」「提供的來源」「你提供的片段」；「user-provided sources」、搜尋引擎的「retrieved sources」、「使用者提供的來源」、答案自己的「上述程式碼」、可能是在評論程式碼的「你提供的程式碼」不算）在同一子句裡被否定經由「in」「from」「中」指到，或開頭說它沒有包含什麼，都算，例如「No handler was found in the provided sources」「The provided sources say nothing about retries」「提供的來源中並無付款的處理」；可能另有所指的「the provided code」（授權碼）、「these sources」（CORS 來源）、單獨的「提供的程式碼」（模組提供的程式碼）只認規定的句型，且來源一詞須結束子句，所以「if the token is not provided, the code returns 401」「not in the sources directory」「not in the source files」不算），或在行內程式碼中提到 Repository 有定義、但來源裡沒有的名稱（例如 `RoutePattern`），就再搜一輪：那些名稱，加上請模型就缺的部分說出的類別、函式或 handler；並沿 import 關係找出 import 了定義這些名稱（由兩個以上單字組成的）的檔案、且用到它們的程式碼（例如事件的 handler）。重寫時答案引用過的來源與新找到的輪流排在最前，其餘在後：證據有字數上限，兩者都不會被對方整個擠掉；答案自言自語（「Wait」「Let me check」「等等」這類句子兩句以上）時也以同樣的來源重寫。重寫的答案再檢查一次，最多重寫兩次；畫面上原本的答案被清掉，重新串流。檢查或重寫失敗（例如模型沒回應）時保留原本的答案。答案中寫在方括號外（`a.go:10-20`、` `a.go:10-20` `）或程式碼區塊裡的行號範圍，對得上來源時也算引用（程式碼區塊裡的列在答案最後的「來源：」）；方括號內加了 `source:` 標籤、照抄來源區塊的開頭（`[source path="a.go" lines="3-9"]`）、或路徑前多了資料夾（`src/lib/express.js` 指提供的 `lib/express.js`，取最長的相符路徑，且提供的路徑本身要在資料夾裡：根目錄的 `main.go` 不算 `cmd/foo/main.go`）也算；最後仍沒有任何有效引用時，答案結尾註明沒有引用任何已索引的原始碼。
+
+   **Codemap**（與 DeepWiki 的 Codemaps 相同）以 Deep 的檢索找到程式碼後，請模型畫出回答問題的程式路徑，而不是寫一篇答案：2～5 條 trace，每條是依執行順序排列的 2～7 個程式位置（編號 1a、1b…，各附標題、說明與那一行程式碼），再加一段這條路徑的導覽。模型回的不是 JSON，或沒有一個位置對得上時，附上提醒再請一次。每個位置都要對得上檢索到的程式碼：路徑以完整路徑或結尾比對（結尾相符的有兩個以上時不算），行號在那一行讀起來就是模型寫的程式碼時照用（不計空白；只有括號這類短行時須完全相同），否則改成同一檔案中最近的、讀起來相同的一行；對不上的位置捨棄，沒有位置的 trace 也捨棄，最多 6 條、每條 10 個。畫面可切換 **列表**（點位置會在右側開啟那一行，最後開啟的位置以灰底標示）與 **圖表**（每條 trace 是一個子圖，節點可以點選，也可以 Tab 移到節點後按 Enter）。對話紀錄保存整張圖；答案文字是它的 Markdown（含 `[path:n-n]` 引用），MCP 的 `ask_question` 回的也是這份文字。
 6. **同步** 取得最新 Commit（設定 `DEEPCODE_SYNC_EVERY` 後也會定期自動檢查）：未變更的檔案沿用 Symbol 與 Chunk，未變更的 Chunk 沿用向量，完成後才切換版本。保留最新兩個版本；更舊的版本分批刪除索引資料（不會長時間佔住資料庫的寫入，中斷時下次清理接續），原本綁在上面的對話改用目前版本。
 7. 新版本的 Wiki 沿用上一份完成的同語言 Wiki 的頁面，只重寫這次變更會讓它讀起來不同的頁面，其餘頁面連同引用沿用。被引用、且有變更的檔案逐行比對新舊版本（Myers 最短編輯；兩端相同的行之間差異超過 1000 處時，中間全算被取代）：頁面引用的行範圍裡有一行被改或刪、或中間插入了新行，或引用的檔案 import 了宣告被刪改的檔案時，才重寫那一頁；沒被打斷的引用跟著行移動（例如上方插入 2 行，`a.go:40-50` 變成 `a.go:42-52`），頁面裡的連結一併改成新行號、指向新 Commit。以頁面標題與焦點重新檢索（不含該節共用的來源）時，修改過的檔案只有出現新的 Chunk（這個檔案之前沒有的 Symbol，例如新的方法或 README 新的標題）才算，原本就有的 Chunk 只是內容或位置變了不算，合在一個 Chunk 裡的宣告重新分組（`A, B` 拆成 `A` 與 `B`）也不算；新增的檔案只影響它所屬分組裡檢索得到它的頁面：分組是一節（或不在節中的一頁），新檔案屬於引用的檔案與它共用最深目錄的分組（根目錄算一層；沒有分組引用同一個頂層目錄的檔案時不屬於任何分組）。`package.json`、`go.mod`、`Cargo.toml`、`pom.xml`、`build.gradle`、`*.csproj`、`*.sln` 這類 manifest 或設定檔，引用的行被打斷了還要頁面文字提到被改掉或刪掉的字（不分大小寫，例如升級前的版本號 `2.3.0`；一段被取代的行與取代它的行數相同時逐行比，否則整段比）才重寫，重新檢索到 manifest 不算；例如只升級一個相依套件的版本，不會重寫引用 scripts 的頁面，也不會重寫引用了相依套件清單、但沒寫出舊版本號的頁面。「宣告被刪改」以 Symbol 的名稱、種類與第一行比較，舊版的宣告新版沒有了才算：只改函式內容、或只新增宣告（之前 import 它的程式用不到）都不算，所以修改被大量引用的工具函式內部、或新增一個常數，不會牽動其他頁面；struct 新增欄位、Go interface 新增方法看不出來。重寫時已檢索不到任何程式碼的頁面（例如引用的檔案都刪了）改為說明無法從目前程式碼確認。變更的檔案（新增、修改、刪除合計）超過新版本檔案數的一半、`.devin/wiki.json` 有變更（含新增、刪除）、新增了兩層深的目錄且其他目錄的程式碼 import 它（新的子系統）、或 Wiki 是單層而 Repository 的大小已要分節（或反過來；頁面由 `.devin/wiki.json` 列出時不算）時重新規劃。
 8. Repository 根目錄的 `.devin/wiki.json`（與 DeepWiki 同格式）可以引導 Wiki：`repo_notes` 的 `content` 在規劃與撰寫時提供給模型；列出 `pages`（`title`、`purpose`、`page_notes`、`parent`）時直接寫這些頁面（最多 30 頁），不再請模型規劃，`purpose` 與 `page_notes` 作為該頁的檢索焦點。`parent` 是另一頁的標題時，該頁放在那一頁之下；Wiki 只有兩層，所以孫頁面放在最上層的祖先之下，`parent` 對不到任何一頁、或互相指向成環時放在最上層。最上層的頁面依檔案中的順序，各自接著其下的頁面。JSON 格式錯誤時整份忽略，並在工作輸出說明；檔案超過 `DEEPCODE_MAX_FILE_KB`、或有一行超過 4000 位元組（例如壓成一行的 JSON）時，和其他這類檔案一樣不會被索引，也就不會生效。
@@ -158,6 +160,26 @@ trusted_proxies: [127.0.0.1, 10.0.0.0/8]
 - 同一使用者名稱在同一來源位址 15 分鐘內失敗 10 次後暫停登入；同一來源位址不論用哪些名稱，15 分鐘內失敗 50 次也暫停登入。變更密碼時輸錯目前密碼依使用者計數。每次嘗試在驗證密碼前就計入（成功或非密碼錯誤再退回），同時送出的大量嘗試也不會超過上限。服務放在反向代理後面時，請把代理的位址設在 `DEEPCODE_TRUSTED_PROXIES`，否則來源位址都是代理的位址：某個名稱失敗 10 次會讓所有人暫停用該名稱登入，任何名稱合計失敗 50 次會讓所有人暫停登入，各 15 分鐘。監聽非 loopback 位址又未設定時，啟動 log 會提醒。
 - 忘記密碼：`read -rs pw && printf '%s\n' "$pw" | ./deepcode passwd --data ./data admin`（密碼不顯示在畫面上、也不留在 shell 歷史；服務執行中也可以）。
 
+## MCP（讓代理程式接入）
+
+`/mcp` 是 MCP 伺服器（官方 Go SDK，Streamable HTTP、stateless：每個 POST 是一次呼叫），讓 Claude Code、Cursor、Codex 等代理程式讀取 Wiki、程式碼並提問。代理程式以使用者的身分與角色行事：看不到的 Repository 不會列出，沒有 `repo.chat` 不能提問。帳號選單的 **存取權杖與 MCP** 列出設定方式、個人存取權杖與已授權的應用程式。
+
+| 工具 | 用途 |
+|---|---|
+| `list_repositories` | 看得到的 Repository、id、目前 Commit 與 Wiki 狀態 |
+| `read_wiki_structure` | Wiki 的頁面，依網頁的編號（2、2.1） |
+| `read_wiki_contents` | 一頁（編號、slug 或標題）或全部頁面的 Markdown |
+| `search_code` | 混合檢索，最多 20 段（預設 10），每段最多 1500 位元組 |
+| `read_file` | 檔案的指定行，加上行號，一次最多 1000 行 |
+| `ask_question` | 問答，`mode` 為 `fast`（預設）、`deep` 或 `codemap`；回答前以 MCP progress 通知回報進度，對話也保存在使用者的對話紀錄 |
+
+Repository 以 `owner/name`、id 或網址指定。登入方式二選一：
+
+- **OAuth**（支援的用戶端，例如 `claude mcp add --transport http deepcode https://<deepcode>/mcp`）：沒有權杖的請求得到 401 與 `WWW-Authenticate: Bearer resource_metadata=…`，用戶端由 `/.well-known/oauth-protected-resource/mcp`（RFC 9728）找到授權伺服器（deepcode 自己，`/.well-known/oauth-authorization-server`，RFC 8414），以 `/oauth/register` 動態註冊（RFC 7591，只接受不帶密鑰的 public client），再開瀏覽器到 `/oauth/authorize`：使用者登入後看到應用程式自己註冊的名稱與它要回去的位址，按 **授權** 或 **拒絕**。只接受 PKCE S256；授權碼 10 分鐘內有效、只能用一次（帶錯的 code_verifier 也會用掉它）；access token 一小時，refresh token 30 天、每次使用就換一個（舊的立即失效，授權時間沿用第一次的）。redirect URI 須是 https、本機的 http（`127.0.0.1`、`[::1]`、`localhost`；連接埠可以不同，RFC 8252）或應用程式自己的 scheme（含點的反向網域如 `com.example.app:`，或 `cursor:`、`vscode:`、`vscode-insiders:`；`javascript:`、`data:`、`file:`、`ms-msdt:` 等不行），不能帶 fragment，且須與註冊的相同。應用程式名稱會去掉控制、格式與不可見字元，看不出任何字的名稱顯示為「MCP client」。沒有授權碼、refresh token 或 access token 的應用程式不論多舊都保留（代理程式會帶著同一個 client id 回來），超過 1000 個時刪最舊的；被刪的應用程式換發權杖時得到 `invalid_client`（401），重新註冊即可。不支援 Client ID Metadata Document，也不檢查 `resource` 參數：權杖只用在 `/mcp`。
+- **個人存取權杖**：在 **存取權杖與 MCP** 建立（名稱、有效期限 30／90／365 天或不過期），只顯示一次；以 `Authorization: Bearer dcp_…` 標頭連線，例如 `claude mcp add --transport http deepcode https://<deepcode>/mcp --header "Authorization: Bearer <權杖>"`。
+
+權杖只能用在 `/mcp`，不能登入網頁或呼叫 `/api`；資料庫只存 SHA-256。停用使用者、撤銷權杖或撤銷應用程式（同時撤銷它的 refresh token 與 access token）立即生效。權杖等同使用者的身分，只在 HTTPS 或本機傳送。
+
 ## Git 伺服器
 
 後台 **Git 伺服器** 設定 Repository 的來源：GitHub、GitHub Enterprise、GitLab.com 或自架 GitLab。第一次啟動已有 `GitHub`（`https://github.com`）。
@@ -206,6 +228,14 @@ worker 寫進度到 jobs、輸出到 job_logs ──► job.updated / job.output
 | `POST` | `/api/auth/logout` | 登出 |
 | `GET` | `/api/auth/me` | 目前使用者、權限 |
 | `POST` | `/api/auth/password` | 變更自己的密碼，body `{"current", "next"}`；結束其他 session，這個瀏覽器拿到新的 session（400 目前密碼錯誤或新密碼不符、409 期間帳號被重設、停用或刪除，新密碼未儲存、429 暫停） |
+| `GET` `POST` | `/api/auth/tokens` | 自己的個人存取權杖；`POST` body `{"name", "days"}`（`days` 為 0–366，0 不過期），回 201 `{"token", "secret"}`，`secret` 只回這一次 |
+| `DELETE` | `/api/auth/tokens/{id}` | 撤銷權杖 |
+| `GET` | `/api/auth/apps` | 以 OAuth 授權過的應用程式 |
+| `DELETE` | `/api/auth/apps/{clientId}` | 撤銷應用程式的授權與權杖 |
+| `GET` `POST` | `/api/oauth/authorize` | 同意頁用：`GET ?client_id=&redirect_uri=` 回應用程式名稱；`POST` body 為授權請求加上 `approve`，回 `{"redirect"}` |
+| `GET` | `/.well-known/oauth-authorization-server`、`/.well-known/oauth-protected-resource[/mcp]` | OAuth 中繼資料（不必登入） |
+| `POST` | `/oauth/register`、`/oauth/token` | 動態註冊（JSON）與換發權杖（form；`authorization_code`、`refresh_token`） |
+| `POST` | `/mcp` | MCP（Bearer 權杖） |
 | `POST` | `/api/repos` | 匯入（`repo.import`），body `{"url": "owner/repo 或網址", "serverId": 選填}`；回應的 Repository 不含 `permissions` |
 | `GET` | `/api/servers` | 可選的 Git 伺服器（`repo.import`） |
 | `GET` | `/api/repos` | 看得到的 Repository，各附 `permissions`：使用者在該 Repository 上的 `repo.read`、`repo.chat`、`repo.sync` |
@@ -216,7 +246,7 @@ worker 寫進度到 jobs、輸出到 job_logs ──► job.updated / job.output
 | `GET` | `/api/repos/{id}/symbols?q=` | Symbol 搜尋 |
 | `GET` | `/api/repos/{id}/search?q=` | 混合檢索（FTS5 + Vector + Symbol + 查詢點名的檔案 → RRF；查詢寫出的路徑（`src/app.ts`）、資料夾（`examples/`）、glob（`tests/*.rs`）或檔名（`App.java`）所指的檔案，其 Chunk 依查詢的字另排一份名單一起融合，名次與全文檢索的同等計分（查詢點名的就是它要的；權重調低時，每個專案的 `Extensions.cs` 又被 Symbol 檢索找到，會再把 eShop 的 `AppHost.cs` 擠出它的頁面；名單最多 6 個檔案，依查詢點名的順序：每個名稱輪流取它所指的下一個檔案（資料夾或 glob 的檔案依查詢的前 16 個檢索詞（含拆開的識別字）在點名檔案裡排出的前 25 個 Chunk 排序，排不進的在最後），因為焦點先寫的才是頁面主要談的（範例也補在焦點最前面），不是字面對得最好的；每個檔案先取最好的一個再輪下一個，每檔最多 3 個、全部最多 6 個，免得問到 `package.json` 的問題被它的 Chunk 佔滿；檢索詞找不到的檔案取它的第一個 Chunk；每個檔案最好的那個 Chunk 保證排進圖關係補充之前的名額（名額比檔案少時，融合排名較前的優先），擠下的往後排（融合時只被一種檢索找到的 Chunk 輸給兩種都找到的，很長的 `AppHost.cs` 與補進別頁焦點的範例都曾因此掉出名單）；回應的 `named` 是這份名單的數量）；一個查詢最多點名 16 個名稱，一個名稱指到的檔案超過剩下的名額（共 40 個）就不算，資料夾含其下各層的檔案，只寫檔名而有好幾個、根目錄又沒有的（每個專案都有的 `appsettings.json`）也不算；只寫檔名時要是有索引的語言的副檔名，網址不算，`a.go:42`、`a.go#L42` 這類行號，包住名稱的引號、括號與粗體，以及開頭的 `./` 都會去掉：Wiki 頁面的 focus 會列出它談的檔案，光靠字面常排不進來（eShop 的 `AppHost.cs` 輸給每個專案的 `Extensions.cs`）；前 5 名所在檔案 import 的檔案（最多 40 個）再以全文檢索取最多 10 個 Chunk，補進最後 2 個名額，不取代前面的結果；回應的 `graph` 是補進結果的數量。命中檔頭（第一個宣告之前的授權、package 與 import）時，與緊接的宣告 Chunk 合成一筆，排在兩者較前的名次：檔頭本身沒有程式，它的 import 卻常讓它勝出）。設了 Embedding 模型時，每個沒查過的查詢呼叫一次 Embedding（查詢向量最多快取一小時），不受問答的每人同時上限限制；Embedding 的呼叫速率用 `DEEPCODE_LLM_RPM` 限制（與 Chat 分開計算） |
 | `GET` | `/api/repos/{id}/wiki` | Wiki 頁面與引用；概覽頁另有 `diagram`（import 關係圖的 Mermaid 原始碼，沒有 import 關係時省略），節之下的頁面另有 `parent`（所屬節頁面的 slug） |
-| `POST` | `/api/chat/stream` | SSE 問答（`repo.chat`），body `{"repoId", "conversationId", "question", "deep"}`；事件為 `conversation`、`search`（Deep 模式每多一輪檢索一次）、`evidence`、`delta`、`done`、`error`；答案被檢查後重寫時，再送一次 `search`（有多搜一輪時）、`evidence` 與 `delta`，前端收到 `evidence` 就清掉已顯示的答案；重寫失敗時，在重寫已送出的事件（`search`、`evidence`，可能還有部分 `delta`）之後再送一次 `evidence`（原本答案的來源），之後不再有 `delta`，`done` 帶回原本的答案 |
+| `POST` | `/api/chat/stream` | SSE 問答（`repo.chat`），body `{"repoId", "conversationId", "question", "deep", "codemap"}`；事件為 `conversation`、`search`（Deep 與 Codemap 模式每多一輪檢索一次）、`evidence`、`delta`、`drawing`（Codemap 模式取代 `delta`：每產生約 500 位元組一次，帶已產生的字元數）、`done`（Codemap 模式的訊息另有 `codemap`，整張圖）、`error`；答案被檢查後重寫時，再送一次 `search`（有多搜一輪時）、`evidence` 與 `delta`，前端收到 `evidence` 就清掉已顯示的答案；重寫失敗時，在重寫已送出的事件（`search`、`evidence`，可能還有部分 `delta`）之後再送一次 `evidence`（原本答案的來源），之後不再有 `delta`，`done` 帶回原本的答案 |
 | `GET` | `/api/conversations/{id}` | 自己的對話紀錄 |
 | `GET` | `/api/jobs/{id}` | 工作進度 |
 | `GET` `POST` `PATCH` `DELETE` | `/api/admin/users[/{id}]` | 使用者（`users.manage`） |
@@ -339,8 +369,8 @@ internal/
       store/             目錄新增 Repository 的 transaction 裡呼叫 role 的 store，加進匯入者的角色
     server/              HTTP 交付層：router 組合以下各組路由
       httpx/             共用：錯誤對應、JSON 綁定、Host / Content-Type 防護、session 與權限檢查、SSE（ping、重新驗證 session）
-      authapi/           登入、註冊、登出、目前使用者、變更密碼
-      repoapi/           Repository、程式碼、搜尋、Wiki、問答（handler 只解析請求、檢查權限、呼叫領域套件）
+      authapi/           登入、註冊、登出、目前使用者、變更密碼、個人存取權杖、OAuth 授權伺服器（中繼資料、動態註冊、同意、換發權杖）
+      repoapi/           Repository、程式碼、搜尋、Wiki、問答、MCP 伺服器（/mcp）（handler 只解析請求、檢查權限、呼叫領域套件）
       adminapi/          後台：使用者、角色、Git 伺服器、工作與即時輸出
       webui/             內嵌的 React build（SPA fallback）
   access/                帳號與權限；各套件只放規則與流程，SQL 都在自己的 store/（持久化層）
@@ -350,6 +380,10 @@ internal/
       store/             角色、權限與 Repository 範圍的讀寫、使用者各角色的授權、內建角色的 id
     session/             登入、註冊（開關與次數限制）、變更密碼、session、Principal
       store/             session（只存 token 的 SHA-256）與註冊開關的讀寫
+    token/               /mcp 的 Bearer 權杖：個人存取權杖的建立與撤銷、OAuth 發給應用程式的 access token、驗證
+      store/             api_tokens 的讀寫（只存 SHA-256）
+    oauth/               MCP 的 OAuth 2.1 授權伺服器：動態註冊、授權碼與 PKCE S256、refresh token 的換發與撤銷、redirect URI 規則
+      store/             用戶端、授權碼與 refresh token 的讀寫（授權碼與 refresh token 只存雜湊）
   platform/              共用基礎設施
     storage/             SQLite 開啟、migrations（之後的依業務放子資料夾，依檔名編號排序）、備份、IN 查詢的佔位符、SQL 函式 cuid()
       cuid/              產生 CUID2：Repository 的公開識別碼
@@ -385,7 +419,8 @@ internal/
       store/             FTS5（BM25 權重）、定義 Symbol 的 Chunk、Symbol 搜尋、使用名稱的程式碼、依 id 讀 Chunk
     evidence/            Evidence Pack 與引用驗證
     chat/                問答與對話、Deep 模式（多輪檢索與背景 Wiki 頁）
-      store/             對話與訊息（含引用）的讀寫、歷史訊息的分段、已定義的名稱、背景用的 Wiki 頁
+      store/             對話與訊息（含引用與 Codemap）的讀寫、歷史訊息的分段、已定義的名稱、背景用的 Wiki 頁
+    codemap/             Codemap：請模型畫出回答問題的程式路徑（trace 與編號的位置），把位置對上檢索到的程式碼，轉成 Markdown
     wiki/                Wiki 規劃、沿用上一版未受影響的頁面、並行撰寫與讀取；outline/ 頁數、分節與規劃的解析，steering/ 讀 .devin/wiki.json，change/ 逐行比對變更、算出沿用的引用移到哪裡與新檔案所屬的分組（含 manifest 的規則），fanout/ 限量並行
       store/             頁面、引用與語言的讀寫（規劃與寫完的頁各在一個 transaction）、Wiki 狀態、沿用的基準版本、要顯示的版本、規劃讀的檔案與宣告
 test/                    e2e、檢索評測（eval）、基準量測（bench）、資料夾與檔案長度規則、依賴方向檢查
@@ -403,13 +438,13 @@ web/src/                 React + TypeScript + Vite；Tailwind CSS v4 + shadcn/ui
       diagram/           Mermaid 圖（第一次用到才載入，顏色取自主題 token，切換主題時重畫）
     repo/                工作進度與階段判斷（jobStage.ts）、Repository 無法開啟時的提示（RepoNotice）、來源連結格式
       provider/          Git 伺服器的名稱與標誌
-    chat/                提問框、檢索步驟
+    chat/                提問框（Fast、Deep、Codemap）、檢索步驟；codemap/ Codemap 的列表與圖表
   pages/                 路由頁面，各自取資料、管狀態；多頁共用的 Frame、SiteHeader、useRepo、NotFoundPage 與 ErrorPage（路由出錯時的畫面）放在 pages/
-    routes/              TanStack Router 的檔案路由，把網址的參數交給頁面：__root（等 session、換頁時淡入、404 與錯誤畫面）、/、(session)/ 的 /login 與 /signup（?next=）、repos/ 的 /repos/$id（?page=，或 ?file=&L=&s=）與 /repos/$id/search/{-$conversationId}、/admin/{-$section}/{-$id}；不合格的 Repository 或對話 id 以 notFound() 顯示 404。Vite 外掛由這些檔案產生 web/src/routeTree.gen.ts：納入版本控制（tsc 在 vite build 之前就要讀它），Biome 不檢查
+    routes/              TanStack Router 的檔案路由，把網址的參數交給頁面：__root（等 session、換頁時淡入、404 與錯誤畫面）、/、(session)/ 的 /login、/signup（?next=）與 /tokens，OAuth 同意頁 /oauth/authorize（與其他頁一樣先登入），repos/ 的 /repos/$id（?page=，或 ?file=&L=&s=）與 /repos/$id/search/{-$conversationId}、/admin/{-$section}/{-$id}；不合格的 Repository 或對話 id 以 notFound() 顯示 404。Vite 外掛由這些檔案產生 web/src/routeTree.gen.ts：納入版本控制（tsc 在 vite build 之前就要讀它），Biome 不檢查
     home/                Repository 列表、搜尋與加入
     repo/                Repository 頁：Wiki（wiki/）、檔案與 Symbol（files/）、同步
       search/            問答：串流回答與引用的檔案
-    session/             登入與註冊頁、session（未登入時導向登入）
+    session/             登入與註冊頁、session（未登入時導向登入）；authorize/ OAuth 同意頁，tokens/ 存取權杖與 MCP（設定方式、權杖、已授權的應用程式）
     admin/               後台：工作（即時列表、詳細與輸出）、使用者（含註冊開關）、角色、Git 伺服器
 ```
 

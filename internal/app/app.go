@@ -14,10 +14,14 @@ import (
 
 	"deepcode/internal/access/account"
 	accountstore "deepcode/internal/access/account/store"
+	"deepcode/internal/access/oauth"
+	oauthstore "deepcode/internal/access/oauth/store"
 	"deepcode/internal/access/role"
 	rolestore "deepcode/internal/access/role/store"
 	"deepcode/internal/access/session"
 	sessionstore "deepcode/internal/access/session/store"
+	"deepcode/internal/access/token"
+	tokenstore "deepcode/internal/access/token/store"
 	"deepcode/internal/app/importer"
 	"deepcode/internal/app/server"
 	"deepcode/internal/app/server/adminapi"
@@ -85,6 +89,7 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	accounts := &account.Service{Store: &accountstore.Store{DB: db}}
 	roles := &role.Service{Store: &rolestore.Store{DB: db}}
 	sessions := session.New(&sessionstore.Store{DB: db}, accounts, roles, cfg.SessionTTL)
+	tokens := &token.Service{Store: &tokenstore.Store{DB: db}, Roles: roles}
 
 	p := pipeline{queue: queue, catalog: cat, syncEvery: cfg.SyncEvery, indexer: &indexer.Indexer{
 		Store: &indexstore.Store{DB: db}, Graph: graphs,
@@ -100,8 +105,8 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 			Parallel: cfg.WikiParallel, MaxPages: cfg.WikiMaxPages}
 	}
 	handler, err := server.Router(
-		&authapi.API{Sessions: sessions},
-		&repoapi.API{Sessions: sessions, Catalog: cat, Importer: &importer.Service{Catalog: cat}, Servers: servers, Queue: queue,
+		&authapi.API{Sessions: sessions, Tokens: tokens, OAuth: &oauth.Service{Store: &oauthstore.Store{DB: db}, Tokens: tokens}},
+		&repoapi.API{Sessions: sessions, Tokens: tokens, Catalog: cat, Importer: &importer.Service{Catalog: cat}, Servers: servers, Queue: queue,
 			Retriever: retriever, Chat: conversations, Wiki: wiki.Reader{Store: wikis, Graph: graphs}},
 		&adminapi.API{Sessions: sessions, Accounts: accounts, Roles: roles, Servers: servers, Catalog: cat, Queue: queue, Bus: bus},
 		gin.H{"status": "ok", "chatModel": cfg.ChatModel, "embeddingModel": cfg.EmbedModel},

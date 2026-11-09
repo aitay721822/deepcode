@@ -1,5 +1,6 @@
 import { motion } from 'motion/react'
 import { memo, useState } from 'react'
+import { CodemapView } from '../../../components/chat/codemap/CodemapView'
 import { linkMarkers } from '../../../components/source/citations'
 import { Markdown } from '../../../components/source/Markdown'
 import { Card } from '../../../components/ui/display/card'
@@ -19,6 +20,7 @@ const progress: Partial<Record<Turn['status'], string>> = {
   answering: '正在撰寫回答…',
   done: '回答已完成。',
 }
+const mapProgress: typeof progress = { ...progress, answering: '正在繪製 Codemap…', done: 'Codemap 已完成。' }
 
 /**
  * One question and its answer, linked as it streams in (sha: the conversation's commit).
@@ -29,12 +31,14 @@ export const ChatTurn = memo(function ChatTurn({
   first,
   repo,
   sha,
+  selected,
   onCite,
 }: {
   turn: Turn
   first: boolean
   repo: Repo
   sha: string
+  selected: Citation | null // the citation on show beside the answers: given to a code map's turn only
   onCite: (c: Citation) => void
 }) {
   const [asked] = useState(turn.status === 'searching') // asked on this page, not reopened with the conversation
@@ -51,11 +55,24 @@ export const ChatTurn = memo(function ChatTurn({
         <h2 className={`mt-11 text-[25px] tracking-[-0.015em] ${question}`}>{turn.question}</h2>
       )}
       <Card className="gap-0 px-5 py-4">
-        {asked && <Status className="sr-only select-none">{progress[turn.status]}</Status>}
-        {turn.answer ? (
+        {asked && (
+          <Status className="sr-only select-none">
+            {(turn.mode === 'codemap' ? mapProgress : progress)[turn.status]}
+          </Status>
+        )}
+        {turn.codemap ? (
+          <CodemapView map={turn.codemap} repo={repo} top={first ? 'h2' : 'h3'} selected={selected} onCite={onCite} />
+        ) : turn.answer ? (
           <Markdown text={shown.text} citations={cited} repo={repo} onCite={onCite} top={first ? 'h2' : 'h3'} />
         ) : turn.status === 'searching' || turn.status === 'answering' ? (
-          <SkeletonText />
+          <>
+            {turn.drawn > 0 && (
+              <p className="mb-3 font-mono text-[12.5px] text-muted-foreground" aria-hidden="true">
+                正在繪製 Codemap…已產生 {turn.drawn.toLocaleString('zh-TW')} 字元
+              </p>
+            )}
+            <SkeletonText />
+          </>
         ) : null}
         {turn.status === 'error' && (
           <p className="text-sm text-destructive" role={asked ? 'alert' : undefined}>

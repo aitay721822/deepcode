@@ -1,6 +1,7 @@
 import { createRouter, RouterProvider, stringifySearchWith } from '@tanstack/react-router'
 import { MotionConfig } from 'motion/react'
 import { routeTree } from './routeTree.gen'
+import type { AskMode } from './types/repo/chat'
 
 /** The routes are the files in pages/routes; the Vite plugin writes routeTree.gen.ts from them. */
 const router = createRouter({
@@ -17,10 +18,10 @@ declare module '@tanstack/react-router' {
   interface Register {
     router: typeof router
   }
-  /** What the repository page hands the search page in the history entry: a question to ask. */
+  /** What the repository page hands the search page in the history entry: a question to ask, and how. */
   interface HistoryState {
     question?: string
-    deep?: boolean
+    mode?: AskMode
   }
 }
 

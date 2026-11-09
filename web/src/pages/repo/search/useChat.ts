@@ -1,7 +1,7 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { getConversation, streamChat } from '../../../api/repo/chat'
-import type { ConversationRef, Message, Source } from '../../../types/repo/chat'
+import type { AskMode, Codemap, ConversationRef, Message, Source } from '../../../types/repo/chat'
 import type { Citation } from '../../../types/repo/code'
 import type { Repo } from '../../../types/repo/repo'
 
@@ -11,6 +11,9 @@ export type Turn = {
   citations: Citation[]
   sources: Source[]
   rounds: string[] // what a deep answer searched for again, round by round
+  mode?: AskMode // how it was asked, when on this page
+  codemap?: Codemap // an answer drawn as a code map
+  drawn: number // how much of a code map has come, in characters, while it is drawn
   status: 'searching' | 'answering' | 'done' | 'error' | 'interrupted' // interrupted: the stream closed before done or error
   error?: string
 }
@@ -25,6 +28,7 @@ function toTurns(messages: Message[]): Turn[] {
         citations: [],
         sources: [],
         rounds: [],
+        drawn: 0,
         status: 'error',
         error: '這個問題沒有已儲存的回答。',
       })
@@ -32,6 +36,7 @@ function toTurns(messages: Message[]): Turn[] {
       Object.assign(turns[turns.length - 1], {
         answer: m.content,
         citations: m.citations,
+        codemap: m.codemap,
         status: 'done',
         error: undefined,
       })
@@ -84,10 +89,13 @@ export function useChat(repoId: string, conversationId?: string) {
     setSelected(c)
   }, [])
 
-  async function ask(repo: Repo, question: string, deep: boolean) {
+  async function ask(repo: Repo, question: string, mode: AskMode) {
     pinned.current = false
     setLoadError('') // a new question: the stored conversation's load error no longer applies
-    setTurns((ts) => [...ts, { question, answer: '', citations: [], sources: [], rounds: [], status: 'searching' }])
+    setTurns((ts) => [
+      ...ts,
+      { question, answer: '', citations: [], sources: [], rounds: [], mode, drawn: 0, status: 'searching' },
+    ])
     const ctl = new AbortController()
     abort.current = ctl
     // The answer re-renders as markdown, so streamed text lands at most once per frame, not per token.
@@ -102,7 +110,13 @@ export function useChat(repoId: string, conversationId?: string) {
     }
     try {
       await streamChat(
-        { repoId: repo.id, conversationId: conv?.id ?? 0, question, deep },
+        {
+          repoId: repo.id,
+          conversationId: conv?.id ?? 0,
+          question,
+          deep: mode === 'deep',
+          codemap: mode === 'codemap',
+        },
         ({ event, data }) => {
           if (event === 'conversation') {
             setConv(data)
@@ -123,12 +137,20 @@ export function useChat(repoId: string, conversationId?: string) {
             text = ''
             update((t) => ({ ...t, sources: data.sources, answer: '' }))
             select(data.sources[0])
+          } else if (event === 'drawing') {
+            update((t) => ({ ...t, status: 'answering', drawn: data.chars }))
           } else if (event === 'delta') {
             text += data
             frame ||= requestAnimationFrame(flush)
           } else if (event === 'done') {
             flush()
-            update((t) => ({ ...t, status: 'done', answer: data.content, citations: data.citations }))
+            update((t) => ({
+              ...t,
+              status: 'done',
+              answer: data.content,
+              citations: data.citations,
+              codemap: data.codemap,
+            }))
             select(data.citations[0])
           } else if (event === 'error') {
             flush()

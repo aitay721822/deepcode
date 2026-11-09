@@ -1,6 +1,7 @@
 // Package repoapi serves the repositories a signed-in user may see: the
-// catalog, code browsing and search, the wiki and the assistant. A job's
-// error reaches only users with jobs.view in full (jobView).
+// catalog, code browsing and search, the wiki and the assistant; to the
+// browser under /api, and to agents as MCP tools (MountMCP). A job's error
+// reaches only users with jobs.view in full (jobView).
 package repoapi
 
 import (
@@ -8,6 +9,7 @@ import (
 
 	"deepcode/internal/access/role"
 	"deepcode/internal/access/session"
+	"deepcode/internal/access/token"
 	"deepcode/internal/app/importer"
 	"deepcode/internal/app/server/httpx"
 	"deepcode/internal/knowledge/chat"
@@ -22,6 +24,7 @@ import (
 // user's permissions, calls them and turns their results into responses.
 type API struct {
 	Sessions  *session.Service // to check the asker of a long answer again
+	Tokens    *token.Service   // who an agent's bearer token signs in
 	Catalog   *catalog.Catalog
 	Importer  *importer.Service
 	Servers   *gitserver.Service

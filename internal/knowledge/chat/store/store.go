@@ -23,6 +23,7 @@ type Message struct {
 	Role      string              `json:"role"`
 	Content   string              `json:"content"`
 	Citations []evidence.Citation `json:"citations"`
+	Codemap   json.RawMessage     `json:"codemap,omitempty"` // an answer drawn as a code map: the map
 	CreatedAt string              `json:"createdAt"`
 }
 
@@ -91,16 +92,28 @@ func (s *Store) History(ctx context.Context, conv int64, turns int) ([]ai.Messag
 
 // AddMessage stores one message and returns it as stored.
 func (s *Store) AddMessage(ctx context.Context, conv int64, role, content string, cites []evidence.Citation) (Message, error) {
-	if cites == nil {
-		cites = []evidence.Citation{}
+	return s.add(ctx, Message{Role: role, Content: content, Citations: cites}, conv)
+}
+
+// AddMap stores an answer drawn as code map codemap, its text beside it.
+func (s *Store) AddMap(ctx context.Context, conv int64, content string, cites []evidence.Citation, codemap json.RawMessage) (Message, error) {
+	return s.add(ctx, Message{Role: "assistant", Content: content, Citations: cites, Codemap: codemap}, conv)
+}
+
+func (s *Store) add(ctx context.Context, m Message, conv int64) (Message, error) {
+	if m.Citations == nil {
+		m.Citations = []evidence.Citation{}
 	}
-	citesJSON, err := json.Marshal(cites)
+	citesJSON, err := json.Marshal(m.Citations)
 	if err != nil {
 		return Message{}, err
 	}
-	m := Message{Role: role, Content: content, Citations: cites}
-	err = s.DB.QueryRowContext(ctx, `INSERT INTO messages(conversation_id, role, content, citations) VALUES (?, ?, ?, ?) RETURNING id, created_at`,
-		conv, role, content, string(citesJSON)).Scan(&m.ID, &m.CreatedAt)
+	var codemap *string // NULL for a message that is no map
+	if m.Codemap != nil {
+		codemap = new(string(m.Codemap))
+	}
+	err = s.DB.QueryRowContext(ctx, `INSERT INTO messages(conversation_id, role, content, citations, codemap) VALUES (?, ?, ?, ?, ?)
+		RETURNING id, created_at`, conv, m.Role, m.Content, string(citesJSON), codemap).Scan(&m.ID, &m.CreatedAt)
 	return m, err
 }
 
@@ -119,7 +132,7 @@ func (s *Store) Conversation(ctx context.Context, id, userID int64) (Conversatio
 
 // Messages returns all of the conversation's messages, oldest first.
 func (s *Store) Messages(ctx context.Context, conv int64) ([]Message, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, role, content, citations, created_at FROM messages WHERE conversation_id = ? ORDER BY id`, conv)
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, role, content, citations, codemap, created_at FROM messages WHERE conversation_id = ? ORDER BY id`, conv)
 	if err != nil {
 		return nil, err
 	}
@@ -128,8 +141,12 @@ func (s *Store) Messages(ctx context.Context, conv int64) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var cites string
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &cites, &m.CreatedAt); err != nil {
+		var codemap sql.NullString
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &cites, &codemap, &m.CreatedAt); err != nil {
 			return nil, err
+		}
+		if codemap.Valid && json.Valid([]byte(codemap.String)) {
+			m.Codemap = json.RawMessage(codemap.String)
 		}
 		if json.Unmarshal([]byte(cites), &m.Citations) != nil || m.Citations == nil {
 			m.Citations = []evidence.Citation{} // a damaged row reads as none, not null

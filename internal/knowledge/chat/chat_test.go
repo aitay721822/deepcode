@@ -449,3 +449,47 @@ func TestLanguage(t *testing.T) {
 		t.Error("the footer is not in the answer's language")
 	}
 }
+
+// TestCodemap: a code map is drawn with drawing events, its locations linked
+// (a path's brackets escaped) and cited, and stored to be read back; a model
+// that draws no map twice is told as errMap.
+func TestCodemap(t *testing.T) {
+	ctx := context.Background()
+	db, _ := storage.Open(ctx, filepath.Join(t.TempDir(), "m.db"))
+	defer db.Close()
+	db.Exec(`INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x');
+		INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r');
+		INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready');
+		UPDATE repositories SET ready_snapshot_id = 1;
+		INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'app/[slug]/page.tsx', 1, 1, 'export default function Page() {}', 'h')`)
+	drawn := `{"title":"Page","description":"` + strings.Repeat("x", 600) + `","traces":[{"title":"Render","locations":[{"title":"Page",` +
+		`"path":"app/[slug]/page.tsx","line":1,"code":"export default function Page() {}"}]}]}`
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Messages []ai.Message }
+		json.NewDecoder(r.Body).Decode(&body)
+		reply := "DONE" // the deep rounds' question
+		if strings.Contains(body.Messages[0].Content, "drawing a code map") {
+			reply = drawn
+		}
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
+	}))
+	defer model.Close()
+	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
+	var events []string
+	var done Message
+	err := s.Ask(ctx, Request{RepoID: 1, Question: "How is a Page rendered?", Codemap: true, UserID: 1}, func(event string, data any) {
+		if events = append(events, event); event == "done" {
+			done = data.(Message)
+		}
+	})
+	stored, _ := s.Store.Messages(ctx, 1)
+	if err != nil || !slices.Contains(events, "drawing") || !strings.Contains(done.Content, `- **1a** Page [app/\[slug\]/page.tsx:1-1](`) ||
+		len(done.Citations) != 1 || len(stored) != 2 || !strings.Contains(string(stored[1].Codemap), `"id":"1a"`) {
+		t.Fatalf("%v %v %+v %+v", err, events, done, stored)
+	}
+	drawn = "no map"
+	if err := s.Ask(ctx, Request{RepoID: 1, Question: "How is a Page rendered?", Codemap: true, UserID: 1}, func(string, any) {}); !errors.Is(err, errMap) {
+		t.Fatalf("no map twice: %v", err)
+	}
+}

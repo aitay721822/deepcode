@@ -115,7 +115,21 @@ func Readable(c *gin.Context, repoID int64, notFound error) bool {
 // cannot read it, and SameSite=Lax, so other sites cannot post with it.
 func SetSession(c *gin.Context, token string, ttl time.Duration) {
 	http.SetCookie(c.Writer, &http.Cookie{Name: sessionCookie, Value: token, Path: "/", MaxAge: int(ttl.Seconds()),
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"})
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: secure(c)})
+}
+
+// secure reports whether the request came over TLS, here or to a proxy.
+func secure(c *gin.Context) bool {
+	return c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"
+}
+
+// BaseURL is this server's address as the client reached it, which OAuth
+// metadata names its endpoints by.
+func BaseURL(c *gin.Context) string {
+	if secure(c) {
+		return "https://" + c.Request.Host
+	}
+	return "http://" + c.Request.Host
 }
 
 // ClearSession removes the session cookie.

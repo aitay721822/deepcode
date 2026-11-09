@@ -4,14 +4,17 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
 	"deepcode/internal/knowledge/chat/store"
+	"deepcode/internal/knowledge/codemap"
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/platform/ai"
@@ -37,6 +40,7 @@ var (
 	errIndexing = errors.New("Repository 仍在建立索引中")
 	errBusy     = fmt.Errorf("同時最多只能產生 %d 個回答；請等其中一個完成後再提問", maxAsking)
 	errModel    = errors.New("語言模型沒有回應；請稍後再試")
+	errMap      = errors.New("語言模型沒有畫出有效的 Codemap；請再試一次，或改用一般問答")
 )
 
 // Explain is what the asker is told about err from Ask: one of the errors
@@ -45,7 +49,7 @@ var (
 // failures and unexplained errors do; what the asker can act on, or the
 // startup log already says (no chat model), does not.
 func Explain(err error) (msg string, logIt bool) {
-	for _, known := range []error{ErrNotFound, errQuestion, errNoModel, errIndexing, errBusy} {
+	for _, known := range []error{ErrNotFound, errQuestion, errNoModel, errIndexing, errBusy, errMap} {
 		if errors.Is(err, known) {
 			return known.Error(), false
 		}
@@ -60,8 +64,9 @@ type Request struct {
 	RepoID         int64  `json:"-"`              // the row id; the API takes the public id
 	ConversationID int64  `json:"conversationId"` // 0 starts one; else one of UserID's
 	Question       string `json:"question"`
-	Deep           bool   `json:"deep"` // search more rounds and read a wiki page first (deep.go)
-	UserID         int64  `json:"-"`    // who asks
+	Deep           bool   `json:"deep"`    // search more rounds and read a wiki page first (deep.go)
+	Codemap        bool   `json:"codemap"` // answer with a code map (package codemap), from deep evidence
+	UserID         int64  `json:"-"`       // who asks
 }
 
 // Emit sends one server-sent event.
@@ -81,6 +86,7 @@ const (
 // may the draft written in its place, is followed by search (its one more
 // round, if it searched), evidence and delta* again: the answer written anew;
 // a rewrite that fails is followed by evidence once more, the standing draft's.
+// A code map (drawMap) emits drawing* in place of delta*.
 func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	q := strings.TrimSpace(req.Question)
 	if q == "" || utf8.RuneCountInString(q) > maxQuestion {
@@ -120,7 +126,7 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 		return err
 	}
 	budget, background, rounds := evidenceChars, "", 1
-	if req.Deep {
+	if req.Deep || req.Codemap {
 		if res, rounds, err = s.deepen(ctx, conv.snap.ID, repo, asked, res, emit); err != nil {
 			return err
 		}
@@ -133,6 +139,15 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	show := func(used []retrieval.Hit, res retrieval.Result, rounds int) {
 		emit("evidence", map[string]any{"sources": sourceList(used), "fts": res.FTS, "vector": res.Vector, "symbol": res.Symbol,
 			"named": res.Named, "graph": res.Graph, "rounds": rounds})
+	}
+	link := func(c evidence.Citation) string {
+		return gitserver.SourceURL(r.Provider, r.URL, conv.snap.CommitSHA, c.Path, c.StartLine, c.EndLine)
+	}
+	if req.Codemap {
+		sources, used := evidence.Format(res.Hits, budget)
+		show(used, res, rounds)
+		return s.drawMap(ctx, conv.id, codemap.Request{Repo: repo, Commit: conv.snap.CommitSHA, History: history, Background: background,
+			Sources: sources, Question: q, Language: answerLanguage(q, history), Hits: used}, link, emit)
 	}
 	write := func(res retrieval.Result, rounds int, note string) (answer, sources string, used []retrieval.Hit, err error) {
 		sources, used = evidence.Format(res.Hits, budget)
@@ -171,13 +186,52 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 		}
 		break
 	}
-	content, cites := evidence.LinkCitations(answer, used, func(c evidence.Citation) string {
-		return gitserver.SourceURL(r.Provider, r.URL, conv.snap.CommitSHA, c.Path, c.StartLine, c.EndLine)
-	})
+	content, cites := evidence.LinkCitations(answer, used, link)
 	if len(cites) == 0 && answer != noEvidence {
 		content += "\n\n" + uncited(answerLanguage(q, history))
 	}
 	msg, err := s.Store.AddMessage(ctx, conv.id, "assistant", content, cites)
+	if err != nil {
+		return err
+	}
+	emit("done", msg)
+	return nil
+}
+
+// drawMap answers r's question with a code map, telling how much of the
+// model's replies has come as drawing events, about one every 500 bytes. The
+// map is stored beside its text, which links each location's line as an
+// answer's citations are linked; a map without traces (the model found nothing
+// to map) is answered as having no evidence.
+func (s *Service) drawMap(ctx context.Context, conv int64, r codemap.Request, link func(evidence.Citation) string, emit Emit) error {
+	content, cites, drawn := noEvidence, []evidence.Citation{}, 0
+	var stored json.RawMessage
+	if len(r.Hits) > 0 {
+		m, err := codemap.Draw(ctx, s.Chat, r, func(n int) {
+			if n-drawn >= 500 {
+				drawn = n
+				emit("drawing", map[string]any{"chars": n})
+			}
+		})
+		if errors.Is(err, codemap.ErrInvalid) {
+			return errMap
+		} else if err != nil {
+			return fmt.Errorf("%w: %w", errModel, err)
+		}
+		if len(m.Traces) > 0 {
+			content = m.Markdown(func(l codemap.Location) string {
+				c := evidence.Citation{Path: l.Path, StartLine: l.Line, EndLine: l.Line}
+				if !slices.Contains(cites, c) {
+					cites = append(cites, c)
+				}
+				return evidence.Link(c, link(c))
+			})
+			if stored, err = json.Marshal(m); err != nil {
+				return err
+			}
+		}
+	}
+	msg, err := s.Store.AddMap(ctx, conv, content, cites, stored)
 	if err != nil {
 		return err
 	}

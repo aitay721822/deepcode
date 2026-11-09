@@ -12,6 +12,8 @@ import { Route as rootRouteImport } from './pages/routes/__root'
 import { Route as IndexRouteImport } from './pages/routes/index'
 import { Route as sessionLoginRouteImport } from './pages/routes/(session)/login'
 import { Route as sessionSignupRouteImport } from './pages/routes/(session)/signup'
+import { Route as sessionTokensRouteImport } from './pages/routes/(session)/tokens'
+import { Route as OauthAuthorizeRouteImport } from './pages/routes/oauth.authorize'
 import { Route as AdminChar123SectionChar125Char123IdChar125RouteImport } from './pages/routes/admin.{-$section}.{-$id}'
 import { Route as ReposIdIndexRouteImport } from './pages/routes/repos/$id.index'
 import { Route as ReposIdSearchChar123ConversationIdChar125RouteImport } from './pages/routes/repos/$id.search.{-$conversationId}'
@@ -29,6 +31,16 @@ const sessionLoginRoute = sessionLoginRouteImport.update({
 const sessionSignupRoute = sessionSignupRouteImport.update({
   id: '/(session)/signup',
   path: '/signup',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const sessionTokensRoute = sessionTokensRouteImport.update({
+  id: '/(session)/tokens',
+  path: '/tokens',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthAuthorizeRoute = OauthAuthorizeRouteImport.update({
+  id: '/oauth/authorize',
+  path: '/oauth/authorize',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminChar123SectionChar125Char123IdChar125Route =
@@ -53,6 +65,8 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof sessionLoginRoute
   '/signup': typeof sessionSignupRoute
+  '/tokens': typeof sessionTokensRoute
+  '/oauth/authorize': typeof OauthAuthorizeRoute
   '/admin/{-$section}/{-$id}': typeof AdminChar123SectionChar125Char123IdChar125Route
   '/repos/$id/': typeof ReposIdIndexRoute
   '/repos/$id/search/{-$conversationId}': typeof ReposIdSearchChar123ConversationIdChar125Route
@@ -61,6 +75,8 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof sessionLoginRoute
   '/signup': typeof sessionSignupRoute
+  '/tokens': typeof sessionTokensRoute
+  '/oauth/authorize': typeof OauthAuthorizeRoute
   '/admin/{-$section}/{-$id}': typeof AdminChar123SectionChar125Char123IdChar125Route
   '/repos/$id': typeof ReposIdIndexRoute
   '/repos/$id/search/{-$conversationId}': typeof ReposIdSearchChar123ConversationIdChar125Route
@@ -70,6 +86,8 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/(session)/login': typeof sessionLoginRoute
   '/(session)/signup': typeof sessionSignupRoute
+  '/(session)/tokens': typeof sessionTokensRoute
+  '/oauth/authorize': typeof OauthAuthorizeRoute
   '/admin/{-$section}/{-$id}': typeof AdminChar123SectionChar125Char123IdChar125Route
   '/repos/$id/': typeof ReposIdIndexRoute
   '/repos/$id/search/{-$conversationId}': typeof ReposIdSearchChar123ConversationIdChar125Route
@@ -80,6 +98,8 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/signup'
+    | '/tokens'
+    | '/oauth/authorize'
     | '/admin/{-$section}/{-$id}'
     | '/repos/$id/'
     | '/repos/$id/search/{-$conversationId}'
@@ -88,6 +108,8 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/signup'
+    | '/tokens'
+    | '/oauth/authorize'
     | '/admin/{-$section}/{-$id}'
     | '/repos/$id'
     | '/repos/$id/search/{-$conversationId}'
@@ -96,6 +118,8 @@ export interface FileRouteTypes {
     | '/'
     | '/(session)/login'
     | '/(session)/signup'
+    | '/(session)/tokens'
+    | '/oauth/authorize'
     | '/admin/{-$section}/{-$id}'
     | '/repos/$id/'
     | '/repos/$id/search/{-$conversationId}'
@@ -105,6 +129,8 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   sessionLoginRoute: typeof sessionLoginRoute
   sessionSignupRoute: typeof sessionSignupRoute
+  sessionTokensRoute: typeof sessionTokensRoute
+  OauthAuthorizeRoute: typeof OauthAuthorizeRoute
   AdminChar123SectionChar125Char123IdChar125Route: typeof AdminChar123SectionChar125Char123IdChar125Route
   ReposIdIndexRoute: typeof ReposIdIndexRoute
   ReposIdSearchChar123ConversationIdChar125Route: typeof ReposIdSearchChar123ConversationIdChar125Route
@@ -131,6 +157,20 @@ declare module '@tanstack/react-router' {
       path: '/signup'
       fullPath: '/signup'
       preLoaderRoute: typeof sessionSignupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/(session)/tokens': {
+      id: '/(session)/tokens'
+      path: '/tokens'
+      fullPath: '/tokens'
+      preLoaderRoute: typeof sessionTokensRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth/authorize': {
+      id: '/oauth/authorize'
+      path: '/oauth/authorize'
+      fullPath: '/oauth/authorize'
+      preLoaderRoute: typeof OauthAuthorizeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/{-$section}/{-$id}': {
@@ -161,6 +201,8 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   sessionLoginRoute: sessionLoginRoute,
   sessionSignupRoute: sessionSignupRoute,
+  sessionTokensRoute: sessionTokensRoute,
+  OauthAuthorizeRoute: OauthAuthorizeRoute,
   AdminChar123SectionChar125Char123IdChar125Route:
     AdminChar123SectionChar125Char123IdChar125Route,
   ReposIdIndexRoute: ReposIdIndexRoute,

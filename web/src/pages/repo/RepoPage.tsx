@@ -201,11 +201,11 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                 : `針對 ${repo.owner}/${repo.name} 提問`
           }
           disabled={!ready || !health?.chatModel}
-          onAsk={(q, deep) =>
+          onAsk={(q, mode) =>
             navigate({
               to: '/repos/$id/search/{-$conversationId}',
               params: { id: repo.id, conversationId: undefined },
-              state: { question: q, deep }, // the search page asks it
+              state: { question: q, mode }, // the search page asks it
             })
           }
         />

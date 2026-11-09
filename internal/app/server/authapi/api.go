@@ -1,5 +1,6 @@
 // Package authapi signs users in and out, signs visitors up while sign-up is
-// open, and serves their own account.
+// open, and serves their own account: its password, its access tokens and
+// the apps it lets act for it, which OAuth (MountOAuth) authorizes.
 package authapi
 
 import (
@@ -7,13 +8,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"deepcode/internal/access/oauth"
 	"deepcode/internal/access/role"
 	"deepcode/internal/access/session"
+	"deepcode/internal/access/token"
 	"deepcode/internal/app/server/httpx"
 )
 
-// API serves /auth: sign-in, sign-up, sign-out and the signed-in user's own account.
-type API struct{ Sessions *session.Service }
+// API serves /auth: sign-in, sign-up, sign-out and the signed-in user's own
+// account; and /oauth, for the apps they let act for them.
+type API struct {
+	Sessions *session.Service
+	Tokens   *token.Service
+	OAuth    *oauth.Service
+}
 
 // Mount adds sign-in, sign-up and sign-out to public and the account routes to signedIn.
 func (a *API) Mount(public, signedIn gin.IRouter) {
@@ -23,6 +31,13 @@ func (a *API) Mount(public, signedIn gin.IRouter) {
 	public.POST("/auth/logout", a.logout)
 	signedIn.GET("/auth/me", a.me)
 	signedIn.POST("/auth/password", a.password)
+	signedIn.GET("/auth/tokens", a.tokens)
+	signedIn.POST("/auth/tokens", a.createToken)
+	signedIn.DELETE("/auth/tokens/:id", a.revokeToken)
+	signedIn.GET("/auth/apps", a.apps)
+	signedIn.DELETE("/auth/apps/:client", a.revokeApp)
+	signedIn.GET("/oauth/authorize", a.consentApp)
+	signedIn.POST("/oauth/authorize", a.consent)
 }
 
 // me is the signed-in user as the UI sees them.

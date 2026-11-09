@@ -79,6 +79,9 @@ function Pre({ node, children }: { node?: unknown; children?: ReactNode }) {
   return <pre>{children}</pre>
 }
 
+// The headings top takes the place of: those above it (an h3 under top h2 stays an h3).
+const above = { h2: ['h1', 'h2'], h3: ['h1', 'h2'], h4: ['h1', 'h2', 'h3'], h5: ['h1', 'h2', 'h3', 'h4'] }
+
 /**
  * Renders an answer or wiki page; links into repo's source that citations hold become citation chips. top is the
  * highest heading level the text may take, when the page puts a heading of its own above it (an answer's question).
@@ -94,7 +97,7 @@ export function Markdown({
   citations: Citation[]
   repo: Pick<Repo, 'url'>
   onCite: (c: CiteTarget) => void
-  top?: 'h2' | 'h3'
+  top?: 'h2' | 'h3' | 'h4' | 'h5'
 }) {
   return (
     <div className="markdown">
@@ -102,7 +105,7 @@ export function Markdown({
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[revealHidden]}
         components={{
-          ...(top ? { h1: top, h2: top } : {}),
+          ...(top ? Object.fromEntries(above[top].map((h) => [h, top])) : {}),
           a({ href, children }) {
             const c = parseCitation(href, repo)
             // The model can write a link into the source itself; only one the citations hold was checked.

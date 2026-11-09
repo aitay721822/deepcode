@@ -20,8 +20,8 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
   const started = useRef(false)
   const aside = useRef<HTMLElement>(null)
   const handed = useLocation({ select: (l) => l.state }) // the question the repository page handed over, if any
-  // Read before the hand-over below clears it: a question asked deep keeps the follow-ups deep.
-  const [handedDeep] = useState(() => handed.deep === true)
+  // Read before the hand-over below clears it: follow-ups are asked as the handed question was (deep, a code map).
+  const [handedMode] = useState(() => handed.mode ?? 'fast')
 
   // On one column the cited file sits below every turn: bring it into view. Stable, or every memoised turn would draw again.
   const cite = useCallback(
@@ -40,7 +40,7 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
   // read then, not reasons to look again.
   const handOver = useEffectEvent((repo: Repo) => {
     if (conversationId || started.current) return
-    const { question, deep } = handed
+    const { question, mode } = handed
     if (!question) {
       navigate({ to: '/repos/$id', params: { id: repo.id }, replace: true, resetScroll: false })
       return
@@ -53,7 +53,7 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
       resetScroll: false,
     })
     started.current = true
-    ask(repo, question, deep === true)
+    ask(repo, question, mode ?? 'fast')
   })
   useEffect(() => {
     if (repo) handOver(repo)
@@ -100,8 +100,16 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
           )}
           {loading && <SkeletonText className="mt-6" />}
           {turns.map((t, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: a turn is its place in the conversation; turns are only appended
-            <ChatTurn key={i} turn={t} first={i === 0} repo={repo} sha={conv?.commitSha ?? ''} onCite={cite} />
+            <ChatTurn
+              // biome-ignore lint/suspicious/noArrayIndexKey: a turn is its place in the conversation; turns are only appended
+              key={i}
+              turn={t}
+              first={i === 0}
+              repo={repo}
+              sha={conv?.commitSha ?? ''}
+              selected={t.codemap ? selected : null} // the other turns, memoised, stay put as it changes
+              onCite={cite}
+            />
           ))}
         </section>
         {/* Beside the answers the pane fills the screen under the header, but keeps 16rem: the calc alone leaves a
@@ -120,8 +128,8 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
           placeholder="繼續追問"
           busy={busy}
           disabled={loading}
-          defaultDeep={handedDeep}
-          onAsk={(q, deep) => ask(repo, q, deep)}
+          defaultMode={handedMode}
+          onAsk={(q, mode) => ask(repo, q, mode)}
         />
       )}
     </Frame>

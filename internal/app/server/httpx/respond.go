@@ -12,8 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"deepcode/internal/access/account"
+	"deepcode/internal/access/oauth"
 	"deepcode/internal/access/role"
 	"deepcode/internal/access/session"
+	"deepcode/internal/access/token"
 	"deepcode/internal/app/importer"
 	"deepcode/internal/knowledge/chat"
 	"deepcode/internal/platform/jobs"
@@ -43,8 +45,10 @@ var statuses = []struct {
 	kinds  []error
 	status int
 }{
-	{[]error{catalog.ErrNotFound, jobs.ErrNotFound, chat.ErrNotFound, gitserver.ErrNotFound, role.ErrNotFound, account.ErrNotFound}, http.StatusNotFound},
-	{[]error{catalog.ErrInvalid, gitserver.ErrInvalid, role.ErrInvalid, account.ErrInvalid}, http.StatusBadRequest},
+	{[]error{catalog.ErrNotFound, jobs.ErrNotFound, chat.ErrNotFound, gitserver.ErrNotFound, role.ErrNotFound, account.ErrNotFound,
+		token.ErrNotFound}, http.StatusNotFound},
+	{[]error{catalog.ErrInvalid, gitserver.ErrInvalid, role.ErrInvalid, account.ErrInvalid, token.ErrInvalid, oauth.ErrInvalid},
+		http.StatusBadRequest},
 	{[]error{gitserver.ErrConflict, role.ErrConflict, account.ErrConflict, gitserver.ErrSealed}, http.StatusConflict},
 	{[]error{account.ErrBadLogin, session.ErrNoSession}, http.StatusUnauthorized},
 	{[]error{importer.ErrForbidden, session.ErrSignUpClosed}, http.StatusForbidden},

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { highlight, splitHidden } from '../../../lib/style/highlight'
 import '../source.css'
 
@@ -77,11 +77,24 @@ async function draw(code: string) {
   return run
 }
 
+/** The id a flowchart node was given in code, read from the id Mermaid gives its element (mermaid-3-flowchart-L1a-0). */
+const nodeId = (target: EventTarget) => (target as Element).closest?.('g.node')?.id.match(/flowchart-(.+)-\d+$/)?.[1]
+
 /**
  * A Mermaid diagram: one a wiki page or answer holds, or the one drawn from the import graph (label names it). Text
- * Mermaid cannot read, or that hides characters, shows as the code it is, those characters marked.
+ * Mermaid cannot read, or that hides characters, shows as the code it is, those characters marked. With onNode, a
+ * flowchart's nodes are buttons (focusable, pressed with a click, Enter or Space) that hand onNode their id.
  */
-export function Mermaid({ code, label = '關係圖' }: { code: string; label?: string }) {
+export function Mermaid({
+  code,
+  label = '關係圖',
+  onNode,
+}: {
+  code: string
+  label?: string
+  onNode?: (id: string) => void
+}) {
+  const box = useRef<HTMLDivElement>(null)
   const hides = splitHidden(code).length > 1
   const [svg, setSvg] = useState('')
   const [failed, setFailed] = useState(false)
@@ -114,6 +127,20 @@ export function Mermaid({ code, label = '關係圖' }: { code: string; label?: s
       clearTimeout(wait)
     }
   }, [code, theme, hides])
+  const pressable = !!onNode
+  useEffect(() => {
+    if (!pressable || !svg) return
+    for (const node of box.current?.querySelectorAll('g.node') ?? []) {
+      node.setAttribute('tabindex', '0')
+      node.setAttribute('role', 'button')
+      // Each text node apart: textContent would run a label's lines (split by <br/>) together.
+      const parts: string[] = []
+      for (const walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT); walk.nextNode(); ) {
+        parts.push(walk.currentNode.textContent ?? '')
+      }
+      node.setAttribute('aria-label', parts.join(' ').replace(/\s+/g, ' ').trim())
+    }
+  }, [svg, pressable])
   if (hides || failed) {
     return (
       <pre>
@@ -123,6 +150,30 @@ export function Mermaid({ code, label = '關係圖' }: { code: string; label?: s
     )
   }
   if (!svg) return <div role="status" aria-label="正在繪製關係圖" className="diagram min-h-40 animate-pulse" />
+  if (onNode) {
+    const press = (target: EventTarget) => {
+      const id = nodeId(target)
+      if (id) onNode(id)
+    }
+    return (
+      // biome-ignore lint/a11y/useSemanticElements: a group of buttons (the diagram's nodes), not of a form's fields
+      <div
+        ref={box}
+        role="group"
+        aria-label={label}
+        className="diagram [&_g.node]:cursor-pointer [&_g.node:focus-visible]:outline-2 [&_g.node:focus-visible]:outline-ring"
+        onClick={(e) => press(e.target)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            press(e.target)
+          }
+        }}
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+    )
+  }
   // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
   return <div role="img" aria-label={label} className="diagram" dangerouslySetInnerHTML={{ __html: svg }} />
 }

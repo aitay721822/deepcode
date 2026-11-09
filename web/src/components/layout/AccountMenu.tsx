@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { KeyRoundIcon, LogOutIcon, ShieldIcon, UserIcon } from 'lucide-react'
+import { KeyRoundIcon, LogOutIcon, PlugIcon, ShieldIcon, UserIcon } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Button } from '../ui/controls/button'
 import {
@@ -50,6 +50,11 @@ export function AccountMenu({
       >
         <DropdownMenuItem onSelect={() => (afterClose.current = onPassword)}>
           <KeyRoundIcon /> 變更密碼
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/tokens">
+            <PlugIcon /> 存取權杖與 MCP
+          </Link>
         </DropdownMenuItem>
         {admin && (
           <DropdownMenuItem asChild>

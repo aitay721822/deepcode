@@ -164,6 +164,24 @@ func TestGuardAndCookie(t *testing.T) {
 	}
 }
 
+// TestGuardForms: only the OAuth token endpoint, which reads no cookie, takes
+// a form; anywhere else (the consent POST included) another site's form is
+// refused.
+func TestGuardForms(t *testing.T) {
+	r := gin.New()
+	r.Use(Guard(false))
+	r.POST("/*path", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	for path, want := range map[string]int{"/oauth/token": http.StatusNoContent, "/oauth/register": http.StatusUnsupportedMediaType,
+		"/api/oauth/authorize": http.StatusUnsupportedMediaType, "/oauth/token/x": http.StatusUnsupportedMediaType} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader("a=b"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		if r.ServeHTTP(w, req); w.Code != want {
+			t.Errorf("a form to %s: %d, want %d", path, w.Code, want)
+		}
+	}
+}
+
 // TestDomainError: each kind of domain failure answers with its status and
 // message; any other error is a 500 that does not repeat it.
 func TestDomainError(t *testing.T) {
