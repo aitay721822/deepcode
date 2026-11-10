@@ -59,8 +59,11 @@ type ref struct {
 // given. Brackets that are not citations are left alone. A bare reference
 // outside brackets, a.go:10-20, is linked too when it is valid, and else left
 // as written; one in a code block or inside an inline code span, where a link
-// would not render, is listed as a link after the text.
-func LinkCitations(text string, used []retrieval.Hit, link func(Citation) string) (string, []Citation) {
+// would not render, is listed as a link after the text. resolved counts the
+// references verify matched to a source whose path differs from theirs, each
+// time one is written: twice when written twice, though a code block's link
+// is listed once.
+func LinkCitations(text string, used []retrieval.Hit, link func(Citation) string) (_ string, _ []Citation, resolved int) {
 	cites := []Citation{}
 	seen := map[Citation]bool{}
 	cite := func(c Citation) string {
@@ -91,17 +94,22 @@ func LinkCitations(text string, used []retrieval.Hit, link func(Citation) string
 			continue // ordinary brackets or a markdown link: keep as written
 		}
 		var shown []Citation
+		moved := 0
 		for _, r := range refs {
-			if c, ok := verify(r, used); ok {
+			if c, other, ok := verify(r, used); ok {
 				shown = append(shown, c)
+				if other {
+					moved++
+				}
 			}
 		}
 		if inside(fences, m[0]) || text[m[0]] != '`' && inside(spans, m[0]) { // in code, but for a whole span of it
-			coded = append(coded, shown...)
+			coded, resolved = append(coded, shown...), resolved+moved
 			continue
 		} else if bare && (len(shown) == 0 || m[0] > 0 && text[m[0]-1] == '\\') {
 			continue // no source shown, or one of a Windows path: perhaps no reference at all, as in host:8080
 		}
+		resolved += moved
 		b.WriteString(text[last:m[0]])
 		last = m[1]
 		links := make([]string, len(shown))
@@ -123,7 +131,7 @@ func LinkCitations(text string, used []retrieval.Hit, link func(Citation) string
 		}
 		b.WriteString("\n\n來源：" + strings.Join(links, " "))
 	}
-	return b.String(), cites
+	return b.String(), cites, resolved
 }
 
 // Pathless reports whether text, outside code, cites lines without naming
@@ -177,35 +185,29 @@ func parseRefs(group string) ([]ref, bool) {
 	return refs, len(refs) > 0
 }
 
-// verify accepts a reference that overlaps a shown source of the same file and
-// clamps it to that source.
-func verify(r ref, used []retrieval.Hit) (Citation, bool) {
+// verify accepts a reference that overlaps a shown source of its file, clamped
+// to that source. Models sometimes cite a path with leading folders added or
+// dropped: src/tree.go or tree.go for middleware/tree.go. Such a reference is
+// accepted, as other says, when exactly one shown path differs from its own
+// that way and its lines fall inside one of that path's sources; it is no
+// guess between files then, nor about lines.
+func verify(r ref, used []retrieval.Hit) (c Citation, other, ok bool) {
 	match := r.path
 	if !slices.ContainsFunc(used, func(h retrieval.Hit) bool { return h.Path == r.path }) {
-		// Models sometimes cite by file name alone; accept it when it is unambiguous.
-		match = ""
+		match, other = "", true
 		for _, h := range used {
-			if strings.HasSuffix(h.Path, "/"+r.path) {
+			if strings.HasSuffix(h.Path, "/"+r.path) || strings.HasSuffix(r.path, "/"+h.Path) {
 				if match != "" && match != h.Path {
-					return Citation{}, false
+					return Citation{}, false, false
 				}
-				match = h.Path
-			}
-		}
-		// Or with folders put in front, src/lib/express.js for lib/express.js:
-		// then it is the longest shown path it ends with (one the loop above
-		// found is longer still, so stays), in a folder itself, as a root
-		// main.go is no guess for a cited cmd/foo/main.go.
-		for _, h := range used {
-			if strings.HasSuffix(r.path, "/"+h.Path) && len(h.Path) > len(match) && strings.Contains(h.Path, "/") {
 				match = h.Path
 			}
 		}
 	}
 	for _, h := range used {
-		if h.Path == match && r.start <= h.EndLine && r.end >= h.StartLine {
-			return Citation{Path: match, StartLine: max(r.start, h.StartLine), EndLine: min(r.end, h.EndLine)}, true
+		if h.Path == match && r.start <= h.EndLine && r.end >= h.StartLine && (!other || h.StartLine <= r.start && r.end <= h.EndLine) {
+			return Citation{Path: match, StartLine: max(r.start, h.StartLine), EndLine: min(r.end, h.EndLine)}, other, true
 		}
 	}
-	return Citation{}, false
+	return Citation{}, false, false
 }

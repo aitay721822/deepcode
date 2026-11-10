@@ -62,8 +62,8 @@ func TestLinkCitations(t *testing.T) {
 		"Span `README.md:3 is it` stays":             "Span `README.md:3 is it` stays\n\n來源：" + link("README.md", 3, 3),
 		"Unpaired `README.md:3 here":                 "Unpaired `" + link("README.md", 3, 3) + " here",
 		"Path C:\\README.md:3 stays":                 "Path C:\\README.md:3 stays",
-		// The edges of a shown range, a range written backwards, a path written from the root.
-		"Edges [README.md:20-25; async.ts:5-10]":                 "Edges " + link("README.md", 20, 20) + " " + link("src/vs/base/async.ts", 10, 10),
+		// The edges of a shown range, though not of one whose path differs; a range written backwards, a path written from the root.
+		"Edges [README.md:20-25; async.ts:5-10]":                 "Edges " + link("README.md", 20, 20),
 		"Reversed [README.md:4-2]":                               "Reversed " + link("README.md", 2, 4),
 		"Rooted [./README.md:3; /README.md:5]":                   "Rooted " + link("README.md", 3, 3) + " " + link("README.md", 5, 5),
 		"Labelled [source: README.md:3-4; sources: async.ts:12]": "Labelled " + link("README.md", 3, 4) + " " + link("src/vs/base/async.ts", 12, 12),
@@ -71,17 +71,17 @@ func TestLinkCitations(t *testing.T) {
 		`Tag [source path="README.md" lines="2-4"]`:                               "Tag " + link("README.md", 2, 4),
 		`Symbol [source path="src/vs/base/async.ts" lines="12-13" symbol="F, G"]`: "Symbol " + link("src/vs/base/async.ts", 12, 13),
 		`Not a tag [source path="README.md"]`:                                     `Not a tag [source path="README.md"]`,
-		// Folders put in front of a shown path: the longest it ends with.
+		// Folders put in front of a shown path (TestFolders).
 		"Prefixed [src/_examples/rest/main.go:2-3]": "Prefixed " + link("_examples/rest/main.go", 2, 3),
 		"Not a suffix [lib/vs/base/async.ts:12]":    "Not a suffix ",
-		"Root file [docs/README.md:3]":              "Root file ", // a root file is no guess for one in a folder
+		"Root file [docs/README.md:3]":              "Root file " + link("README.md", 3, 3),
 	}
 	for in, want := range cases {
-		if got, _ := LinkCitations(in, used, href); got != want {
+		if got, _, _ := LinkCitations(in, used, href); got != want {
 			t.Errorf("%q:\ngot  %q\nwant %q", in, got, want)
 		}
 	}
-	_, cites := LinkCitations("[README.md:1-2] [README.md:1-2] [async.ts:10-11]", used, href)
+	_, cites, _ := LinkCitations("[README.md:1-2] [README.md:1-2] [async.ts:10-11]", used, href)
 	want := []Citation{{"README.md", 1, 2}, {"src/vs/base/async.ts", 10, 11}}
 	if !reflect.DeepEqual(cites, want) {
 		t.Fatalf("citations: got %v, want %v", cites, want)
@@ -90,17 +90,41 @@ func TestLinkCitations(t *testing.T) {
 
 func TestLinkCitationsRejectsAmbiguousNames(t *testing.T) {
 	used := []retrieval.Hit{{Path: "a/index.ts", StartLine: 1, EndLine: 9}, {Path: "b/index.ts", StartLine: 1, EndLine: 9}}
-	if got, _ := LinkCitations("[index.ts:2-3]", used, href); got != "" {
+	if got, _, _ := LinkCitations("[index.ts:2-3]", used, href); got != "" {
 		t.Fatalf("ambiguous file name was linked: %q", got)
 	}
 	// A file at exactly that path is no guess, wherever it is listed.
 	used = append(used, retrieval.Hit{Path: "index.ts", StartLine: 1, EndLine: 9})
-	if _, cites := LinkCitations("[index.ts:2-3]", used, href); len(cites) != 1 || cites[0].Path != "index.ts" {
-		t.Fatalf("the exact path was not linked: %v", cites)
+	if _, cites, n := LinkCitations("[index.ts:2-3]", used, href); len(cites) != 1 || cites[0].Path != "index.ts" || n != 0 {
+		t.Fatalf("the exact path was not linked: %v, %d resolved", cites, n)
 	}
-	// Folders put in front: the longest shown path it ends with, not index.ts listed first.
-	if _, cites := LinkCitations("[src/b/index.ts:2-3]", []retrieval.Hit{used[2], used[1]}, href); len(cites) != 1 || cites[0].Path != "b/index.ts" {
-		t.Fatalf("a prefixed path: %v", cites)
+}
+
+// TestFolders: a path with leading folders added or dropped is linked to the
+// one shown path that differs from it so, when its lines fall inside one of
+// that path's sources, and counted as resolved; with two such paths, or lines
+// outside, it is stripped.
+func TestFolders(t *testing.T) {
+	used := []retrieval.Hit{{Path: "tree.go", StartLine: 1, EndLine: 50}, {Path: "middleware/logger.go", StartLine: 10, EndLine: 20},
+		{Path: "middleware/logger.go", StartLine: 40, EndLine: 60}, {Path: "a/index.ts", StartLine: 1, EndLine: 9}, {Path: "index.ts", StartLine: 1, EndLine: 9}}
+	link := func(p string, s, e int) string { return Link(Citation{p, s, e}, href(Citation{p, s, e})) }
+	for in, want := range map[string]struct {
+		text     string
+		resolved int
+	}{
+		"[src/tree.go:3-9]":                {link("tree.go", 3, 9), 1},
+		"[logger.go:12-14]":                {link("middleware/logger.go", 12, 14), 1},
+		"[x/middleware/logger.go:45-50]":   {link("middleware/logger.go", 45, 50), 1},
+		"[tree.go:3-9; src/tree.go:10-12]": {link("tree.go", 3, 9) + " " + link("tree.go", 10, 12), 1},
+		"```\n// src/tree.go:3-9\n```":     {"```\n// src/tree.go:3-9\n```\n\n來源：" + link("tree.go", 3, 9), 1},
+		"[src/tree.go:40-55]":              {"", 0},                      // past the source's end
+		"[logger.go:15-45]":                {"", 0},                      // across the gap between two sources
+		"[src/a/index.ts:2-3]":             {"", 0},                      // a/index.ts and index.ts both
+		"[tree.go:45-55]":                  {link("tree.go", 45, 50), 0}, // the path as shown: clamped
+	} {
+		if got, _, n := LinkCitations(in, used, href); got != want.text || n != want.resolved {
+			t.Errorf("%q:\ngot  %q, %d resolved\nwant %q, %d", in, got, n, want.text, want.resolved)
+		}
 	}
 }
 
@@ -129,6 +153,21 @@ func TestFormat(t *testing.T) {
 	text, used = Format([]retrieval.Hit{long}, 200)
 	if len(used) != 1 || used[0].EndLine != 13 || !strings.Contains(text, `lines="10-13"`) || strings.Contains(text, "14: ") {
 		t.Fatalf("oversized chunk: %+v\n%s", used, text)
+	}
+	// Size is a block's length as Format writes it, whole: hits whose sizes sum
+	// to the budget are all shown, and a byte short of it the last is not.
+	sum := 0
+	for _, h := range append(hits, long) {
+		if text, _ := Format([]retrieval.Hit{h}, 1<<20); Size(h) != len(text) {
+			t.Errorf("Size(%s) = %d, Format wrote %d", h.Path, Size(h), len(text))
+		}
+		sum += Size(h)
+	}
+	if text, used := Format(append(hits, long), sum); len(used) != 3 || len(text) != sum {
+		t.Errorf("at the summed size: %d hits, %d bytes of %d", len(used), len(text), sum)
+	}
+	if _, used := Format(append(hits, long), sum-1); len(used) != 2 {
+		t.Errorf("a byte short of the summed size: %d hits", len(used))
 	}
 }
 

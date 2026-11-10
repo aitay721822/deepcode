@@ -1,28 +1,42 @@
 import { motion } from 'motion/react'
-import type { Source } from '../../types/repo/chat'
+import type { SearchStep, Source } from '../../types/repo/chat'
 import { Card } from '../ui/display/card'
 import { Progress } from '../ui/feedback/progress'
 
 const step =
   "flex items-center gap-2.5 py-1 text-muted-foreground before:text-brand before:content-['›'] after:min-w-6 after:flex-1 after:border-b after:border-dashed after:content-['']"
 
-/** The retrieval trail shown while an answer is being prepared: a deep answer's further searches, then what was read. */
-export function SearchSteps({ sources, rounds }: { sources: Source[]; rounds: string[] }) {
+/** What a call of the model's did, in a line: what it searched for, which lines it read, whose users it found. */
+function describe(s: SearchStep): string {
+  switch (s.tool) {
+    case 'search_code':
+      return `搜尋：${s.args.query}${s.args.path_prefix ? `（於 ${s.args.path_prefix}）` : ''}`
+    case 'read_file': {
+      const { path, start_line: from, end_line: to } = s.args
+      return `讀取 ${path}${from && to ? `（第 ${from}-${to} 行）` : from ? `（自第 ${from} 行）` : ''}`
+    }
+    case 'users':
+      return `找出使用 ${s.args.name} 的程式碼`
+  }
+}
+
+/** The retrieval trail shown while an answer is being prepared: what the model searched for and read, then the sources. */
+export function SearchSteps({ sources, steps }: { sources: Source[]; steps: SearchStep[] }) {
   return (
     <Card asChild className="gap-4 px-5 py-[18px]">
       <section aria-live="polite">
         <p className="font-serif text-[20px] leading-tight italic">正在搜尋程式碼</p>
         <Progress tone="warning" aria-label="正在搜尋程式碼" />
         <ul className="font-mono text-[12.5px]">
-          {rounds.map((terms, i) => (
+          {steps.map((s, i) => (
             <motion.li
-              // biome-ignore lint/suspicious/noArrayIndexKey: rounds are only appended, and two may search the same terms
-              key={`r${i}`}
+              // biome-ignore lint/suspicious/noArrayIndexKey: steps are only appended, and two may be alike
+              key={`s${i}`}
               className={step}
               initial={{ opacity: 0, x: -6 }}
               animate={{ opacity: 1, x: 0, transition: { duration: 0.2 } }}
             >
-              <span className="[overflow-wrap:anywhere]">再次搜尋：{terms}</span>
+              <span className="[overflow-wrap:anywhere]">{describe(s)}</span>
             </motion.li>
           ))}
           {sources.map((s, i) => (

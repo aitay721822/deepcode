@@ -9,8 +9,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"deepcode/internal/knowledge/chat/loop"
 	"deepcode/internal/knowledge/wiki"
+	"deepcode/internal/platform/ai"
+	"deepcode/test/bench/trace"
 )
 
 type report struct {
@@ -20,6 +24,7 @@ type report struct {
 	ReasoningEffort string   `json:"reasoningEffort"`
 	Temperature     string   `json:"temperature"`
 	EmbedModel      string   `json:"embedModel,omitempty"` // "": lexical search only
+	Judged          bool     `json:"judged,omitempty"`     // its selfTalk and language are the judge's (judge_test.go); an older run's selfTalk is a detector's
 	Repos           []result `json:"repos"`
 }
 
@@ -87,15 +92,81 @@ type evalResult struct {
 }
 
 type answer struct {
-	Question          string   `json:"question"`
-	FirstTokenSeconds float64  `json:"firstTokenSeconds"`
-	Seconds           float64  `json:"seconds"`
-	Citations         int      `json:"citations"`
-	Missing           []string `json:"missingKeywords"` // the words it must hold and does not
-	SelfTalk          bool     `json:"selfTalk"`        // it thinks aloud
-	OtherLanguage     bool     `json:"otherLanguage"`   // not in the question's language
-	Answer            string   `json:"answer"`
-	Error             string   `json:"error,omitempty"`
+	Question           string         `json:"question"`
+	FirstTokenSeconds  float64        `json:"firstTokenSeconds"`
+	AnswerStartSeconds float64        `json:"answerStartSeconds"` // the first words of the draft it ended with
+	Seconds            float64        `json:"seconds"`
+	Rewrites           int            `json:"rewrites"`        // drafts written again after the first
+	Rounds             int            `json:"rounds"`          // its searches, the first counting
+	Calls              map[string]int `json:"calls,omitempty"` // the gathering's calls, by tool
+	Stop               string         `json:"stop,omitempty"`  // the rule that ended the gathering
+	Citations          int            `json:"citations"`
+	Missing            []string       `json:"missingKeywords"` // the words it must hold and does not
+	SelfTalk           bool           `json:"selfTalk"`        // it talks to itself, as the judge reads it
+	SelfTalkSentence   string         `json:"selfTalkSentence,omitempty"`
+	Language           string         `json:"language,omitempty"` // as the judge names it; "": not judged
+	OtherLanguage      bool           `json:"otherLanguage"`      // not in the question's language
+	Answer             string         `json:"answer"`
+	Error              string         `json:"error,omitempty"`
+	Trace              *trace.Trace   `json:"trace,omitempty"` // how it was gathered and written; nil in older runs
+	// Requests are its model requests' usage, in order: a terms rewrite's when
+	// there was one, the gathering's replies, then the answer's, which an
+	// answer with no evidence does not make. Nil in older runs.
+	Requests []ai.Usage `json:"requests,omitempty"`
+}
+
+// clock times an answer by its events. An evidence event starts a draft at
+// the words that follow it. One that no words follow, after a rewrite, lists
+// the standing draft's sources again: the rewrite failed, and the draft
+// before it is the answer.
+type clock struct {
+	starts  []time.Duration // each draft's first words
+	pending bool            // an evidence event that no words followed yet
+}
+
+func (c *clock) tick(event string, now time.Duration) {
+	switch {
+	case event == "evidence":
+		c.pending = true
+	case event == "delta" && c.pending:
+		c.pending, c.starts = false, append(c.starts, now)
+	}
+}
+
+// read is when the answer's first words came, when those of the draft it
+// ended with, and how many drafts were written after the first.
+func (c *clock) read() (first, begun time.Duration, rewrites int) {
+	n := len(c.starts)
+	if n == 0 {
+		return 0, 0, 0
+	}
+	last := n - 1
+	if c.pending && n > 1 {
+		last--
+	}
+	return c.starts[0], c.starts[last], n - 1
+}
+
+// TestClock: an answer begins at its first words, and its last draft at that
+// draft's; a failed rewrite, its evidence listed again with no words after,
+// leaves the draft before it.
+func TestClock(t *testing.T) {
+	for events, want := range map[string][3]int{
+		"evidence delta delta":                                  {1, 1, 0}, // written once
+		"evidence delta search evidence delta delta":            {1, 4, 1}, // rewritten
+		"evidence delta evidence delta evidence":                {1, 1, 1}, // the rewrite failed after words
+		"evidence delta evidence evidence":                      {1, 1, 0}, // and before any
+		"evidence delta evidence delta evidence delta evidence": {1, 3, 2}, // the second rewrite failed
+		"evidence": {0, 0, 0},
+	} {
+		var c clock
+		for i, e := range strings.Fields(events) {
+			c.tick(e, time.Duration(i))
+		}
+		if first, begun, rewrites := c.read(); [3]int{int(first), int(begun), rewrites} != want {
+			t.Errorf("%s: %d %d %d, want %v", events, first, begun, rewrites, want)
+		}
+	}
 }
 
 // write saves the report as latest.json and latest.md in dir, and the JSON
@@ -201,10 +272,13 @@ func (rep report) markdown() string {
 			p("| %s | %d | %.3f | %.3f |", r.Repo, e.Questions, e.Recall, e.MRR)
 		}
 	}
-	var asked, passed, uncited, talking, foreign int
+	var asked, passed, uncited, talking, foreign, unjudged, evicted, refused, resolved int
 	for _, r := range rep.Repos {
 		for _, a := range r.Answers {
 			asked++
+			if tr := a.Trace; tr != nil {
+				evicted, refused, resolved = evicted+len(tr.Evicted), refused+len(tr.Refused), resolved+tr.Resolved
+			}
 			if a.Error == "" && len(a.Missing) == 0 {
 				passed++
 			}
@@ -217,13 +291,18 @@ func (rep report) markdown() string {
 			if a.OtherLanguage {
 				foreign++
 			}
+			if a.Error == "" && a.Language == "" {
+				unjudged++
+			}
 		}
 	}
-	p("\n## Questions (head)\n\n%d of %d answers hold their keywords; %d cite nothing; %d think aloud; %d answer in another language.\n", passed, asked, uncited, talking, foreign)
-	p("| Repository | Question | First token | Total | Citations | Keywords | Self-talk | Language |\n|---|---|---|---|---|---|---|---|")
+	p("\n## Questions (head)\n\n%d of %d answers hold their keywords; %d cite nothing; %d think aloud; %d answer in another language; %d were not judged. Answer start: the first words of the draft an answer ended with; self-talk and language as the judge reads them. The judge is advisory, hand labels gate; its measured error: %s.\n", passed, asked, uncited, talking, foreign, unjudged, judgeError)
+	p("Evidence budget: %d hits evicted, %d refused; %d citation references resolved to a path that differs from the one written by leading folders.\n", evicted, refused, resolved)
+	p("| Repository | Question | First token | Answer start | Total | Citations | Keywords | Self-talk | Language |\n|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
 		for _, a := range r.Answers {
 			first, total, cites, keys, talk, lang := fmt.Sprintf("%.1f s", a.FirstTokenSeconds), fmt.Sprintf("%.1f s", a.Seconds), fmt.Sprint(a.Citations), "pass", "no", "same"
+			begun := fmt.Sprintf("%.1f s", a.AnswerStartSeconds)
 			if len(a.Missing) > 0 {
 				keys = "fail: no " + strings.Join(a.Missing, ", ")
 			}
@@ -233,10 +312,19 @@ func (rep report) markdown() string {
 			if a.OtherLanguage {
 				lang = "other"
 			}
-			if a.Error != "" {
-				first, total, cites, keys, lang = "failed", fmt.Sprintf("failed after %.1f s", a.Seconds), "–", "fail", "–"
+			if a.Error == "" && a.Language == "" {
+				talk, lang = "not judged", "not judged"
 			}
-			p("| %s | %s | %s | %s | %s | %s | %s | %s |", r.Repo, a.Question, first, total, cites, keys, talk, lang)
+			if a.Error != "" {
+				first, begun, total, cites, keys, lang = "failed", "failed", fmt.Sprintf("failed after %.1f s", a.Seconds), "–", "fail", "–"
+			}
+			p("| %s | %s | %s | %s | %s | %s | %s | %s | %s |", r.Repo, a.Question, first, begun, total, cites, keys, talk, lang)
+		}
+	}
+	p("\n## Answer time (head)\n\nMeans of the answers that did not fail: the model's replies while gathering; seconds a reply, the gathering's time (the first search's, and a terms rewrite's when there was one, in it) over its replies; the answer's prefill, from the evidence to its first words; its first token; its decode, its output tokens over the seconds from its first words to its end. Prefill and decode are of the answers with evidence.\n\n| Repository | Answers | Replies | Seconds a reply | Answer prefill | First token | Answer decode |\n|---|---|---|---|---|---|---|")
+	for _, r := range rep.Repos {
+		if row := pace(r.Answers); row != "" {
+			p("| %s | %s |", r.Repo, row)
 		}
 	}
 	for _, r := range rep.Repos {
@@ -261,6 +349,78 @@ func (rep report) markdown() string {
 		}
 	}
 	return b.String()
+}
+
+// pace is the answer time table's row for one repository's answers, the
+// repository's name aside, or "" when none was timed without failing: an
+// older run's trace has no times. An answer with no evidence makes no answer
+// request: it has no prefill or decode.
+func pace(answers []answer) string {
+	var n, replies, gathered, perReply, answered, prefill, first, tokens, decoding float64
+	for _, a := range answers {
+		if a.Error != "" || a.Trace == nil || a.Trace.Gathered <= 0 {
+			continue
+		}
+		n, first = n+1, first+a.FirstTokenSeconds
+		if k := float64(a.Rounds - 1); k > 0 { // the first search is a round
+			replies += k
+			if a.Stop != loop.StopError && a.Stop != loop.StopTime { // else its time holds a reply that failed or was cut, too
+				gathered, perReply = gathered+1, perReply+a.Trace.Gathered/k
+			}
+		}
+		if len(a.Trace.Shown) > 0 {
+			answered, prefill = answered+1, prefill+a.FirstTokenSeconds-a.Trace.Gathered
+			if len(a.Requests) > 0 {
+				tokens, decoding = tokens+float64(a.Requests[len(a.Requests)-1].OutTokens), decoding+a.Seconds-a.FirstTokenSeconds
+			}
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	reply, pre, decode := "–", "–", "–"
+	if gathered > 0 {
+		reply = fmt.Sprintf("%.1f s", perReply/gathered)
+	}
+	if answered > 0 {
+		pre = fmt.Sprintf("%.1f s", prefill/answered)
+	}
+	if tokens > 0 && decoding > 0 {
+		decode = fmt.Sprintf("%.1f tokens/s", tokens/decoding)
+	}
+	return fmt.Sprintf("%d | %.1f | %s | %s | %.1f s | %s", int(n), replies/n, reply, pre, first/n, decode)
+}
+
+// TestPace: an answer with no evidence counts for its replies and first token
+// alone, so prefill and decode are of those with evidence; one whose gathering
+// an error or the time ended, for those too, not the seconds a reply; an older
+// run's, with no times, is left out, and with none left there is no row.
+func TestPace(t *testing.T) {
+	bare := answer{Rounds: 2, FirstTokenSeconds: 4.1, Seconds: 4.2, Trace: &trace.Trace{Gathered: 4}, Requests: []ai.Usage{{OutTokens: 500}}}
+	answered := answer{Rounds: 1, FirstTokenSeconds: 2.9, Seconds: 12.9, Trace: &trace.Trace{Gathered: 1, Shown: make([]trace.Source, 1)}, Requests: []ai.Usage{{OutTokens: 200}}}
+	failed := answer{Rounds: 3, Stop: loop.StopError, FirstTokenSeconds: 3.5, Seconds: 3.6, Trace: &trace.Trace{Gathered: 3}}
+	cut := answer{Rounds: 2, Stop: loop.StopTime, FirstTokenSeconds: 3.5, Seconds: 3.6, Trace: &trace.Trace{Gathered: 3}}
+	old := answer{Rounds: 3, FirstTokenSeconds: 9, Seconds: 20, Trace: &trace.Trace{Shown: make([]trace.Source, 1)}}
+	if got := pace([]answer{bare, answered, failed, cut, old}); got != "4 | 1.0 | 4.0 s | 1.9 s | 3.5 s | 20.0 tokens/s" {
+		t.Errorf("row %q", got)
+	}
+	if got := pace([]answer{old}); got != "" {
+		t.Errorf("an older run's row %q", got)
+	}
+}
+
+// TestMeter: a take returns the model's answers since the last, summed and
+// each in order, and starts again.
+func TestMeter(t *testing.T) {
+	var m meter
+	m.add(ai.Usage{InTokens: 5, OutTokens: 1})
+	m.take()
+	m.add(ai.Usage{InTokens: 10, OutTokens: 2})
+	m.add(ai.Usage{InTokens: 20, OutTokens: 3, CachedTokens: 4})
+	if calls, u, each := m.take(); calls != 2 || u != (ai.Usage{InTokens: 30, OutTokens: 5, CachedTokens: 4}) ||
+		!slices.Equal(each, []ai.Usage{{InTokens: 10, OutTokens: 2}, {InTokens: 20, OutTokens: 3, CachedTokens: 4}}) {
+		t.Errorf("%d calls, %+v, each %+v", calls, u, each)
+	}
 }
 
 // count shows n, or "failed" when step, the query that counts it, failed.
@@ -296,24 +456,31 @@ func tokens(n int) string {
 }
 
 // TestMarkdown: failed steps read as failed, never as numbers; answers show
-// the keywords they miss and whether they think aloud, the first wiki its time
-// at each number of pages at a time, and head's wiki its tree; the report
-// lands whole, with no file left aside.
+// when their first words and their last draft's came, the keywords they miss
+// and whether they talk to themselves, the first wiki its time
+// at each number of pages at a time, and head's wiki its tree; each
+// repository's answers that did not fail, their time (a repository with none
+// has no row); the report lands whole, with no file left aside.
 func TestMarkdown(t *testing.T) {
 	ok := result{Repo: "ok", Wiki: &wikiRun{Seconds: 10, Pages: 6, InTokens: 200, CachedTokens: 150, Planning: &wiki.Planning{Seconds: 4.25, Requests: 9}}}
 	broken := result{Repo: "broken", Wiki: &wikiRun{Failed: true, Seconds: 3, Planning: &wiki.Planning{Seconds: 1, Requests: 2, Failures: 1}}}
 	ok.Update.Wiki, ok.Update.PagesRewritten = &wikiRun{Seconds: 5, Pages: 6}, 1
 	broken.Update.Failed, broken.Errors = true, []string{"update index: boom"}
 	ok.Failed = []string{"symbols", "pages rewritten"} // a count whose query failed
-	broken.Answers = []answer{{Question: "q", Error: "timeout"}}
-	ok.Answers = []answer{{Question: "k", Citations: 2, Missing: []string{"Mount"}, SelfTalk: true, OtherLanguage: true}}
+	broken.Answers = []answer{{Question: "q", Error: "timeout", Trace: &trace.Trace{Gathered: 1}}}
+	ok.Answers = []answer{{Question: "k", Citations: 2, Missing: []string{"Mount"}, SelfTalk: true, Language: "German", OtherLanguage: true, FirstTokenSeconds: 3, AnswerStartSeconds: 9.5, Seconds: 20,
+		Rounds: 3, Trace: &trace.Trace{Gathered: 2, Shown: make([]trace.Source, 1), Evicted: make([]trace.Source, 3), Refused: make([]trace.Source, 1), Resolved: 2}, Requests: []ai.Usage{{OutTokens: 100}, {OutTokens: 50}, {OutTokens: 170}}},
+		{Question: "u", Citations: 1, FirstTokenSeconds: 1, AnswerStartSeconds: 1, Seconds: 2, Rounds: 1, Trace: &trace.Trace{Gathered: 0.6, Shown: make([]trace.Source, 1), Evicted: make([]trace.Source, 1), Resolved: 1}}} // its judge failed; no reply, no usage
 	ok.WikiRuns, ok.Tree = []wikiRun{{Parallel: 1, Seconds: 20}, {Parallel: 2, Seconds: 12}}, []string{"- 1 Overview", "- 2 Core", "  - 2.1 Mux"}
 	ok.Pages, ok.Topics, ok.CitationSpan, ok.PageCitations = 10, &coverage{Topics: 4, Covered: 3, Missing: []string{"SSE"}, ToolingPages: 2}, citationSpan{3, 40}, 7
 	uncited, uncounted := result{Repo: "uncited", Wiki: &wikiRun{}}, result{Repo: "uncounted", Wiki: &wikiRun{}, Failed: []string{"page citations"}}
 	md := report{Repos: []result{ok, broken, uncited, uncounted}}.markdown()
-	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
-		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 0.0 s | 0.0 s | 2 | fail: no Mount | yes | other |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
-		"0 of 2 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |", "| 0 | 0 | 7 | 3, at most 40 | 4.2 s, 0 of 9 requests failed |", "| 0 | 0 | failed | failed | 1.0 s, 1 of 2 requests failed |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |"} {
+	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
+		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 3.0 s | 9.5 s | 20.0 s | 2 | fail: no Mount | yes | other |", "| ok | u | 1.0 s | 1.0 s | 2.0 s | 1 | pass | not judged | not judged |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
+		"1 of 3 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language; 1 were not judged.",
+		"The judge is advisory, hand labels gate; its measured error: " + judgeError + ".",
+		"Evidence budget: 4 hits evicted, 1 refused; 3 citation references resolved to a path that differs from the one written by leading folders.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |",
+		"Answer decode |\n|---|---|---|---|---|---|---|\n| ok | 2 | 1.0 | 1.0 s | 0.7 s | 2.0 s | 10.0 tokens/s |\n\n**broken errors:**", "| 0 | 0 | 7 | 3, at most 40 | 4.2 s, 0 of 9 requests failed |", "| 0 | 0 | failed | failed | 1.0 s, 1 of 2 requests failed |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the report lacks %q:\n%s", want, md)
 		}

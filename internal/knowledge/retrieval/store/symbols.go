@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 
 	"deepcode/internal/platform/storage"
@@ -41,6 +42,55 @@ func (s *Store) Symbols(ctx context.Context, snapshotID int64, q string, limit i
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+// Type is a type's declaration: its name, its file, its kind and its first line.
+type Type struct{ Name, Path, Kind, Signature string }
+
+// topTypes selects the snapshot's (?1) top-level declarations of classes,
+// records, structs and interfaces: none within another type of its file.
+const topTypes = `SELECT name, path, kind, signature FROM symbols s
+	WHERE snapshot_id = ?1 AND kind IN ('class', 'record', 'struct', 'interface')
+	AND NOT EXISTS (SELECT 1 FROM symbols o WHERE o.snapshot_id = s.snapshot_id AND o.path = s.path AND o.id <> s.id
+		AND o.kind IN ('class', 'record', 'struct', 'interface', 'enum') AND o.start_line <= s.start_line AND o.end_line >= s.end_line)`
+
+// Types returns the snapshot's top-level declarations of the classes,
+// records, structs and interfaces named name, exactly: none within another
+// type of its file.
+func (s *Store) Types(ctx context.Context, snapshotID int64, name string) ([]Type, error) {
+	return scanTypes(s.DB.QueryContext(ctx, topTypes+` AND name COLLATE NOCASE = ?2 AND name = ?2 ORDER BY path`, snapshotID, name))
+}
+
+// RepeatedTypes returns the top-level declarations (Types) of every name that
+// more than one of the snapshot's classes, records, structs and interfaces
+// declares, by name, then path.
+func (s *Store) RepeatedTypes(ctx context.Context, snapshotID int64) ([]Type, error) {
+	return scanTypes(s.DB.QueryContext(ctx, topTypes+` AND name IN (SELECT name FROM symbols WHERE snapshot_id = ?1
+		AND kind IN ('class', 'record', 'struct', 'interface') GROUP BY name HAVING count(*) > 1) ORDER BY name, path`, snapshotID))
+}
+
+func scanTypes(rows *sql.Rows, err error) ([]Type, error) {
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Type
+	for rows.Next() {
+		var t Type
+		if err := rows.Scan(&t.Name, &t.Path, &t.Kind, &t.Signature); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// Projects returns the paths of the snapshot's project files: .NET's,
+// Maven's and Gradle's.
+func (s *Store) Projects(ctx context.Context, snapshotID int64) ([]string, error) {
+	return scanPaths(s.DB.QueryContext(ctx, `SELECT path FROM source_files WHERE snapshot_id = ? AND (lower(path) GLOB '*.csproj'
+		OR lower(path) GLOB '*.vbproj' OR lower(path) GLOB '*.fsproj' OR lower(path) IN ('pom.xml', 'build.gradle', 'build.gradle.kts')
+		OR lower(path) GLOB '*/pom.xml' OR lower(path) GLOB '*/build.gradle' OR lower(path) GLOB '*/build.gradle.kts')`, snapshotID))
 }
 
 // Users returns the ids of chunks of the files that import a file defining

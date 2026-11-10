@@ -7,8 +7,8 @@ import (
 )
 
 // systemPrompt is the same for every repository and conversation, so the
-// model server's prompt cache holds it: a call sends it, then the
-// conversation so far, then what is new.
+// model server's prompt cache holds it: it is the ai.Prompt's Static, sent
+// before the conversation so far and what is new.
 const systemPrompt = `You are deepcode, drawing a code map for the repository the user's message names: the code paths that answer its question, as traces of code locations.
 
 Reply with one JSON object and nothing else, shaped like this:
@@ -30,9 +30,8 @@ const groundNote = "None of those locations is a line the <source> blocks show: 
 
 // prompt assembles the rules, the recent turns, then the repository, the
 // background, the sources, the question and the language line.
-func prompt(r Request) []ai.Message {
-	msgs := append([]ai.Message{{Role: "system", Content: systemPrompt}}, r.History...)
-	return append(msgs, ai.Message{Role: "user", Content: fmt.Sprintf(
+func prompt(r Request) ai.Prompt {
+	return ai.Prompt{Static: systemPrompt, Previous: r.History, Dynamic: fmt.Sprintf(
 		"Repository: %s at commit %s\n\n%sSources:\n\n%sQuestion: %s\n\nDraw the code map for this question as the JSON object only. Write its prose in %s.",
-		r.Repo, r.Commit, r.Background, r.Sources, r.Question, r.Language)})
+		r.Repo, r.Commit, r.Background, r.Sources, r.Question, r.Language)}
 }

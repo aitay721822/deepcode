@@ -2,9 +2,10 @@
 // official SDK (openai-go), that works with OpenAI, llama.cpp, LM Studio,
 // vLLM, Ollama and similar servers. A nil *OpenAI means the model is not
 // configured. Streams, accumulation, tool and schema params are the SDK's;
-// what this package adds is what the SDK leaves to its user: request options
-// (no OPENAI_* environment, retries, RPM, body caps, store false on the
-// Responses API), errors that name the model and mask the key, timeouts that
+// what this package adds is what the SDK leaves to its user: one order for
+// every request's messages (Prompt), request options (no OPENAI_* environment,
+// retries, RPM, body caps, store false on the Responses API), errors that
+// name the model and mask the key, timeouts that
 // name DEEPCODE_LLM_TIMEOUT, a Chat Completions stream with no finish reason
 // taken as cut, the 1 MB answer cap, DeepSeek's cached-token count, and
 // schemas made from Go types and checked on the answer.
@@ -30,6 +31,37 @@ import (
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+}
+
+// Prompt is a request's messages in the order every request sends them, so a
+// model server's prompt cache holds the longest prefix requests share: Static,
+// the instructions the same on every request of its kind, as the system
+// message; Previous, the conversation so far; Dynamic, what is new to this
+// request, as the last user message.
+type Prompt struct {
+	Static   string
+	Previous []Message
+	Dynamic  string
+}
+
+// messages are p's in that order, an empty Static or Dynamic left out.
+func (p Prompt) messages() []Message {
+	var out []Message
+	if p.Static != "" {
+		out = append(out, Message{Role: "system", Content: p.Static})
+	}
+	out = append(out, p.Previous...)
+	if p.Dynamic != "" {
+		out = append(out, Message{Role: "user", Content: p.Dynamic})
+	}
+	return out
+}
+
+// After is the prompt that goes on from p once the model answered reply: p's
+// Dynamic and reply join Previous, and dynamic is what is new.
+func (p Prompt) After(reply, dynamic string) Prompt {
+	previous := Prompt{Previous: p.Previous, Dynamic: p.Dynamic}.messages() // a copy: p's own stays as it was
+	return Prompt{Static: p.Static, Previous: append(previous, Message{Role: "assistant", Content: reply}), Dynamic: dynamic}
 }
 
 // OpenAI talks to any server implementing /chat/completions or /responses,

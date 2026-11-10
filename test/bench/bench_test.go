@@ -11,7 +11,9 @@
 // DEEPCODE_BENCH_PARALLEL=1,2 writes each first wiki once per number of pages
 // written at a time (DEEPCODE_WIKI_PARALLEL, else 1, by default), the last
 // one kept. Without a chat model only indexing, the graph and the retrieval
-// eval are measured.
+// eval are measured; DEEPCODE_BENCH_WIKI=0 leaves the wikis out, for a run of
+// the answers alone. TestJudge re-judges a stored run's answers
+// (judge_test.go).
 package bench
 
 import (
@@ -33,7 +35,6 @@ import (
 	"unicode"
 
 	"deepcode/internal/knowledge/chat"
-	"deepcode/internal/knowledge/chat/draft"
 	chatstore "deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
@@ -55,14 +56,16 @@ import (
 	"deepcode/internal/repo/index/indexer"
 	indexstore "deepcode/internal/repo/index/indexer/store"
 	"deepcode/internal/repo/index/vectorstore"
+	"deepcode/test/bench/trace"
 	"deepcode/test/eval"
 )
 
-// meter sums the model's answers between two reads.
+// meter sums the model's answers between two reads, and keeps each.
 type meter struct {
 	mu    sync.Mutex
 	calls int
 	u     ai.Usage
+	each  []ai.Usage
 }
 
 func (m *meter) add(u ai.Usage) {
@@ -71,15 +74,17 @@ func (m *meter) add(u ai.Usage) {
 	m.calls++
 	m.u.InChars, m.u.OutChars, m.u.InTokens, m.u.OutTokens = m.u.InChars+u.InChars, m.u.OutChars+u.OutChars, m.u.InTokens+u.InTokens, m.u.OutTokens+u.OutTokens
 	m.u.CachedTokens += u.CachedTokens
+	m.each = append(m.each, u)
 }
 
-// take returns what was summed since the last take, and starts again.
-func (m *meter) take() (int, ai.Usage) {
+// take returns what was summed since the last take, and each answer summed in
+// the order it came, and starts again.
+func (m *meter) take() (int, ai.Usage, []ai.Usage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	calls, u := m.calls, m.u
-	m.calls, m.u = 0, ai.Usage{}
-	return calls, u
+	calls, u, each := m.calls, m.u, m.each
+	m.calls, m.u, m.each = 0, ai.Usage{}, nil
+	return calls, u, each
 }
 
 // rig is deepcode's parts as the server wires them, on a database of the bench's own.
@@ -122,7 +127,7 @@ func TestBench(t *testing.T) {
 		r.parallel = append(r.parallel, n)
 	}
 	rep := report{Started: time.Now().UTC().Format(time.RFC3339), Model: os.Getenv("DEEPCODE_CHAT_MODEL"),
-		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Temperature: os.Getenv("DEEPCODE_TEMPERATURE"), Deepcode: head()}
+		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Temperature: os.Getenv("DEEPCODE_TEMPERATURE"), Deepcode: head(), Judged: true}
 	if r.ret.Embed != nil {
 		rep.EmbedModel = r.ret.Embed.ModelName
 	}
@@ -174,25 +179,37 @@ func setup(t *testing.T, work string) *rig {
 	r.cat = &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: jobs.New(&jobstore.Store{DB: db}, bus, 2*time.Hour), Git: gitc, Servers: servers}
 	r.ix = &indexer.Indexer{Store: &indexstore.Store{DB: db}, Graph: graphs, Git: gitc, Servers: servers, Events: bus,
 		Embed: embed, Vectors: vectors, Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
-	if model := os.Getenv("DEEPCODE_CHAT_MODEL"); model != "" {
-		llm := &ai.OpenAI{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model,
-			ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Measure: r.meter.add}
-		if s := os.Getenv("DEEPCODE_TEMPERATURE"); s != "" {
-			temp, err := strconv.ParseFloat(s, 64)
-			if err != nil || !(temp >= 0 && temp <= 2) { // NaN too
-				t.Fatalf("DEEPCODE_TEMPERATURE holds %q, which is no number from 0 to 2", s)
-			}
-			llm.Temperature = &temp
-		}
+	if llm := chatModel(t, r.meter.add); llm != nil {
 		pages, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), "0")) // 0, the default, when unset
 		if err != nil || pages < 0 {
 			t.Fatalf("DEEPCODE_WIKI_MAX_PAGES holds %q, which is no number of pages", os.Getenv("DEEPCODE_WIKI_MAX_PAGES"))
 		}
-		r.wiki = &wiki.Generator{Store: &wikistore.Store{DB: db}, Graph: graphs, Catalog: r.cat, Retriever: r.ret, Chat: llm, Language: "English", MaxPages: pages,
-			Planned: func(p wiki.Planning) { r.planned = &p }}
+		if os.Getenv("DEEPCODE_BENCH_WIKI") != "0" {
+			r.wiki = &wiki.Generator{Store: &wikistore.Store{DB: db}, Graph: graphs, Catalog: r.cat, Retriever: r.ret, Chat: llm, Language: "English", MaxPages: pages,
+				Planned: func(p wiki.Planning) { r.planned = &p }}
+		}
 		r.chat = &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: r.cat, Retriever: r.ret, Chat: llm}
 	}
 	return r
+}
+
+// chatModel is the chat model the DEEPCODE_CHAT_* settings name, as serve
+// reads them, telling measure every answer's usage; nil without one.
+func chatModel(t *testing.T, measure func(ai.Usage)) *ai.OpenAI {
+	model := os.Getenv("DEEPCODE_CHAT_MODEL")
+	if model == "" {
+		return nil
+	}
+	llm := &ai.OpenAI{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model,
+		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Measure: measure}
+	if s := os.Getenv("DEEPCODE_TEMPERATURE"); s != "" {
+		temp, err := strconv.ParseFloat(s, 64)
+		if err != nil || !(temp >= 0 && temp <= 2) { // NaN too
+			t.Fatalf("DEEPCODE_TEMPERATURE holds %q, which is no number from 0 to 2", s)
+		}
+		llm.Temperature = &temp
+	}
+	return llm
 }
 
 // measure indexes tg at base and writes its wiki, updates both to head, then
@@ -331,10 +348,15 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 					a.Missing = append(a.Missing, w)
 				}
 			}
-			a.SelfTalk = draft.Read(a.Answer).SelfTalk
-			a.OtherLanguage = a.Error == "" && chinese(a.Answer) != chinese(q.ask)
+			if len(a.Trace.Dropped) > 0 { // the gathering's budget keeps all it gathered within what Format shows
+				fail(fmt.Sprintf("question %d", n+1), fmt.Errorf("its evidence dropped %d hits gathered", len(a.Trace.Dropped)))
+			}
 			if a.Error != "" {
 				fail(fmt.Sprintf("question %d", n+1), errors.New(a.Error))
+			} else if v, err := judge(ctx, r.chat.Chat, a.Answer); err != nil {
+				fail(fmt.Sprintf("judging question %d", n+1), err)
+			} else {
+				a.SelfTalk, a.SelfTalkSentence, a.Language, a.OtherLanguage = v.SelfTalk, v.Sentence, v.Language, !speaks(v.Language, q.language())
 			}
 			res.Answers = append(res.Answers, a)
 		}
@@ -418,28 +440,32 @@ func (r *rig) writeWiki(ctx context.Context, id int64, sha string, fail func(str
 	if err != nil {
 		fail("wiki "+sha[:7], err)
 	}
-	calls, u := r.meter.take()
+	calls, u, _ := r.meter.take()
 	w.Calls, w.InTokens, w.OutTokens, w.InChars, w.OutChars, w.CachedTokens = calls, u.InTokens, u.OutTokens, u.InChars, u.OutChars, u.CachedTokens
 	return w
 }
 
-// ask asks q as a user would and times its first words and its end.
+// ask asks q as a user would and times it (clock), keeping what its evidence
+// event tells of the search: its rounds, and the gathering's calls and stop,
+// the trace of its events, and each of its model requests' usage.
 func (r *rig) ask(ctx context.Context, id int64, q string) answer {
-	a := answer{Question: q}
-	start, first := time.Now(), time.Duration(0)
+	r.meter.take()
+	a, start, c := answer{Question: q, Trace: &trace.Trace{}}, time.Now(), clock{}
 	err := r.chat.Ask(ctx, chat.Request{RepoID: id, Question: q, UserID: 1}, func(event string, data any) {
-		switch event {
-		case "delta":
-			if first == 0 {
-				first = time.Since(start)
-			}
-		case "done":
-			if m, ok := data.(chat.Message); ok {
-				a.Answer, a.Citations = m.Content, len(m.Citations)
-			}
+		at := time.Since(start)
+		c.tick(event, at)
+		a.Trace.Take(event, data, at)
+		if d, ok := data.(map[string]any); ok && event == "evidence" {
+			a.Rounds, _ = d["rounds"].(int)
+			a.Calls, _ = d["calls"].(map[string]int)
+			a.Stop, _ = d["stop"].(string)
+		} else if m, ok := data.(chat.Message); ok && event == "done" {
+			a.Answer, a.Citations = m.Content, len(m.Citations)
 		}
 	})
-	a.FirstTokenSeconds, a.Seconds = first.Seconds(), since(start)
+	first, begun, rewrites := c.read()
+	a.FirstTokenSeconds, a.AnswerStartSeconds, a.Rewrites, a.Seconds = first.Seconds(), begun.Seconds(), rewrites, since(start)
+	_, _, a.Requests = r.meter.take()
 	if err != nil {
 		a.Error = err.Error()
 	}

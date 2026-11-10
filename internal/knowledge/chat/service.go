@@ -7,12 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
+	"deepcode/internal/knowledge/chat/loop"
 	"deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/codemap"
 	"deepcode/internal/knowledge/evidence"
@@ -77,19 +78,26 @@ type Emit func(event string, data any)
 
 const (
 	evidenceHits  = 10
-	evidenceChars = 40000
-	maxQuestion   = 4000 // runes
-	maxAsking     = 2    // answers one user may have written at a time, in all their tabs
+	evidenceChars = 64000 // Deep's too: at 40000 an eShop payment answer evicted the handler it found, its reads holding 46%
+	maxQuestion   = 4000  // runes
+	maxAsking     = 2     // answers one user may have written at a time, in all their tabs
 	noEvidence    = "無法從目前程式碼確認 — no indexed code matched this question."
 )
 
-// Ask runs one question end to end, emitting: conversation, search* (a deep
-// answer's further rounds), evidence, delta*, then done (the stored,
-// citation-checked message) or error. A draft that recheck turns down, as
-// may the draft written in its place, is followed by search (its one more
-// round, if it searched), evidence and delta* again: the answer written anew;
-// a rewrite that fails is followed by evidence once more, the standing draft's.
-// A code map (drawMap) emits drawing* in place of delta*.
+// What gathering the evidence may take. A deep answer, and a code map, may
+// take twice the rounds and more time.
+var (
+	gathering     = loop.Limits{Rounds: 4, Chars: evidenceChars, Time: 45 * time.Second}
+	deepGathering = loop.Limits{Rounds: 8, Chars: evidenceChars, Time: 120 * time.Second}
+)
+
+// Ask runs one question end to end, emitting: conversation, search* (each
+// call of the model's while it gathers the evidence, package loop), evidence,
+// delta*, cited (the references resolved to a path that differs from the one
+// written, evidence.LinkCitations), then done (the stored, citation-checked
+// message) or error. A code
+// map (drawMap) emits drawing* in place of delta*. The answer is written once,
+// from what was gathered; nothing the model wrote while gathering reaches it.
 func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	q := strings.TrimSpace(req.Question)
 	if q == "" || utf8.RuneCountInString(q) > maxQuestion {
@@ -124,72 +132,38 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 		return err
 	}
 	repo, asked := r.Owner+"/"+r.Name, retrievalQuery(history, q)
-	res, err := s.search(ctx, conv.snap.ID, repo, asked)
+	first, err := s.search(ctx, conv.snap.ID, repo, asked)
 	if err != nil {
 		return err
 	}
-	budget, background, rounds := evidenceChars, "", 1
+	limits, background := gathering, ""
 	if req.Deep || req.Codemap {
-		if res, rounds, err = s.deepen(ctx, conv.snap.ID, repo, asked, res, emit); err != nil {
-			return err
-		}
+		limits = deepGathering
 		if background, err = s.background(ctx, req.RepoID, conv.snap.ID, asked); err != nil {
 			return err
 		}
-		budget = deepEvidenceChars
 	}
-	// Each evidence event starts the answer: a second one, after a draft that recheck turned down, starts it anew.
-	show := func(used []retrieval.Hit, res retrieval.Result, rounds int) {
-		emit("evidence", map[string]any{"sources": sourceList(used), "fts": res.FTS, "vector": res.Vector, "symbol": res.Symbol,
-			"named": res.Named, "graph": res.Graph, "rounds": rounds})
-	}
+	got := loop.Gatherer{Model: s.Chat, Retriever: s.Retriever, Catalog: s.Catalog}.Gather(ctx,
+		loop.Request{Snapshot: conv.snap, Repo: repo, Question: asked, First: first, Limits: limits}, loop.Emit(emit))
+	sources, used := evidence.Format(got.Hits, limits.Chars)
+	emit("evidence", evidenceEvent(got, used, len(sources), limits.Chars))
 	link := func(c evidence.Citation) string {
 		return gitserver.SourceURL(r.Provider, r.URL, conv.snap.CommitSHA, c.Path, c.StartLine, c.EndLine)
 	}
 	if req.Codemap {
-		sources, used := evidence.Format(res.Hits, budget)
-		show(used, res, rounds)
 		return s.drawMap(ctx, conv.id, codemap.Request{Repo: repo, Commit: conv.snap.CommitSHA, History: history, Background: background,
 			Sources: sources, Question: q, Language: answerLanguage(q, history), Hits: used}, link, emit)
 	}
-	write := func(res retrieval.Result, rounds int, note string) (answer, sources string, used []retrieval.Hit, err error) {
-		sources, used = evidence.Format(res.Hits, budget)
-		show(used, res, rounds)
-		if len(used) == 0 {
-			emit("delta", noEvidence)
-			return noEvidence, sources, used, nil
-		}
-		answer, err = s.Chat.Stream(ctx, prompt(repo, conv.snap.CommitSHA, history, background, sources, q, note), func(d string) { emit("delta", d) })
-		if err != nil {
-			return "", "", nil, fmt.Errorf("%w: %w", errModel, err)
-		}
-		return ai.StripThinking(answer), sources, used, nil
+	answer := noEvidence
+	if len(used) == 0 {
+		emit("delta", noEvidence)
+	} else if answer, err = s.Chat.Stream(ctx, prompt(repo, conv.snap.CommitSHA, history, background, sources, q), func(d string) { emit("delta", d) }); err != nil {
+		return fmt.Errorf("%w: %w", errModel, err)
+	} else {
+		answer = ai.StripThinking(answer)
 	}
-	answer, sources, used, err := write(res, rounds, "")
-	if err != nil {
-		return err
-	}
-	// The check only improves a sound draft: when it fails, the draft stands
-	// (done replaces whatever the rewrite had streamed), unless the asker left.
-	for i := 0; i < maxRechecks && len(used) > 0; i++ {
-		more, n, again, err := s.recheck(ctx, conv.snap.ID, repo, asked, answer, sources, res, rounds, emit)
-		if err == nil && again {
-			var a, src string
-			var u []retrieval.Hit
-			if a, src, u, err = write(more, n, rewriteNote); err == nil {
-				answer, sources, used, res, rounds = a, src, u, more, n
-				continue
-			}
-			show(used, res, rounds) // the rewrite's sources were listed: list the standing draft's again
-		}
-		if err != nil && ctx.Err() != nil {
-			return err
-		} else if err != nil {
-			log.Printf("chat: the draft stands, as checking it failed: %v", err)
-		}
-		break
-	}
-	content, cites := evidence.LinkCitations(answer, used, link)
+	content, cites, resolved := evidence.LinkCitations(answer, used, link)
+	emit("cited", map[string]any{"resolved": resolved})
 	if len(cites) == 0 && answer != noEvidence {
 		content += "\n\n" + uncited(answerLanguage(q, history))
 	}
@@ -289,11 +263,38 @@ func (s *Service) search(ctx context.Context, snapshotID int64, repo, query stri
 	return s.Retriever.Search(ctx, snapshotID, strings.Join(terms[:min(len(terms), 24)], " ")+"\n"+query, evidenceHits)
 }
 
-// sourceList is the evidence event payload: where each source block came from.
-func sourceList(used []retrieval.Hit) []map[string]any {
-	out := make([]map[string]any, len(used))
-	for i, h := range used {
-		out[i] = map[string]any{"path": h.Path, "symbol": h.Symbol, "startLine": h.StartLine, "endLine": h.EndLine}
+// evidenceEvent is the evidence event's payload. used is what Format took of
+// got.Hits, their head: each source block, with where it came from
+// (loop.Origin); got.Hits that Format left out ("dropped"), in the order the
+// answer would have read them, which the gathering's budget keeps empty; the
+// hits that budget evicted and refused (loop.Out), with the round and tool of
+// the call that did it; and the sources' bytes as rendered, against that
+// budget ("chars"). Then the gathering's counts, rounds (the first search's
+// counting), calls and stop.
+func evidenceEvent(got loop.Result, used []retrieval.Hit, rendered, budget int) map[string]any {
+	source := func(h retrieval.Hit, round int, tool string) map[string]any {
+		return map[string]any{"path": h.Path, "symbol": h.Symbol, "startLine": h.StartLine, "endLine": h.EndLine, "round": round, "tool": tool}
 	}
-	return out
+	sources, dropped := make([]map[string]any, len(used)), []map[string]any{}
+	for i, h := range used {
+		sources[i] = source(h, got.Origins[i].Round, got.Origins[i].Tool)
+	}
+	for i, h := range got.Hits[len(used):] {
+		o := got.Origins[len(used)+i]
+		d := source(h, o.Round, o.Tool)
+		d["chars"] = o.Chars
+		dropped = append(dropped, d)
+	}
+	outs := func(list []loop.Out) []map[string]any {
+		out := make([]map[string]any, len(list))
+		for i, o := range list {
+			if out[i] = source(o.Hit, o.Round, o.Tool); o.From != "" {
+				out[i]["from"] = o.From
+			}
+		}
+		return out
+	}
+	return map[string]any{"sources": sources, "dropped": dropped, "evicted": outs(got.Evicted), "refused": outs(got.Refused),
+		"chars": map[string]int{"rendered": rendered, "budget": budget},
+		"fts":   got.FTS, "vector": got.Vector, "symbol": got.Symbol, "named": got.Named, "graph": got.Graph, "rounds": got.Rounds + 1, "calls": got.Calls, "stop": got.Stop}
 }

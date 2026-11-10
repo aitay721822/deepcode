@@ -14,7 +14,9 @@ import (
 	"strings"
 	"testing"
 
+	"deepcode/internal/knowledge/chat/loop"
 	"deepcode/internal/knowledge/chat/store"
+	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/platform/ai"
@@ -101,8 +103,13 @@ func TestAnswers(t *testing.T) {
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Messages []ai.Message `json:"messages"`
+			Tools    []any        `json:"tools"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
+		if len(body.Tools) > 0 {
+			gathered(w, "")
+			return
+		}
 		reply := "nothing"
 		if strings.HasPrefix(body.Messages[0].Content, "You are deepcode") {
 			asked = append(asked, fmt.Sprintf("an answer, with %d messages", len(body.Messages)))
@@ -140,11 +147,28 @@ func TestAnswers(t *testing.T) {
 	}
 }
 
-// TestDeep: a deep answer searches again for what the model names until it
-// says DONE, announcing each round, and is written from every round's
-// evidence with the nearest wiki page as background, its links' targets
-// dropped and its closing tag defused; a plain answer does neither.
-func TestDeep(t *testing.T) {
+// gathered answers a request of the loop that gathers the evidence, whole:
+// with a call of search_code for query, or ("") with none, which ends it.
+// The text says what only the model may read.
+func gathered(w http.ResponseWriter, query string) {
+	msg := map[string]any{"role": "assistant", "content": "MARKER: let me think about where the registry lives."}
+	if query != "" {
+		msg["tool_calls"] = []any{map[string]any{"id": "c1", "type": "function",
+			"function": map[string]string{"name": "search_code", "arguments": `{"query":"` + query + `","path_prefix":""}`}}}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": msg}}})
+}
+
+// TestGathered: an answer is written once, from what the model gathered with
+// its tools after the first search, each call announced as a search event;
+// the evidence event tells the rounds, the calls and the rule that ended the
+// gathering. A deep answer reads the nearest wiki page as background, its
+// links' targets dropped and its closing tag defused; a plain one does not,
+// and gathers within the same evidence budget.
+// Nothing the model wrote while gathering is in an event, the stored
+// messages or the answer's request.
+func TestGathered(t *testing.T) {
 	ctx := context.Background()
 	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "d.db"))
 	if err != nil {
@@ -166,187 +190,115 @@ func TestDeep(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var asked, answers []string
+	var answers, asked []string // the answers' requests, and their last message
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Messages []ai.Message `json:"messages"`
+			Messages []map[string]any `json:"messages"`
+			Tools    []any            `json:"tools"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-		reply := "It subscribes [src/store.ts:1-1] into a registry [src/set.ts:1-1]."
-		switch sys := body.Messages[0].Content; {
-		case strings.HasPrefix(sys, "You are deepcode"):
-			answers = append(answers, body.Messages[len(body.Messages)-1].Content)
-		case strings.Contains(body.Messages[1].Content, "registry?"): // what the first search found already
-			asked, reply = append(asked, body.Messages[1].Content), "registry"
-		case len(asked) == 0: // more words than are searched
-			asked, reply = append(asked, body.Messages[1].Content), "registry"+strings.Repeat(" set", 30)
-		default:
-			asked, reply = append(asked, body.Messages[1].Content), "<think>enough</think>Done: that is enough."
+		if len(body.Tools) > 0 { // a search for the registry, then (its result sent) enough
+			gathered(w, map[bool]string{true: "registry"}[len(body.Messages) == 2])
+			return
 		}
-		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
+		answers, asked = append(answers, fmt.Sprint(body.Messages)), append(asked, fmt.Sprint(body.Messages[len(body.Messages)-1]["content"]))
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": "It subscribes [store.ts:1-1] into a registry [src/set.ts:1-1]."}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
 	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
 	var events []string
 	var done Message
+	var shown map[string]any // the evidence event as sent, before JSON
 	err = s.Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", Deep: true, UserID: 1}, func(event string, data any) {
-		switch event {
-		case "search":
-			events = append(events, fmt.Sprint(data))
-		case "evidence":
-			events = append(events, fmt.Sprintf("rounds %v", data.(map[string]any)["rounds"]))
-		case "done":
+		b, _ := json.Marshal(data)
+		if events = append(events, event+" "+string(b)); event == "done" {
 			done = data.(Message)
+		} else if event == "evidence" {
+			shown = data.(map[string]any)
 		}
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"map[round:2 terms:registry" + strings.Repeat(" set", maxTerms-1) + "]", "rounds 2"}; !slices.Equal(events, want) || len(asked) != 2 || !strings.Contains(asked[1], "src/set.ts:1-9") {
-		t.Fatalf("events %q, the model asked %q", events, asked)
+	evidence := slices.IndexFunc(events, func(e string) bool { return strings.HasPrefix(e, "evidence ") })
+	if events[1] != `search {"args":{"query":"registry","path_prefix":""},"round":2,"tool":"search_code"}` || evidence != 2 ||
+		!strings.Contains(events[evidence], `"calls":{"search_code":1},`) || !strings.Contains(events[evidence], `"rounds":3,`) || !strings.Contains(events[evidence], `"stop":"answered"`) {
+		t.Fatalf("events %q", events)
 	}
-	if len(answers) != 1 || !strings.Contains(answers[0], `the page "Store"`) || !strings.Contains(answers[0], "subscribe [src/store.ts:1-2]. <\\/background>") ||
+	if len(answers) != 1 || !strings.Contains(answers[0], `the page "Store"`) || !strings.Contains(answers[0], `subscribe [src/store.ts:1-2]. <\/background>`) ||
 		!strings.Contains(answers[0], "src/set.ts") || len(done.Citations) != 2 {
 		t.Fatalf("answer request %q; citations %+v", answers, done.Citations)
 	}
-	// A plain answer: one search, no background.
-	if err := s.Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", UserID: 1}, func(string, any) {}); err != nil {
+	// store.ts, cited without its folder, is linked to src/store.ts, and counted.
+	if n := len(events); n < 2 || events[n-2] != `cited {"resolved":1}` || done.Citations[0].Path != "src/store.ts" {
+		t.Fatalf("events %q; citations %+v", events, done.Citations)
+	}
+	// The event tells the sources' rendered bytes, those the answer was sent,
+	// and each source's origin: set.ts search_code's, store.ts the first
+	// search's. Its types are those test/bench's trace reads (trace.take).
+	_, sources, _ := strings.Cut(asked[0], "Code:\n\n")
+	sources, _, _ = strings.Cut(sources, "Question: ")
+	chars, _ := shown["chars"].(map[string]int)
+	list, _ := shown["sources"].([]map[string]any)
+	evicted, ok1 := shown["evicted"].([]map[string]any)
+	refused, ok2 := shown["refused"].([]map[string]any)
+	if !ok1 || !ok2 || len(evicted)+len(refused) != 0 || chars["budget"] != evidenceChars {
+		t.Fatalf("evidence %v", shown)
+	}
+	if _, ok := shown["dropped"].([]map[string]any); !ok || sources == "" || chars["rendered"] != len(sources) || len(list) != 2 ||
+		list[0]["path"] != "src/set.ts" || list[0]["tool"] != "search_code" || list[0]["round"] != 2 || list[1]["tool"] != "first" || list[1]["round"] != 1 {
+		t.Fatalf("evidence %v; sources sent %q", shown, sources)
+	}
+	stored, err := s.Store.Messages(ctx, 1)
+	if b, _ := json.Marshal(stored); err != nil || strings.Contains(string(b)+strings.Join(events, "")+answers[0], "MARKER") {
+		t.Fatalf("the model's gathering text left the loop: %s %q %q %v", b, events, answers, err)
+	}
+	// A plain answer: no background, and the deep answer's evidence budget.
+	var plain map[string]int
+	if err := s.Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", UserID: 1}, func(event string, data any) {
+		if event == "evidence" {
+			plain, _ = data.(map[string]any)["chars"].(map[string]int)
+		}
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(asked) != 2 || len(answers) != 2 || strings.Contains(answers[1], "<background>") || strings.Contains(answers[1], "src/set.ts") {
-		t.Fatalf("a plain answer: asked %q, answer request %q", asked, answers[1])
-	}
-	// A round that finds only what was found before ends the search.
-	if err := s.Ask(ctx, Request{RepoID: 1, Question: "Where is the registry?", Deep: true, UserID: 1}, func(string, any) {}); err != nil {
-		t.Fatal(err)
-	}
-	if len(asked) != 3 {
-		t.Fatalf("the model was asked %d times, want 3", len(asked))
+	if len(answers) != 2 || strings.Contains(answers[1], "background") || !strings.Contains(answers[1], "src/set.ts") || plain["budget"] != evidenceChars {
+		t.Fatalf("a plain answer's request %q, chars %v", answers[1], plain)
 	}
 }
 
-// TestRecheck: a draft naming code the repository defines but the sources
-// lack is written again after a search for those names, whose hits go after
-// the code it cites;
-// one saying code was not shown, after a search for what the model names; one
-// thinking aloud, from the same sources. Each rewrite starts with evidence
-// again, and is read once more. An answer left with no valid citation says
-// so; a sound draft is kept, and so is one whose check fails.
-func TestRecheck(t *testing.T) {
-	ctx := context.Background()
-	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "r.db"))
-	if err != nil {
-		t.Fatal(err)
+// TestEvidenceEvent: the evidence event names each source block with where it
+// came from; the hits gathered that Format left out, in the order the answer
+// would have read them, with their bytes; the hits the gathering's budget
+// evicted, with where they had been found, and refused, each with the call
+// that did it; and the rendered bytes against the budget.
+func TestEvidenceEvent(t *testing.T) {
+	got := loop.Result{Result: retrieval.Result{Hits: []retrieval.Hit{
+		{Path: "a.go", StartLine: 1, EndLine: 2, Content: "x\ny"},
+		{Path: "b.go", StartLine: 3, EndLine: 3, Symbol: "B", Content: strings.Repeat("z", 100)},
+		{Path: "c.go", StartLine: 5, EndLine: 6, Content: "w"},
+	}}, Origins: []loop.Origin{{Round: 2, Tool: "read_file", Chars: 3}, {Round: 1, Tool: "first", Chars: 100}, {Round: 3, Tool: "users", Chars: 1}},
+		Evicted: []loop.Out{{Hit: retrieval.Hit{Path: "d.go", StartLine: 1, EndLine: 4, Symbol: "D"}, Round: 3, Tool: "users", From: "first"}},
+		Refused: []loop.Out{{Hit: retrieval.Hit{Path: "e.go", StartLine: 7, EndLine: 9}, Round: 2, Tool: "read_file"}},
+		Rounds:  2, Calls: map[string]int{"read_file": 1}, Stop: "rounds"}
+	sources, used := evidence.Format(got.Hits, 80) // a.go's block fits, b.go's does not
+	b, _ := json.Marshal(evidenceEvent(got, used, len(sources), 80))
+	want := fmt.Sprintf(`{"calls":{"read_file":1},"chars":{"budget":80,"rendered":%d},`+
+		`"dropped":[{"chars":100,"endLine":3,"path":"b.go","round":1,"startLine":3,"symbol":"B","tool":"first"},{"chars":1,"endLine":6,"path":"c.go","round":3,"startLine":5,"symbol":"","tool":"users"}],`+
+		`"evicted":[{"endLine":4,"from":"first","path":"d.go","round":3,"startLine":1,"symbol":"D","tool":"users"}],`+
+		`"fts":0,"graph":0,"named":0,`+
+		`"refused":[{"endLine":9,"path":"e.go","round":2,"startLine":7,"symbol":"","tool":"read_file"}],`+
+		`"rounds":3,"sources":[{"endLine":2,"path":"a.go","round":2,"startLine":1,"symbol":"","tool":"read_file"}],"stop":"rounds","symbol":0,"vector":0}`, len(sources))
+	if len(used) != 1 || string(b) != want {
+		t.Errorf("%s\nwant %s", b, want)
 	}
-	defer db.Close()
-	for _, q := range []string{
-		`INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x')`,
-		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r')`,
-		`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`,
-		`UPDATE repositories SET ready_snapshot_id = 1`,
-		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
-			(1, 'src/store.ts', 1, 9, 'const subscribe = (fn) => add(fn)', 'h1'), (1, 'src/set.ts', 1, 9, 'const registry = new Set()', 'h2'),
-			(1, 'route.go', 1, 3, 'func RoutePattern() string { return pattern }', 'h3')`,
-		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'route.go', 'RoutePattern', 'RoutePattern', 'function', 1, 3),
-			(1, 'README.md', 'OtherThing', 'OtherThing', 'section', 1, 3)`, // a guide's section defines no OtherThing
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	drafts := map[string][]string{ // by question, as written in turn
-		"How does subscribe work?": {"It subscribes [src/store.ts:1-1]; see `RoutePattern` and `OtherThing` too.",
-			"It reads the pattern [route.go:1-1]. The registry is not shown in these sources.", "It reads the pattern [route.go:1-1] into a registry [src/set.ts:1-1]."},
-		"Where does subscribe add?": {"It adds [src/store.ts:1-1]. The registry it adds to is not shown in these sources.", "It adds into a registry."},
-		"Does subscribe return?":    {"Wait, it adds. Let me check the sources again. It adds [src/store.ts:1-1].", "It adds [src/store.ts:1-1]."},
-		"Is subscribe sound?":       {"It adds the listener [src/store.ts:1-1]."},
-		"Can subscribe fail?":       {"It adds [src/store.ts:1-1]. Its errors are not shown in these sources."},
-		"Can subscribe stop?":       {"It adds [src/store.ts:1-1]. Its stop is not shown in these sources."}, // the rewrite fails
-	}
-	written := map[string]int{}
-	var asked, rewrites []string // the search terms requests, and the rewrites' questions with their sources
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Messages []ai.Message `json:"messages"`
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		user, reply := body.Messages[len(body.Messages)-1].Content, "registry"
-		if strings.HasPrefix(body.Messages[0].Content, "You are deepcode") {
-			_, question, _ := strings.Cut(strings.TrimSuffix(user, "\n\n"+namesLine+" Answer in English."), "Question: ")
-			question, note, _ := strings.Cut(question, "\n\n")
-			if written[question] == len(drafts[question]) {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			if reply = drafts[question][written[question]]; note != "" {
-				rewrites = append(rewrites, user)
-			}
-			written[question]++
-		} else if strings.Contains(user, "Can subscribe fail?") { // the check fails: the draft stands
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		} else {
-			asked = append(asked, user)
-		}
-		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
-		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
-	}))
-	defer model.Close()
-	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
-	for q, want := range map[string]struct {
-		events  string
-		content string
-		cites   int
-	}{
-		"How does subscribe work?": {"evidence delta map[round:2 terms:RoutePattern] evidence delta map[round:3 terms:registry] evidence delta",
-			"It reads the pattern [route.go:1-1](", 2},
-		"Where does subscribe add?": {"evidence delta map[round:2 terms:registry] evidence delta", "It adds into a registry.\n\n_This answer cites no indexed source", 0},
-		"Does subscribe return?":    {"evidence delta evidence delta", "It adds [src/store.ts:1-1](", 1},
-		"Is subscribe sound?":       {"evidence delta", "It adds the listener [src/store.ts:1-1](", 1},
-		"Can subscribe fail?":       {"evidence delta", "It adds [src/store.ts:1-1](", 1},
-		"Can subscribe stop?":       {"evidence delta map[round:2 terms:registry] evidence evidence", "It adds [src/store.ts:1-1](", 1},
-	} {
-		var events []string
-		var done Message
-		err := s.Ask(ctx, Request{RepoID: 1, Question: q, UserID: 1}, func(event string, data any) {
-			switch event {
-			case "search":
-				events = append(events, fmt.Sprint(data))
-			case "evidence", "delta":
-				events = append(events, event)
-			case "done":
-				done = data.(Message)
-			}
-		})
-		if err != nil {
-			t.Fatalf("%s: %v", q, err)
-		}
-		if strings.Join(events, " ") != want.events || !strings.HasPrefix(done.Content, want.content) || len(done.Citations) != want.cites {
-			t.Errorf("%s: events %q, answer %q with %d citations; want %q, %q, %d", q, events, done.Content, len(done.Citations), want.events, want.content, want.cites)
-		}
-	}
-	if len(asked) != 3 || !slices.ContainsFunc(asked, func(u string) bool {
-		return strings.Contains(u, "A draft answer said this code was not shown: The registry it adds to is not shown in these sources.\nName the")
-	}) {
-		t.Errorf("search terms requests: %q", asked)
-	}
-	// The code using a name is searched for only when it joins words: then it is about that name.
-	if got := compound([]string{"RoutePattern", "Order", "payment_done", "API", "RoutePattern", "a_b", "v2Router"}); !slices.Equal(got, []string{"RoutePattern", "payment_done", "v2Router"}) {
-		t.Errorf("compound: %q", got)
-	}
-	// Its first rewrite reads the cited src/store.ts, then the route.go found for the name it lacked.
-	named := slices.IndexFunc(rewrites, func(u string) bool { return strings.Contains(u, "Question: How does subscribe work?") })
-	if len(rewrites) != 4 || named < 0 || strings.Index(rewrites[named], "route.go") < strings.Index(rewrites[named], "src/store.ts") {
-		t.Errorf("rewrites: %q", rewrites)
-	}
-	// What the draft cites takes turns with what the round found, ahead of the rest.
-	hits := []retrieval.Hit{{Path: "a.go", StartLine: 1, EndLine: 9}, {Path: "b.go", StartLine: 1, EndLine: 9}, {Path: "b.go", StartLine: 10, EndLine: 19}}
-	if kept, rest := cited("It runs [b.go:12-13], not [c.go:1].", hits); !slices.Equal(kept, hits[2:]) || !slices.Equal(rest, hits[:2]) {
-		t.Errorf("cited: %v, rest %v", kept, rest)
-	}
-	if got := alternate(hits[:1], hits[1:]); !slices.Equal(got, hits) || len(alternate(nil, hits[1:])) != 2 {
-		t.Errorf("alternate: %v", got)
+	all := `"sources":[{"endLine":2,"path":"a.go","round":2,"startLine":1,"symbol":"","tool":"read_file"},` +
+		`{"endLine":3,"path":"b.go","round":1,"startLine":3,"symbol":"B","tool":"first"},{"endLine":6,"path":"c.go","round":3,"startLine":5,"symbol":"","tool":"users"}]`
+	got.Evicted, got.Refused = nil, nil
+	if b, _ := json.Marshal(evidenceEvent(got, got.Hits, 9, 80)); !strings.Contains(string(b), `"dropped":[]`) || !strings.Contains(string(b), all) ||
+		!strings.Contains(string(b), `"evicted":[]`) || !strings.Contains(string(b), `"refused":[]`) {
+		t.Errorf("nothing left out: %s", b)
 	}
 }
 
@@ -426,18 +378,15 @@ func TestLanguage(t *testing.T) {
 		"請解釋 the router matching algorithm in detail please":                                                     chinese,
 		"這段為何失敗：```go\nfunc (r *Router) Mount(pattern string, h http.Handler) { r.mux.Handle(pattern, h) }\n```": chinese,
 	} {
-		for _, note := range []string{"", rewriteNote} { // the rewrite's English note leaves the language alone
-			msgs := prompt("go-chi/chi", "abc", nil, "", "", q, note)
-			if got := msgs[len(msgs)-1].Content; !strings.HasSuffix(got, note+"\n\n"+namesLine+" Answer in "+want+".") {
-				t.Errorf("%q: %q", q, got)
-			}
+		if got := prompt("go-chi/chi", "abc", nil, "", "", q).Dynamic; !strings.HasSuffix(got, "Question: "+q+"\n\n"+namesLine+" Answer in "+want+".") {
+			t.Errorf("%q: %q", q, got)
 		}
 	}
 	history := []ai.Message{{Role: "user", Content: "Mount 如何運作？"}, {Role: "assistant", Content: "It mounts a router."}}
 	for _, q := range []string{"？", "Route?", "src/a/main.go?", "x_on_y?"} {
-		if msgs := prompt("go-chi/chi", "abc", history, "", "", q, ""); msgs[0].Content != systemPrompt || msgs[1] != history[0] ||
-			!strings.HasSuffix(msgs[3].Content, "Answer in "+chinese+".") {
-			t.Errorf("a follow-up whose words tell nothing: %q", msgs)
+		if p := prompt("go-chi/chi", "abc", history, "", "", q); p.Static != systemPrompt || len(p.Previous) != 2 || p.Previous[0] != history[0] ||
+			!strings.HasSuffix(p.Dynamic, "Answer in "+chinese+".") {
+			t.Errorf("a follow-up whose words tell nothing: %q", p)
 		}
 	}
 	for _, q := range []string{"Do we validate tokens?", "Isn't Route mounted?"} { // English, though the conversation was not
@@ -466,12 +415,16 @@ func TestCodemap(t *testing.T) {
 	drawn := `{"title":"Page","description":"` + strings.Repeat("x", 600) + `","traces":[{"title":"Render","description":"d","guide":"g","locations":[{"title":"Page","description":"renders",` +
 		`"path":"app/[slug]/page.tsx","line":1,"code":"export default function Page() {}"}]}]}`
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct{ Messages []ai.Message }
-		json.NewDecoder(r.Body).Decode(&body)
-		reply := "DONE" // the deep rounds' question
-		if strings.Contains(body.Messages[0].Content, "drawing a code map") {
-			reply = drawn
+		var body struct {
+			Messages []ai.Message
+			Tools    []any
 		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if len(body.Tools) > 0 {
+			gathered(w, "")
+			return
+		}
+		reply := drawn
 		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))

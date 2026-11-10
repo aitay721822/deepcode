@@ -1,7 +1,7 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { getConversation, streamChat } from '../../../api/repo/chat'
-import type { AskMode, Codemap, ConversationRef, Message, Source } from '../../../types/repo/chat'
+import type { AskMode, Codemap, ConversationRef, Message, SearchStep, Source } from '../../../types/repo/chat'
 import type { Citation } from '../../../types/repo/code'
 import type { Repo } from '../../../types/repo/repo'
 
@@ -10,7 +10,7 @@ export type Turn = {
   answer: string
   citations: Citation[]
   sources: Source[]
-  rounds: string[] // what a deep answer searched for again, round by round
+  steps: SearchStep[] // what the model searched for and read while gathering the code
   mode?: AskMode // how it was asked, when on this page
   codemap?: Codemap // an answer drawn as a code map
   drawn: number // how much of a code map has come, in characters, while it is drawn
@@ -27,7 +27,7 @@ function toTurns(messages: Message[]): Turn[] {
         answer: '',
         citations: [],
         sources: [],
-        rounds: [],
+        steps: [],
         drawn: 0,
         status: 'error',
         error: '這個問題沒有已儲存的回答。',
@@ -94,7 +94,7 @@ export function useChat(repoId: string, conversationId?: string) {
     setLoadError('') // a new question: the stored conversation's load error no longer applies
     setTurns((ts) => [
       ...ts,
-      { question, answer: '', citations: [], sources: [], rounds: [], mode, drawn: 0, status: 'searching' },
+      { question, answer: '', citations: [], sources: [], steps: [], mode, drawn: 0, status: 'searching' },
     ])
     const ctl = new AbortController()
     abort.current = ctl
@@ -129,13 +129,9 @@ export function useChat(repoId: string, conversationId?: string) {
                 resetScroll: false,
               })
           } else if (event === 'search') {
-            update((t) => ({ ...t, rounds: [...t.rounds, data.terms] }))
+            update((t) => ({ ...t, steps: [...t.steps, data] }))
           } else if (event === 'evidence') {
-            // Evidence starts the answer; a second time, after the server turned its draft down, it starts it anew.
-            cancelAnimationFrame(frame)
-            frame = 0
-            text = ''
-            update((t) => ({ ...t, sources: data.sources, answer: '' }))
+            update((t) => ({ ...t, sources: data.sources }))
             select(data.sources[0])
           } else if (event === 'drawing') {
             update((t) => ({ ...t, status: 'answering', drawn: data.chars }))

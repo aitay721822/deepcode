@@ -6,8 +6,8 @@ import { Spinner } from '../ui/feedback/spinner'
 import { Textarea } from '../ui/form/textarea'
 
 const modes: { value: AskMode; label: string; hint: string }[] = [
-  { value: 'fast', label: 'Fast', hint: '搜尋一輪後回答' },
-  { value: 'deep', label: 'Deep', hint: '最多搜尋三輪，並先讀最相關的 Wiki 頁面：回答更完整，但慢兩到三倍' },
+  { value: 'fast', label: 'Fast', hint: '以工具蒐集程式碼（最多 4 輪）後回答' },
+  { value: 'deep', label: 'Deep', hint: '最多蒐集 8 輪，並先讀最相關的 Wiki 頁面：回答更完整，但較慢' },
   { value: 'codemap', label: 'Codemap', hint: '畫出回答問題的程式路徑：依執行順序編號的程式碼位置，也能切換成圖' },
 ]
 

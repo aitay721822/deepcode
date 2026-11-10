@@ -249,9 +249,9 @@ func (g *Generator) readme(ctx context.Context, snap int64, plan []outline.Page,
 // section without pages. A reply that is not f's JSON fails the plan
 // (ai.ErrSchema). Each request is counted in t.
 func ask[T any](ctx context.Context, g *Generator, t *tally, f ai.Format[T], system, user string, usable func(T) bool) (T, error) {
-	msgs := []ai.Message{{Role: "system", Content: system}, {Role: "user", Content: user}}
+	p := ai.Prompt{Static: system, Dynamic: user}
 	for try := 0; ; try++ {
-		v, _, err := ai.StreamJSON(ctx, g.Chat, msgs, f, nil)
+		v, _, err := ai.StreamJSON(ctx, g.Chat, p, f, nil)
 		if t.add(err); err != nil || usable(v) || try == 1 {
 			return v, err
 		}

@@ -46,15 +46,20 @@ export type Source = { path: string; symbol: string; startLine: number; endLine:
 /** The conversation an answer belongs to, and the snapshot it is pinned to. */
 export type ConversationRef = Pick<Conversation, 'id' | 'snapshotId' | 'commitSha'>
 
+/** One call of the model's while it gathers an answer's code: a search, a file read, or the code that uses a name. */
+export type SearchStep =
+  | { round: number; tool: 'search_code'; args: { query: string; path_prefix: string } }
+  | { round: number; tool: 'read_file'; args: { path: string; start_line: number; end_line: number } }
+  | { round: number; tool: 'users'; args: { name: string } }
+
 /**
- * One server-sent event of a streamed answer: conversation, search (each further round of a deep answer), evidence,
- * delta…, done (or error at any point). A draft the server turns down is followed by search (its one more round, if
- * any), evidence and delta… again: the answer written anew. A code map sends drawing… (how much of it has come) in
- * place of delta….
+ * One server-sent event of a streamed answer: conversation, search (each call of the model's while it gathers the
+ * code), evidence (what the answer is written from), delta…, done (or error at any point). A code map sends drawing…
+ * (how much of it has come) in place of delta….
  */
 export type ChatEvent =
   | { event: 'conversation'; data: ConversationRef }
-  | { event: 'search'; data: { round: number; terms: string } }
+  | { event: 'search'; data: SearchStep }
   | { event: 'evidence'; data: { sources: Source[]; rounds: number } }
   | { event: 'delta'; data: string }
   | { event: 'drawing'; data: { chars: number } }

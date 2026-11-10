@@ -74,7 +74,7 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
   const title = turns[0] ? `${turns[0].question} · ${repo.owner}/${repo.name}` : `${repo.owner}/${repo.name}`
   const side =
     last?.status === 'searching' ? (
-      <SearchSteps sources={last.sources} rounds={last.rounds} />
+      <SearchSteps sources={last.sources} steps={last.steps} />
     ) : selected && conv ? (
       <CitedFile repo={repo} conv={conv} citation={selected} />
     ) : null

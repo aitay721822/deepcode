@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,7 +37,7 @@ func TestRefusedKeyMasked(t *testing.T) {
 	// The key at the start, and a second copy at offset second: before, across and past the cut.
 	for _, second := range []int{100, 2048 - len(key)/2, 2050} {
 		srv := serve(t, http.StatusUnauthorized, key+strings.Repeat("x", second-len(key))+key+" is not a valid key")
-		_, err := (&OpenAI{BaseURL: srv.URL, APIKey: key, ModelName: "m"}).Generate(context.Background(), nil)
+		_, err := (&OpenAI{BaseURL: srv.URL, APIKey: key, ModelName: "m"}).Generate(context.Background(), Prompt{})
 		if err == nil || strings.Contains(err.Error(), key[:8]) || !strings.Contains(err.Error(), "m /chat/completions: 401 Unauthorized: ****") {
 			t.Fatalf("key again at %d: %.120v", second, err)
 		}
@@ -53,10 +54,10 @@ func TestRefusedMessage(t *testing.T) {
 		{"", "400 Bad Request"},
 	} {
 		c := &OpenAI{BaseURL: serve(t, http.StatusBadRequest, tc.body).URL, ModelName: "m"}
-		_, chat := c.Generate(context.Background(), nil)
+		_, chat := c.Generate(context.Background(), Prompt{})
 		_, embed := c.Embed(context.Background(), []string{"x"})
 		c.API = Responses
-		_, responses := c.Generate(context.Background(), nil)
+		_, responses := c.Generate(context.Background(), Prompt{})
 		for path, err := range map[string]error{"/chat/completions": chat, "/embeddings": embed, "/responses": responses} {
 			if want := "m " + path + ": " + tc.want; err == nil || !strings.HasPrefix(err.Error(), want) || tc.body == "" && err.Error() != want {
 				t.Errorf("%s, %s: %v", tc.body, path, err)
@@ -76,7 +77,7 @@ func TestNoKeyFromEnvironment(t *testing.T) {
 		w.Write([]byte(finished))
 	}))
 	defer srv.Close()
-	if _, err := (&OpenAI{BaseURL: srv.URL + "/v1", ModelName: "m"}).Generate(context.Background(), nil); err != nil || auth.Load() != "" {
+	if _, err := (&OpenAI{BaseURL: srv.URL + "/v1", ModelName: "m"}).Generate(context.Background(), Prompt{}); err != nil || auth.Load() != "" {
 		t.Fatalf("authorization %q: %v", auth.Load(), err)
 	}
 }
@@ -101,7 +102,7 @@ func TestStreamEnds(t *testing.T) {
 		"cut short":  {chunk("hi"), "ended before it was finished"},
 		"flood":      {strings.Repeat(chunk(strings.Repeat("x", 1<<16)), 17) + finished, "passed 1 MB"},
 	} {
-		got, err := (&OpenAI{BaseURL: serve(t, 0, tc.body).URL, ModelName: "m"}).Generate(context.Background(), nil)
+		got, err := (&OpenAI{BaseURL: serve(t, 0, tc.body).URL, ModelName: "m"}).Generate(context.Background(), Prompt{})
 		if tc.fails == "" && (err != nil || got != "hi") || tc.fails != "" && (err == nil || !strings.Contains(err.Error(), tc.fails)) {
 			t.Errorf("%s: %q %v", name, got, err)
 		}
@@ -151,16 +152,16 @@ func TestFormat(t *testing.T) {
 	} {
 		c := &OpenAI{BaseURL: srv.URL, ModelName: "m", API: api}
 		mode.Store("")
-		if v, _, err := StreamJSON(context.Background(), c, nil, f, nil); err != nil || len(v.Pages) != 1 || v.Pages[0].Files[0] != "a.go" || !strings.Contains(body.Load().(string), want) {
+		if v, _, err := StreamJSON(context.Background(), c, Prompt{}, f, nil); err != nil || len(v.Pages) != 1 || v.Pages[0].Files[0] != "a.go" || !strings.Contains(body.Load().(string), want) {
 			t.Errorf("%s: %+v %v\n%s", api, v, err, body.Load())
 		}
-		if _, err := c.Generate(context.Background(), nil); err != nil || strings.Contains(body.Load().(string), "schema") {
+		if _, err := c.Generate(context.Background(), Prompt{}); err != nil || strings.Contains(body.Load().(string), "schema") {
 			t.Errorf("%s, no format: %v\n%s", api, err, body.Load())
 		}
 		for m, says := range map[string]string{"prose": "m: the answer is not the JSON of plan", "shape": "m: the answer is not the JSON of plan", "refused": "400 Bad Request: {\"error\":{\"message\":\"response_format is not supported\"}}",
 			"cut": "m: the answer reached the output budget before its JSON ended"} {
 			mode.Store(m)
-			_, _, err := StreamJSON(context.Background(), c, nil, f, nil)
+			_, _, err := StreamJSON(context.Background(), c, Prompt{}, f, nil)
 			schema := m == "prose" || m == "shape" // an answer sent (200) that is not the schema's JSON
 			if err == nil || !strings.Contains(err.Error(), says) || errors.Is(err, ErrSchema) != schema || schema && !strings.HasSuffix(err.Error(), ErrSchema.Error()) {
 				t.Errorf("%s, %s: %v", api, m, err)
@@ -196,12 +197,12 @@ func TestResponses(t *testing.T) {
 		}))
 		var got []Usage
 		c := &OpenAI{BaseURL: srv.URL + "/v1", ModelName: "m", API: Responses, MaxTokens: 50, Measure: func(u Usage) { got = append(got, u) }}
-		answer, err := c.Generate(context.Background(), []Message{{Role: "system", Content: "be brief"}, {Role: "user", Content: "größe"}})
+		answer, err := c.Generate(context.Background(), Prompt{Static: "be brief", Dynamic: "größe"})
 		srv.Close()
 		if answer != tc.want && tc.fails == "" || tc.fails != "" && (err == nil || !strings.Contains(err.Error(), tc.fails)) || tc.fails == "" && err != nil {
 			t.Errorf("%s: %q %v", name, answer, err)
 		}
-		for _, w := range []string{"/v1/responses ", `"store":false`, `"max_output_tokens":50`, `"role":"system"`, `"content":"größe"`, `"stream":true`} {
+		for _, w := range []string{"/v1/responses ", `"store":false`, `"max_output_tokens":50`, `"role":"system"`, `"content":"be brief"`, `"content":"größe"`, `"stream":true`} {
 			if !strings.Contains(body, w) {
 				t.Errorf("%s: the request lacks %s: %s", name, w, body)
 			}
@@ -233,7 +234,7 @@ func TestMeasure(t *testing.T) {
 	for _, cached := range []int32{9, 5} {
 		hit.Store(cached)
 		got = nil
-		if answer, err := c.Generate(context.Background(), []Message{{Role: "user", Content: "größe"}}); err != nil || answer != "héllo" {
+		if answer, err := c.Generate(context.Background(), Prompt{Dynamic: "größe"}); err != nil || answer != "héllo" {
 			t.Fatalf("%q %v", answer, err)
 		}
 		if !asked.Load() || len(got) != 1 || got[0] != (Usage{InChars: 5, OutChars: 5, InTokens: 12, OutTokens: 3, CachedTokens: int(max(cached, 8))}) {
@@ -241,7 +242,7 @@ func TestMeasure(t *testing.T) {
 		}
 	}
 	c.Measure = nil
-	if _, err := c.Generate(context.Background(), nil); err != nil || asked.Load() {
+	if _, err := c.Generate(context.Background(), Prompt{}); err != nil || asked.Load() {
 		t.Fatalf("unmeasured: asked %v, %v", asked.Load(), err)
 	}
 }
@@ -328,7 +329,7 @@ func TestThrottleForgetsAbandoned(t *testing.T) {
 func TestStreamErrorMasked(t *testing.T) {
 	const key = "sk-test-0123456789abcdef"
 	srv := serve(t, 0, `data: {"error":{"message":"`+key+strings.Repeat("x", 5000)+`"}}`+"\n\n")
-	_, err := (&OpenAI{BaseURL: srv.URL, APIKey: key, ModelName: "m"}).Generate(context.Background(), nil)
+	_, err := (&OpenAI{BaseURL: srv.URL, APIKey: key, ModelName: "m"}).Generate(context.Background(), Prompt{})
 	const from = "m /chat/completions: "
 	if err == nil || strings.Contains(err.Error(), key[:8]) || !strings.HasPrefix(err.Error(), from) || len(err.Error()) > len(from)+2048 {
 		t.Fatalf("stream error: %.80v", err)
@@ -344,10 +345,10 @@ func TestTimeoutNamed(t *testing.T) {
 	defer srv.Close()
 	defer close(answer)
 	c := &OpenAI{BaseURL: srv.URL, ModelName: "m", Timeout: 50 * time.Millisecond}
-	_, chat := c.Generate(context.Background(), nil)
+	_, chat := c.Generate(context.Background(), Prompt{})
 	_, embed := c.Embed(context.Background(), []string{"x"})
 	c.API = Responses
-	_, responses := c.Generate(context.Background(), nil)
+	_, responses := c.Generate(context.Background(), Prompt{})
 	for _, err := range []error{chat, embed, responses} {
 		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "from m within DEEPCODE_LLM_TIMEOUT") {
 			t.Fatalf("past the timeout: %v", err)
@@ -382,11 +383,116 @@ func TestRetries(t *testing.T) {
 			w.WriteHeader(tc.status)
 		}))
 		start := time.Now()
-		_, err := (&OpenAI{BaseURL: srv.URL, ModelName: "m"}).Generate(context.Background(), nil)
+		_, err := (&OpenAI{BaseURL: srv.URL, ModelName: "m"}).Generate(context.Background(), Prompt{})
 		took := time.Since(start)
 		srv.Close()
 		if (err == nil) != (tc.calls == 2) || calls.Load() != tc.calls || took < tc.wait || took > 5*time.Second {
 			t.Errorf("%s: %d requests in %v: %v", name, calls.Load(), took, err)
+		}
+	}
+}
+
+// TestExchange: on each API the tools go out strict, with their schema; a
+// reply's calls come back in order, and the next request holds the reply and
+// each result under its call's id, measured as sent; a reply cut at the
+// output budget is an error, as its calls may be cut too.
+func TestExchange(t *testing.T) {
+	type args struct {
+		Query string `json:"query"`
+	}
+	tool := Schema[args]("search").Tool("Search the code")
+	replies := map[string][]string{
+		Completions: {`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"looking","tool_calls":[` +
+			`{"id":"c1","type":"function","function":{"name":"search","arguments":"{\"query\":\"router\"}"}},` +
+			`{"id":"c2","type":"function","function":{"name":"done","arguments":""}}]}}]}`,
+			`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"enough"}}]}`,
+			`{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"","tool_calls":[{"id":"c3","type":"function","function":{"name":"search","arguments":"{\"qu"}}]}}]}`},
+		Responses: {`{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"looking"}]},` +
+			`{"type":"function_call","id":"fc1","call_id":"c1","name":"search","arguments":"{\"query\":\"router\"}"},` +
+			`{"type":"function_call","id":"fc2","call_id":"c2","name":"done","arguments":""}]}`,
+			`{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"enough"}]}]}`,
+			`{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"function_call","call_id":"c3","name":"search","arguments":"{\"qu"}]}`},
+	}
+	for api, bodies := range replies {
+		var sent []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(bodies[len(sent)]))
+			sent = append(sent, string(b))
+		}))
+		var measured []int
+		e := (&OpenAI{BaseURL: srv.URL, ModelName: "m", API: api, Measure: func(u Usage) { measured = append(measured, u.InChars, u.OutChars) }}).
+			Exchange(Prompt{Dynamic: "how?"}, []Tool{tool})
+		text, calls, err := e.Next(context.Background())
+		if err != nil || text != "looking" || len(calls) != 2 || calls[0] != (ToolCall{"c1", "search", `{"query":"router"}`}) || calls[1].ID != "c2" || calls[1].Name != "done" {
+			t.Fatalf("%s: %q %+v %v", api, text, calls, err)
+		}
+		e.Answer(calls[0], "found router.go")
+		e.Answer(calls[1], "ok")
+		if text, calls, err = e.Next(context.Background()); err != nil || text != "enough" || len(calls) != 0 {
+			t.Fatalf("%s, second: %q %+v %v", api, text, calls, err)
+		}
+		if _, _, err = e.Next(context.Background()); !errors.Is(err, errSpent) {
+			t.Errorf("%s, cut: %v", api, err)
+		}
+		srv.Close()
+		// how? 4; looking and {"query":"router"} 25; the results 17; enough 6.
+		if want := []int{4, 25, 46, 6, 52, 0}; !slices.Equal(measured, want) {
+			t.Errorf("%s: measured %v, want %v", api, measured, want)
+		}
+		var first, second struct {
+			Tools []struct {
+				Name, Type string
+				Strict     bool
+				Parameters struct{ Required []string }
+				Function   struct {
+					Name       string
+					Strict     bool
+					Parameters struct{ Required []string }
+				}
+			}
+			Messages, Input []map[string]any
+		}
+		if json.Unmarshal([]byte(sent[0]), &first) != nil || json.Unmarshal([]byte(sent[1]), &second) != nil || len(first.Tools) != 1 {
+			t.Fatalf("%s: %s", api, sent[0])
+		}
+		got, want := first.Tools[0], "search true [query]"
+		if api == Completions {
+			got.Name, got.Strict, got.Parameters = got.Function.Name, got.Function.Strict, got.Function.Parameters
+		}
+		if fmt.Sprintf("%s %v %v", got.Name, got.Strict, got.Parameters.Required) != want {
+			t.Errorf("%s: tool %+v", api, got)
+		}
+		// The turns after the question: the reply, then each result under its id.
+		turns, _ := json.Marshal(append(second.Messages, second.Input...)[1:])
+		for _, w := range map[string][]string{
+			Completions: {`"role":"assistant"`, `"content":"looking"`, `"id":"c1"`, `"id":"c2"`, `{"content":"found router.go","role":"tool","tool_call_id":"c1"}`, `{"content":"ok","role":"tool","tool_call_id":"c2"}`},
+			Responses: {`{"content":"looking","role":"assistant"`, `{"arguments":"{\"query\":\"router\"}","call_id":"c1","name":"search","type":"function_call"}`,
+				`{"call_id":"c2","output":"ok","type":"function_call_output"}`, `{"call_id":"c1","output":"found router.go","type":"function_call_output"}`},
+		}[api] {
+			if !strings.Contains(string(turns), w) {
+				t.Errorf("%s: the second request lacks %s: %s", api, w, turns)
+			}
+		}
+	}
+}
+
+func TestPrompt(t *testing.T) {
+	read := func(p Prompt) (s string) {
+		for _, m := range p.messages() {
+			s += m.Role + ":" + m.Content + " "
+		}
+		return s
+	}
+	history := append(make([]Message, 0, 4), Message{Role: "user", Content: "earlier"}) // room to grow, which After must not write into
+	p := Prompt{Static: "rules", Previous: history, Dynamic: "now"}
+	first, second := p.After("one", "again"), p.After("two", "once more")
+	for _, c := range [][2]string{{read(p), "system:rules user:earlier user:now "}, {read(Prompt{Previous: history}) + "|" + read(Prompt{}), "user:earlier |"},
+		{read(first), "system:rules user:earlier user:now assistant:one user:again "}, // second did not overwrite it
+		{read(second.After("three", "last")), "system:rules user:earlier user:now assistant:two user:once more assistant:three user:last "}} {
+		if c[0] != c[1] {
+			t.Errorf("got %q, want %q", c[0], c[1])
 		}
 	}
 }

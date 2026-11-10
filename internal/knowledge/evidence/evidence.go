@@ -4,6 +4,7 @@ package evidence
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"deepcode/internal/knowledge/retrieval"
@@ -16,24 +17,7 @@ func Format(hits []retrieval.Hit, maxChars int) (string, []retrieval.Hit) {
 	var b strings.Builder
 	var used []retrieval.Hit
 	for _, h := range hits {
-		// Repository text is untrusted: keep it from closing the block early.
-		content := strings.ReplaceAll(h.Content, "</source", "<\\/source")
-		var body strings.Builder
-		last := h.StartLine
-		for i, l := range strings.Split(content, "\n") {
-			line := fmt.Sprintf("%d: %s\n", h.StartLine+i, l)
-			if i > 0 && body.Len()+len(line) > maxChars {
-				break
-			}
-			body.WriteString(line)
-			last = h.StartLine + i
-		}
-		h.EndLine = min(h.EndLine, last)
-		block := fmt.Sprintf("<source path=%q lines=\"%d-%d\"", h.Path, h.StartLine, h.EndLine)
-		if h.Symbol != "" {
-			block += fmt.Sprintf(" symbol=%q", h.Symbol)
-		}
-		block += ">\n" + body.String() + "</source>\n\n"
+		block, h := render(h, maxChars)
 		if b.Len()+len(block) > maxChars && len(used) > 0 {
 			break
 		}
@@ -41,4 +25,34 @@ func Format(hits []retrieval.Hit, maxChars int) (string, []retrieval.Hit) {
 		used = append(used, h)
 	}
 	return b.String(), used
+}
+
+// Size is the bytes of h's block as Format writes it, uncut: hits whose sizes
+// sum to at most maxChars are all shown, whole.
+func Size(h retrieval.Hit) int {
+	block, _ := render(h, math.MaxInt)
+	return len(block)
+}
+
+// render is h's block, its lines cut past maxChars but the first, and h as
+// shown.
+func render(h retrieval.Hit, maxChars int) (string, retrieval.Hit) {
+	// Repository text is untrusted: keep it from closing the block early.
+	content := strings.ReplaceAll(h.Content, "</source", "<\\/source")
+	var body strings.Builder
+	last := h.StartLine
+	for i, l := range strings.Split(content, "\n") {
+		line := fmt.Sprintf("%d: %s\n", h.StartLine+i, l)
+		if i > 0 && body.Len()+len(line) > maxChars {
+			break
+		}
+		body.WriteString(line)
+		last = h.StartLine + i
+	}
+	h.EndLine = min(h.EndLine, last)
+	block := fmt.Sprintf("<source path=%q lines=\"%d-%d\"", h.Path, h.StartLine, h.EndLine)
+	if h.Symbol != "" {
+		block += fmt.Sprintf(" symbol=%q", h.Symbol)
+	}
+	return block + ">\n" + body.String() + "</source>\n\n", h
 }

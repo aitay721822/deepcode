@@ -96,12 +96,9 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 		place = fmt.Sprintf("This page is part of the section %q: keep to its own subject, which the section's other pages do not cover.\n\n", section)
 	}
 	write, flush := progress.Lines()
-	msgs := []ai.Message{
-		{Role: "system", Content: writePrompt},
-		{Role: "user", Content: fmt.Sprintf("Repository: %s at commit %s. Write in %s.\nPages of this wiki: %s\n\n%s%s%s%sWrite the page %q. Focus: %s\n\nSources:\n\n%s",
-			repo, src.sha[:min(7, len(src.sha))], g.Language, strings.Join(titles, " | "), notes, common, overview, place, p.Title, p.Query, sources)},
-	}
-	out, err := g.Chat.Stream(ctx, msgs, write)
+	ask := ai.Prompt{Static: writePrompt, Dynamic: fmt.Sprintf("Repository: %s at commit %s. Write in %s.\nPages of this wiki: %s\n\n%s%s%s%sWrite the page %q. Focus: %s\n\nSources:\n\n%s",
+		repo, src.sha[:min(7, len(src.sha))], g.Language, strings.Join(titles, " | "), notes, common, overview, place, p.Title, p.Query, sources)}
+	out, err := g.Chat.Stream(ctx, ask, write)
 	flush()
 	if err != nil {
 		return "", nil, err
@@ -109,7 +106,7 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 	link := func(c evidence.Citation) string {
 		return gitserver.SourceURL(src.kind, src.url, src.sha, c.Path, c.StartLine, c.EndLine)
 	}
-	content, cites := evidence.LinkCitations(clean(out), used, link)
+	content, cites, _ := evidence.LinkCitations(clean(out), used, link)
 	if len(cites) > 0 {
 		return content, cites, nil
 	}
@@ -119,14 +116,13 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 		note, why = pathNote, "the page cites lines without their file"
 	}
 	progress.Logf("%s: writing it again", why)
-	again, err := g.Chat.Stream(ctx, append(msgs, ai.Message{Role: "assistant", Content: out},
-		ai.Message{Role: "user", Content: fmt.Sprintf(note, used[0].Path, used[0].StartLine, used[0].EndLine)}), write)
+	again, err := g.Chat.Stream(ctx, ask.After(out, fmt.Sprintf(note, used[0].Path, used[0].StartLine, used[0].EndLine)), write)
 	flush()
 	if err != nil && ctx.Err() != nil {
 		return "", nil, err
 	} else if err != nil {
 		progress.Logf("the page stands, as writing it again failed: %v", err)
-	} else if c, cs := evidence.LinkCitations(clean(again), used, link); len(cs) > 0 {
+	} else if c, cs, _ := evidence.LinkCitations(clean(again), used, link); len(cs) > 0 {
 		content, cites = c, cs
 	}
 	return content, cites, nil

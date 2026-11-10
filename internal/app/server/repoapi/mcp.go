@@ -373,7 +373,7 @@ func (a *API) fileTool(ctx context.Context, req *mcp.CallToolRequest, in fileArg
 
 // asking tells an agent's user what a long answer is doing, by the chat's
 // events: once per step, not per drawing event.
-var asking = map[string]string{"conversation": "searching the code", "search": "searching again",
+var asking = map[string]string{"conversation": "searching the code", "search": "reading the code",
 	"evidence": "writing the answer", "drawing": "drawing the code map", "done": "done"}
 
 // errRevoked: the token stopped working, or allowing the question, while it

@@ -81,8 +81,14 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Input    []string     `json:"input"`
 		Messages []ai.Message `json:"messages"`
+		Tools    []any        `json:"tools"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
+	if len(body.Tools) > 0 { // gathering an answer's evidence: the first search is enough
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"The first search is enough."}}]}`)
+		return
+	}
 	if r.URL.Path == "/v1/embeddings" {
 		data := make([]map[string]any, len(body.Input))
 		for i, s := range body.Input {
