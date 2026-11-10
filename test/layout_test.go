@@ -16,10 +16,14 @@ import (
 
 // TestFolderLimits enforces the layout rule: every folder holds at most five
 // files and at most five subfolders; past that, split it by business area.
+// .github is GitHub's, which reads workflows from .github/workflows only.
 func TestFolderLimits(t *testing.T) {
 	files := map[string]int{}
 	dirs := map[string]map[string]bool{}
 	for _, f := range repoFiles(t) {
+		if strings.HasPrefix(f, ".github/") {
+			continue
+		}
 		dir := path.Dir(f)
 		files[dir]++
 		for d := dir; d != "."; d = path.Dir(d) {

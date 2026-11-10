@@ -11,4 +11,5 @@ cp -R web/dist/. internal/app/server/webui/dist/
 touch internal/app/server/webui/dist/.gitkeep
 # -s -w: smaller binary, and on Windows with TDM-GCC an unstripped cgo build
 # is rejected by the loader ("not a valid application for this OS platform").
-go build -ldflags="-s -w" -o "deepcode$(go env GOEXE)" ./cmd/deepcode
+# VERSION (the CI sets it) is what deepcode --version prints.
+go build -trimpath -ldflags="-s -w -X main.version=${VERSION:-dev}" -o "deepcode$(go env GOEXE)" ./cmd/deepcode

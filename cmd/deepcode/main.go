@@ -14,10 +14,15 @@ import (
 	"deepcode/internal/platform/storage"
 )
 
+// version is set by a release build (scripts/build.sh with VERSION): the tag,
+// or dev-<commit> for a build of main.
+var version = "dev"
+
 func main() {
 	root := &cobra.Command{
-		Use:   "deepcode",
-		Short: "A code wiki: repositories indexed, written up and asked about",
+		Use:     "deepcode",
+		Version: version,
+		Short:   "A code wiki: repositories indexed, written up and asked about",
 		Long: `deepcode serves the UI, API and background indexing from one process.
 
 Settings come from deepcode.yaml (or the file DEEPCODE_CONFIG names) and

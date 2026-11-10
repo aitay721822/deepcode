@@ -1,0 +1,116 @@
+# CI on every push and pull request. Releases (CD) on pushes only, of deepcode.exe for Windows amd64:
+# - main: the rolling pre-release "dev", replaced on every push, so only one is kept;
+# - a tag vX.Y.Z: a release; a tag with a suffix (vX.Y.Z-rc.1, -beta.1): a pre-release that stays.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# A newer push to main or a pull request supersedes the run before it; a tag's run always finishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the eval's deepcode corpus is an older commit of this repository
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build (Biome, tsc, the UI and the binary)
+        run: bash scripts/build.sh
+      - name: gofmt
+        run: |
+          out=$(gofmt -l cmd internal test)
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
+      - run: go vet ./...
+      - name: go test
+        run: go test -count=1 -timeout 10m $(go list ./... | grep -v /test/eval)
+      - uses: actions/cache@v6
+        with:
+          path: ~/eval-git
+          key: eval-git-${{ hashFiles('test/eval/cases.go') }}
+      - name: Clone the eval corpora
+        run: |
+          mkdir -p ~/eval-git
+          grep -oE 'Name: "[^"]+", URL: "[^"]+"' test/eval/cases.go | sed -E 's/Name: "([^"]+)", URL: "([^"]+)"/\1 \2/' |
+            while read -r name url; do
+              [ -d ~/eval-git/"$name".git ] || git clone --bare --quiet "$url" ~/eval-git/"$name".git
+            done
+      - name: Eval (lexical; a skipped corpus fails)
+        run: |
+          set -o pipefail
+          DEEPCODE_EVAL_GIT=~/eval-git go test -count=1 -timeout 10m -v ./test/eval/ | tee eval.log
+          if grep -E "set DEEPCODE_EVAL_GIT|is not a \.git directory|not in a git checkout" eval.log; then exit 1; fi
+
+  build: # what is released: deepcode.exe for Windows amd64 only
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build
+        shell: bash
+        env:
+          CGO_ENABLED: "1" # tree-sitter's grammars are C
+          GOARCH: amd64
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then tag="$GITHUB_REF_NAME"; export VERSION="$tag"; else tag=dev; export VERSION="dev-${GITHUB_SHA::7}"; fi
+          bash scripts/build.sh
+          ./deepcode.exe --version
+          mv deepcode.exe "deepcode_${tag}_windows_amd64.exe"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deepcode-windows-amd64
+          path: deepcode_*_windows_amd64.exe
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            pre=""; [[ "$GITHUB_REF_NAME" == *-* ]] && pre="--prerelease"
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes $pre
+          else
+            gh release delete dev --cleanup-tag --yes 2>/dev/null || true
+            gh release create dev dist/* --prerelease --target "$GITHUB_SHA" \
+              --title "Development build ${GITHUB_SHA::7}" \
+              --notes "The latest build of main (${GITHUB_SHA}), replaced on every push. Not a release."
+          fi
