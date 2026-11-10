@@ -77,7 +77,42 @@ const fmt = ((n: number) => String(n)) satisfies Fmt;
 function* gen() {}
 class A { m() {} }
 module.exports = {};
-`, []string{"default function 1-1", "gen function 2-2", "A class 3-3", "  m method 3-3"}},
+res.send = function send(body) {
+  return this;
+};
+app.get = (path) => path;
+View.prototype.render = function render() {};
+exports.query = function () {};
+module.exports.json = function json() {};
+exports.Route = class {};
+res.status = 404;
+f().y = function () {};
+x[k] = function () {};
+this.z = function () {};
+req.get = req.header = function header(name) {};
+exports = module.exports = createApplication;
+exports.wrap = (function () {});
+handler = function () {};
+/**
+ * Sends.
+ */
+
+exports.later = function () {};
+// a note
+
+exports.alone = function () {};
+/** Two lines apart. */
+
+
+exports.far = function () {};
+/*** banner ***/
+
+module.exports = function main() {};
+`, []string{"default function 1-1", "gen function 2-2", "A class 3-3", "  m method 3-3", "res.send function 5-7", "app.get function 8-8",
+			"View.render function 9-9", "exports.query function 10-10", "module.exports.json function 11-11", "exports.Route class 12-12",
+			"req.get function 17-17", "req.header function 17-17", "exports.wrap function 19-19", "exports.later function 21-25",
+			"exports.alone function 28-28", "exports.far function 32-32", "module.exports function 35-35"}},
+		{"java", "package x;\n\n/**\n * Doc.\n */\n\nclass A {}\n/**/\n\nclass B {}\n", []string{"A class 3-7", "B class 10-10"}},
 		{"markdown", "# Title\n", []string{"Title section 1-1"}}, // its sections, without a grammar
 		{"text", "# Title\n", nil},
 	}

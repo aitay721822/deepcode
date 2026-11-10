@@ -107,7 +107,7 @@ var Corpora = []Corpus{
 			Want: []string{"src/middleware/persist.ts"}},
 		{Ask: "如何連接瀏覽器的開發者工具來除錯狀態？", Terms: "devtools middleware zustand devtools connect", Want: []string{"src/middleware/devtools.ts"}},
 	}},
-	{Name: "express", URL: "https://github.com/expressjs/express", SHA: "43fca52d28a422c8be48fd489cbd4f2d6152bab6", Recall: 0.999, MRR: 0.962, HybridRecall: 0.999, HybridMRR: 0.999, Questions: []Question{
+	{Name: "express", URL: "https://github.com/expressjs/express", SHA: "43fca52d28a422c8be48fd489cbd4f2d6152bab6", Recall: 0.999, MRR: 0.980, HybridRecall: 0.999, HybridMRR: 0.999, Questions: []Question{
 		{Ask: "How is an Express application created and its prototype mixed with EventEmitter?", Want: []string{"lib/express.js"}},
 		{Ask: "How does app.use mount middleware or a sub-app at a path?", Want: []string{"lib/application.js"}},
 		{Ask: "How does app.handle dispatch a request and what happens when no route matches?", Want: []string{"lib/application.js"}},

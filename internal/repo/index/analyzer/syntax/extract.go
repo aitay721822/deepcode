@@ -75,13 +75,16 @@ func (x *Extractor) Block(n *sitter.Node) []Symbol {
 }
 
 // block extracts n's declarations from its child from on; a comment starting
-// on line prevEnd trails what came before.
+// on line prevEnd trails what came before. A declaration takes the comments
+// ending on the line above it, or a doc comment (/** and a space) ending a
+// blank line above, which some projects leave under every doc: left to the
+// declaration before, each doc would lead that one's chunk.
 func (x *Extractor) block(n *sitter.Node, from uint, prevEnd int) []Symbol {
 	if n == nil {
 		return nil
 	}
 	var out []Symbol
-	docStart, docEnd := 0, 0
+	docStart, docEnd, jsdoc := 0, 0, false
 	for i := from; i < n.NamedChildCount(); i++ {
 		c := n.NamedChild(i)
 		start, end := Line(c.StartPosition()), lastLine(c)
@@ -93,7 +96,8 @@ func (x *Extractor) block(n *sitter.Node, from uint, prevEnd int) []Symbol {
 			if docStart == 0 || start > docEnd+1 {
 				docStart = start
 			}
-			docEnd = end
+			text := x.Text(c) // /** doc, not /**/ or a /*** banner
+			docEnd, jsdoc = end, len(text) > 3 && strings.HasPrefix(text, "/**") && unicode.IsSpace(rune(text[3]))
 			continue
 		}
 		syms := x.g.Decl(x, c)
@@ -106,7 +110,7 @@ func (x *Extractor) block(n *sitter.Node, from uint, prevEnd int) []Symbol {
 		}
 		// A symbol that starts inside the node (the first type of a Go type
 		// group, the first method of a Rust impl block) carries the node's comment.
-		if len(syms) > 0 && docStart > 0 && docEnd >= start-1 {
+		if len(syms) > 0 && docStart > 0 && (docEnd >= start-1 || jsdoc && docEnd == start-2) {
 			syms[0].StartLine = min(syms[0].StartLine, docStart)
 		}
 		docStart, prevEnd = 0, end

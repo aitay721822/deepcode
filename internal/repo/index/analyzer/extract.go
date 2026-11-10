@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"strings"
+
 	sitter "github.com/tree-sitter/go-tree-sitter"
 
 	"deepcode/internal/repo/index/analyzer/syntax"
@@ -76,9 +78,13 @@ func decl(x *syntax.Extractor, n *sitter.Node) []Symbol {
 		return syms
 	case "ambient_declaration": // declare function / declare namespace
 		return x.Block(n)
-	case "expression_statement": // the TS grammar wraps `namespace X {}` in one
-		if c := n.NamedChild(0); c != nil && c.Kind() == "internal_module" {
+	case "expression_statement": // the TS grammar wraps `namespace X {}` in one; JS assigns members in one
+		switch c := n.NamedChild(0); {
+		case c == nil:
+		case c.Kind() == "internal_module":
 			return decl(x, c)
+		case c.Kind() == "assignment_expression":
+			return member(x, n, c)
 		}
 	case "lexical_declaration", "variable_declaration": // const f = () => {}
 		var out []Symbol
@@ -101,6 +107,41 @@ func decl(x *syntax.Extractor, n *sitter.Node) []Symbol {
 		return out
 	}
 	return nil
+}
+
+// member is a function, or class, assigned to members in statement stmt, as
+// express defines its request and response: res.send = function send() {},
+// x.y = () => {}, X.prototype.y = function () {}, exports.y = function () {},
+// and each member of a chain, req.get = req.header = function header() {}.
+// Each is y, of x (Container, which qualifies its name): X for X.prototype.y,
+// module.exports for module.exports.y. A member whose object is no name or
+// member (f().y, x[k]) makes none, nor does a plain name (a = function).
+func member(x *syntax.Extractor, stmt, a *sitter.Node) []Symbol {
+	var lefts []*sitter.Node
+	v := a
+	for v != nil && v.Kind() == "assignment_expression" {
+		lefts, v = append(lefts, v.ChildByFieldName("left")), unwrap(v.ChildByFieldName("right"))
+	}
+	if !isFunction(v) {
+		return nil
+	}
+	kind := "function"
+	if v.Kind() == "class" {
+		kind = "class"
+	}
+	var out []Symbol
+	for _, left := range lefts {
+		obj := left.ChildByFieldName("object")
+		if obj == nil || obj.Kind() != "identifier" && obj.Kind() != "member_expression" {
+			continue
+		}
+		syms := x.Symbol(left.ChildByFieldName("property"), stmt, kind, nil)
+		for i := range syms {
+			syms[i].Container = strings.TrimSuffix(x.Text(obj), ".prototype")
+		}
+		out = append(out, syms...)
+	}
+	return out
 }
 
 // unwrap peels what TypeScript wraps a value in: ((x) => x) as T, f satisfies T, f!.

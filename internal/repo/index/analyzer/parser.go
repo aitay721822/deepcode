@@ -59,8 +59,10 @@ type File struct {
 // Version is raised whenever what Detect, Generated or Parse make of a file
 // changes: a snapshot an older version indexed lends the next none of its
 // files' rows, so each is read again. 1 added C#, Java and Rust; 2, JMeter
-// test plans; 3, C#'s top-level statements as Main and Markdown's sections.
-const Version = 3
+// test plans; 3, C#'s top-level statements as Main and Markdown's sections;
+// 4, JavaScript's functions assigned to members (res.send = function send),
+// and a JSDoc a blank line above its declaration.
+const Version = 4
 
 // HasGrammar reports whether Parse reads lang's declarations and imports with
 // a grammar; Markdown's sections it reads without (markdown.Sections).
