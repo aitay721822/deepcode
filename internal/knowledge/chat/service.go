@@ -98,9 +98,12 @@ const (
 )
 
 // What gathering the evidence may take, its budget aside (limit). A deep
-// answer, and a code map, may take twice the rounds and more time.
+// answer, and a code map, may take twice the rounds and more time, and go on
+// when a reply only reads files found before it: the convergence stop that
+// ends a plain answer's gathering then (loop.StopConverged) was measured on
+// plain answers alone, and a deep one is to reach as far as its room allows.
 var (
-	gathering     = loop.Limits{Rounds: 4, Time: 45 * time.Second}
+	gathering     = loop.Limits{Rounds: 4, Time: 45 * time.Second, Converge: true}
 	deepGathering = loop.Limits{Rounds: 8, Time: 120 * time.Second}
 )
 

@@ -57,6 +57,21 @@ func shown(t *testing.T, s *state) []string {
 	return paths(hits)
 }
 
+// TestBudgetStop: the first search's hits fit, with 20 bytes left; each read
+// is refused, the first told after its lines, so the second reply, which adds
+// nothing past a refusal told, ends the gathering.
+func TestBudgetStop(t *testing.T) {
+	srv, asked := model(t, []call{{"read_file", `{"path":"src/tree.go","start_line":0,"end_line":0}`}}, []call{{"read_file", `{"path":"gen/big.go","start_line":0,"end_line":0}`}})
+	g, req := fixture(t, srv.URL)
+	req.Chars = size(req.First.Hits) + 20
+	if res := g.Gather(context.Background(), req, func(string, any) {}); res.Stop != StopBudget || res.Rounds != 2 || len(res.Hits) != 2 {
+		t.Errorf("stopped %q after %d rounds, evidence %q", res.Stop, res.Rounds, paths(res.Hits))
+	}
+	if got := results(asked())["r0c0"]; !strings.HasPrefix(got, "src/tree.go, lines 1-30 of 30:\n") || !strings.HasSuffix(got, "20 bytes left of "+fmt.Sprint(req.Chars)+". Read a narrower range, or call done.\n") {
+		t.Errorf("the refused read was told %q", got)
+	}
+}
+
 // TestEvictionOrder: a hit that does not fit evicts chunks other calls found,
 // oldest call first, so the first search's first, and within a call the lowest
 // ranked first; the call's result names each. A budget met exactly is not

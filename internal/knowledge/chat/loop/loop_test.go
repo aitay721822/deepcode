@@ -91,7 +91,7 @@ func seed(t *testing.T, model string, fs []file, stmts ...string) (Gatherer, Req
 	r := &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}}
 	g := Gatherer{Model: &ai.OpenAI{BaseURL: model, ModelName: "m"}, Retriever: r,
 		Catalog: &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: &jobs.Queue{Store: &jobstore.Store{DB: db}}}}
-	return g, Request{Snapshot: catalog.Ref{ID: 1, CommitSHA: "abc"}, Repo: "o/r", Question: "How is a route found?", Limits: Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}}
+	return g, Request{Snapshot: catalog.Ref{ID: 1, CommitSHA: "abc"}, Repo: "o/r", Question: "How is a route found?", Limits: Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}, Converge: true}}
 }
 
 // call is one tool call of a scripted reply.
@@ -214,26 +214,32 @@ func TestGather(t *testing.T) {
 }
 
 // TestStops: each rule ends a gathering, and none fails it: the model's
-// failure leaves the first search's hits.
+// failure leaves the first search's hits. Under Converge, a reply that only
+// reads files found before it (by path or one ending it) and finds no other
+// converges; a search, another tool or a failed read goes on. A case's first word is its rule.
 func TestStops(t *testing.T) {
 	read := func(p string) call { return call{"read_file", `{"path":"` + p + `","start_line":0,"end_line":0}`} }
 	module := call{"search_code", `{"query":"module","path_prefix":""}`} // finds only what the first search found
+	four := Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}, Converge: true}
 	for name, tc := range map[string]struct {
-		replies [][]call
-		limits  Limits
-		rounds  int
-		hits    int
+		replies      [][]call
+		limits       Limits
+		rounds, hits int
 	}{
-		StopAnswered: {nil, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}, 1, 2},
-		StopRounds:   {[][]call{{read("go.mod")}, {read("src/mux.go")}, {read("src/tree.go")}}, Limits{Rounds: 2, Limit: evidence.Limit{Chars: 40000}}, 2, 3},
-		// The first search's hits fit, with 20 bytes left (set below); each read is refused, the first told.
-		StopBudget: {[][]call{{read("src/tree.go")}, {read("gen/big.go")}}, Limits{Rounds: 4}, 2, 2},
+		StopAnswered: {nil, four, 1, 2},
+		StopRounds:   {[][]call{{read("src/mux.go")}, {read("src/tree.go")}, {read("gen/big.go")}}, Limits{Rounds: 2, Limit: evidence.Limit{Chars: 40000}}, 2, 4},
 		// Only what the first search found, then the same call again: two rounds in a row that added nothing.
-		StopStalled: {[][]call{{module}, {module}}, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}, 2, 2},
-		StopError:   {nil, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}, 0, 2},
-		StopTime:    {nil, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}, Time: 100 * time.Millisecond}, 0, 2},
+		StopStalled:                           {[][]call{{module}, {module}}, four, 2, 2},
+		StopConverged:                         {[][]call{{read("src/mux.go")}, {read("mux.go"), read("src/handler.go")}}, four, 2, 3},
+		StopAnswered + " after a search":      {[][]call{{read("go.mod"), module}}, four, 2, 2},
+		StopAnswered + " after another tool":  {[][]call{{read("go.mod"), {"users", `{"path":"go.mod","start_line":0,"end_line":0}`}}}, four, 2, 2},
+		StopAnswered + " after no such file":  {[][]call{{read("go.mod"), read("src/nope.go")}}, four, 2, 2},
+		StopAnswered + " after bad arguments": {[][]call{{read("go.mod"), {"read_file", `{"path":5}`}}}, four, 2, 2},
+		StopAnswered + " without Converge":    {[][]call{{read("src/mux.go")}, {read("mux.go"), read("src/handler.go")}}, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}, 3, 3},
+		StopError:                             {nil, four, 0, 2},
+		StopTime:                              {nil, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}, Time: 100 * time.Millisecond}, 0, 2},
 	} {
-		srv, asked := model(t, tc.replies...)
+		srv, _ := model(t, tc.replies...)
 		switch name {
 		case StopError:
 			srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "no", http.StatusBadRequest) })
@@ -244,17 +250,11 @@ func TestStops(t *testing.T) {
 			})
 		}
 		g, req := fixture(t, srv.URL)
-		if req.Limits = tc.limits; name == StopBudget {
-			req.Chars = size(req.First.Hits) + 20
-		}
+		req.Limits = tc.limits
 		start := time.Now()
 		res := g.Gather(context.Background(), req, func(string, any) {})
-		if res.Stop != name || res.Rounds != tc.rounds || len(res.Hits) != tc.hits || time.Since(start) > 5*time.Second {
+		if res.Stop != strings.Fields(name)[0] || res.Rounds != tc.rounds || len(res.Hits) != tc.hits || time.Since(start) > 5*time.Second {
 			t.Errorf("%s: stopped %q after %d rounds in %v, evidence %q", name, res.Stop, res.Rounds, time.Since(start), paths(res.Hits))
-		}
-		// The refusal is told in the read's result, after its lines.
-		if got := results(asked())["r0c0"]; name == StopBudget && (!strings.HasPrefix(got, "src/tree.go, lines 1-30 of 30:\n") || !strings.HasSuffix(got, "20 bytes left of "+fmt.Sprint(req.Chars)+". Read a narrower range, or call done.\n")) {
-			t.Errorf("the refused read was told %q", got)
 		}
 	}
 }
@@ -327,10 +327,9 @@ func TestReadIndexedOnly(t *testing.T) {
 	}
 	s.reads = []retrieval.Hit{{Path: "gen/big.go", StartLine: 50, EndLine: 99}, {Path: "gen/big.go", StartLine: 1, EndLine: 49}, {Path: "gen/big.go", StartLine: 200, EndLine: 250}}
 	for _, tc := range []struct {
-		path        string
-		start, end  int
-		first, last int
-		text        string
+		path                    string
+		start, end, first, last int
+		text                    string
 	}{
 		{"big.go", 10, 120, 100, 120, "gen/big.go, lines 100-120 of 250, the rest of lines 10-120 read above:\n100: //\n"},
 		{"big.go", 150, 220, 150, 199, "gen/big.go, lines 150-199 of 250, the rest of lines 150-220 read above:\n"},
@@ -459,7 +458,8 @@ func chunkAt(t *testing.T, g Gatherer, p string) retrieval.Hit {
 // type followed and the ranges found.
 func TestFollow(t *testing.T) {
 	ctx := context.Background()
-	srv, asked := model(t, []call{{"search_code", `{"query":"Ledger","path_prefix":""}`}, {"read_file", `{"path":"src/Ordering/CloseHandler.cs","start_line":0,"end_line":0}`}})
+	// The read is of a file follow found, but what it names is followed to another: no convergence.
+	srv, asked := model(t, []call{{"read_file", `{"path":"src/Ordering/CloseHandler.cs","start_line":0,"end_line":0}`}}, []call{{"search_code", `{"query":"Ledger","path_prefix":""}`}})
 	g, req := twinsFixture(t, srv.URL)
 	worker := chunkAt(t, g, "src/Payment/Worker.cs")
 	req.First = retrieval.Result{Hits: []retrieval.Hit{worker}}
@@ -469,14 +469,14 @@ func TestFollow(t *testing.T) {
 		from = append(from, fmt.Sprint(o.Round, " ", o.Tool))
 	}
 	if want := []string{"src/Ordering/CloseHandler.cs:1-1", "src/Ordering/Handlers/OrderPaidHandler.cs:1-1", "src/Payment/Worker.cs:1-1", "src/Shipping/ShipHandler.cs:1-1", "src/Payment/ArchiveHandler.cs:1-1", "src/Ordering/Ledger.cs:1-1"}; !slices.Equal(paths(res.Hits), want) ||
-		!slices.Equal(from, []string{"2 read_file", "1 follow", "1 first", "1 follow", "2 follow", "2 search_code"}) || !maps.Equal(res.Calls, map[string]int{"search_code": 1, "read_file": 1, "follow": 4}) || res.Graph != 5 || res.Stop != StopAnswered {
+		!slices.Equal(from, []string{"2 read_file", "1 follow", "1 first", "1 follow", "2 follow", "3 search_code"}) || !maps.Equal(res.Calls, map[string]int{"search_code": 1, "read_file": 1, "follow": 4}) || res.Graph != 5 || res.Stop != StopAnswered {
 		t.Errorf("evidence %q from %q, calls %v, graph %d, stopped %q", paths(res.Hits), from, res.Calls, res.Graph, res.Stop)
 	}
 	if first := asked()[0][1]["content"].(string); !strings.HasSuffix(first, "Followed OrderPaid to: src/Ordering/Handlers/OrderPaidHandler.cs:1-1, src/Payment/Worker.cs:1-1.\n"+
 		"Followed OrderShipped to: src/Shipping/ShipHandler.cs:1-1.\nFollowed OrderClosed to: src/Ordering/CloseHandler.cs:1-1.\n") {
 		t.Errorf("first request %q", first)
 	}
-	if got := results(asked())["r0c1"]; !strings.HasSuffix(got, "OrderArchived(c.OrderId));\nFollowed OrderArchived to: src/Payment/ArchiveHandler.cs:1-1.\n") {
+	if got := results(asked())["r0c0"]; !strings.HasSuffix(got, "OrderArchived(c.OrderId));\nFollowed OrderArchived to: src/Payment/ArchiveHandler.cs:1-1.\n") {
 		t.Errorf("the read was told %q", got)
 	}
 

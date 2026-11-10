@@ -30,7 +30,8 @@ import (
 type Limits struct {
 	Rounds int // the model's replies
 	evidence.Limit
-	Time time.Duration // 0: none but the caller's
+	Time     time.Duration // 0: none but the caller's
+	Converge bool          // a reply that only reads files found before it ends the gathering (StopConverged)
 }
 
 // Request is a question to gather the evidence for.
@@ -73,14 +74,15 @@ type Origin struct {
 
 // The rules that end a gathering (Result.Stop).
 const (
-	StopDone     = "done"     // the model called done
-	StopAnswered = "answered" // a reply that called no tool
-	StopRounds   = "rounds"   // Limits.Rounds replies
-	StopBudget   = "budget"   // a reply added nothing and the budget refused some of it, a refusal told before
-	StopStalled  = "stalled"  // maxStalls rounds in a row added nothing
-	StopTime     = "time"     // Limits.Time, or the caller's deadline, passed
-	StopError    = "error"    // the model failed: what was gathered stands
-	StopContext  = "context"  // the next request would not fit the model's context, its older results masked (harness.Next)
+	StopDone      = "done"      // the model called done
+	StopAnswered  = "answered"  // a reply that called no tool
+	StopRounds    = "rounds"    // Limits.Rounds replies
+	StopBudget    = "budget"    // a reply added nothing and the budget refused some of it, a refusal told before
+	StopConverged = "converged" // a reply only read files found before it, and found no other (converged)
+	StopStalled   = "stalled"   // maxStalls rounds in a row added nothing
+	StopTime      = "time"      // Limits.Time, or the caller's deadline, passed
+	StopError     = "error"     // the model failed: what was gathered stands
+	StopContext   = "context"   // the next request would not fit the model's context, its older results masked (harness.Next)
 )
 
 const (
@@ -116,6 +118,7 @@ type state struct {
 	readFrom              []Origin        // each of reads'
 	first, users, results []retrieval.Hit // the chunks the first search, users and search_code found, held
 	held                  map[int64]found // chunks held, by where each was first found
+	files                 map[string]bool // the files of every hit found, the first search's too, held or not (converged)
 	seen                  map[string]bool // calls run, by tool and arguments
 	calls                 int             // calls that returned code, each follow's too: the first search is call 0
 	messages, followed    map[string]bool // the snapshot's message types (twins.Names), and those followed
@@ -168,6 +171,7 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 			break
 		}
 		grew, done, refused := false, false, len(s.res.Refused)
+		converged := s.converged(calls)
 		for i, call := range calls {
 			var result string
 			switch {
@@ -195,6 +199,8 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 			s.res.Stop = StopDone
 		case !grew && full && told:
 			s.res.Stop = StopBudget
+		case req.Converge && converged():
+			s.res.Stop = StopConverged
 		case stalls == maxStalls:
 			s.res.Stop = StopStalled
 		}
@@ -207,9 +213,10 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 // start is a gathering's state, its evidence the first search's hits, in rank
 // order, as many as fit the budget: the rest refused.
 func start(g Gatherer, req Request) *state {
-	s := &state{g: g, req: req, res: Result{Result: req.First, Calls: map[string]int{}}, held: map[int64]found{}, seen: map[string]bool{}, followed: map[string]bool{},
-		short: map[int]string{}, answered: map[int]int{}, tokens: map[string]int{}}
+	s := &state{g: g, req: req, res: Result{Result: req.First, Calls: map[string]int{}}, held: map[int64]found{}, files: map[string]bool{}, seen: map[string]bool{},
+		followed: map[string]bool{}, short: map[int]string{}, answered: map[int]int{}, tokens: map[string]int{}}
 	for i, h := range req.First.Hits {
+		s.files[h.Path] = true
 		if _, held := s.held[h.ChunkID]; !held {
 			s.admit(h, found{Origin{Round: 1, Tool: "first", Chars: len(h.Content)}, 0, i})
 		}
@@ -265,6 +272,7 @@ func (s *state) add(tool string, hits []retrieval.Hit) (grew bool, note string) 
 	s.calls++
 	evicted, refused := len(s.res.Evicted), len(s.res.Refused)
 	for i, h := range hits {
+		s.files[h.Path] = true
 		if _, held := s.held[h.ChunkID]; held && tool != "read_file" {
 			*s.group(tool) = append(*s.group(tool), h)
 			continue
@@ -282,6 +290,34 @@ func (s *state) covered(h retrieval.Hit) bool {
 	return slices.ContainsFunc(s.reads, func(r retrieval.Hit) bool {
 		return r.Path == h.Path && r.StartLine <= h.StartLine && h.EndLine <= r.EndLine
 	})
+}
+
+// converged is, before a reply's calls run, what tells after them whether the
+// reply converged: its calls only read files the gathering had found before it,
+// each by its path or a found path ending with it, and found no other file,
+// follow's finds too. The model no longer searches; it reads on in what it
+// has. A call of another tool reads no file found, nor does a read that fails,
+// which reaches for one: arguments not read_file's leave no path to find.
+// Calls past maxCalls count too, though not run: the model asked for them.
+func (s *state) converged(calls []ai.ToolCall) func() bool {
+	known := len(s.files)
+	reads := !slices.ContainsFunc(calls, func(c ai.ToolCall) bool {
+		a, _ := ai.Decode(readFormat, c.Arguments)
+		return c.Name != readFormat.Name || !s.found(a.Path)
+	})
+	return func() bool { return reads && len(s.files) == known }
+}
+
+// found reports whether p is a file the gathering found, or ends one of them.
+// ponytail: a path ending a found file and another indexed one fails to read
+// yet counts as found; ask read's lookup (Store.Files) if such reads show up.
+func (s *state) found(p string) bool {
+	for f := range s.files {
+		if f == p || strings.HasSuffix(f, "/"+p) {
+			return true
+		}
+	}
+	return false
 }
 
 // unread narrows lines start-end of path past and before each range read that

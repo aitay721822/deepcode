@@ -298,6 +298,54 @@ func TestGathered(t *testing.T) {
 	}
 }
 
+// TestConverges: a plain answer's gathering ends on a reply that only reads a file the first search found
+// (loop.StopConverged); a deep answer's goes on, reading it again, until it stalls.
+func TestConverges(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range []string{
+		`INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x')`,
+		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r')`,
+		`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`,
+		`UPDATE repositories SET ready_snapshot_id = 1`,
+		`INSERT INTO file_contents(hash, content) VALUES ('h1', 'const subscribe = (fn) => add(fn)')`,
+		`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, 'src/store.ts', 'typescript', 'h1', 33, 1)`,
+		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'src/store.ts', 1, 1, 'const subscribe = (fn) => add(fn)', 'h1')`,
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Tools []any }
+		json.NewDecoder(r.Body).Decode(&body)
+		if len(body.Tools) > 0 { // every reply reads store.ts, which the first search found
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"role": "assistant",
+				"tool_calls": []any{map[string]any{"id": "c1", "type": "function", "function": map[string]string{"name": "read_file", "arguments": `{"path":"src/store.ts","start_line":0,"end_line":0}`}}}}}}})
+			return
+		}
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": "It subscribes [src/store.ts:1-1]."}, "finish_reason": "stop"}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
+	}))
+	defer model.Close()
+	for deep, want := range map[bool]string{false: loop.StopConverged, true: loop.StopStalled} {
+		var stop any
+		err := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"}).Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", Deep: deep, UserID: 1}, func(event string, data any) {
+			if event == "evidence" {
+				stop = data.(map[string]any)["stop"]
+			}
+		})
+		if err != nil || stop != want {
+			t.Errorf("deep %v: stopped %v, want %s (%v)", deep, stop, want, err)
+		}
+	}
+}
+
 // TestEvidenceEvent: the evidence event names each source block with where it came from; the hits
 // gathered that Format left out, in the order the answer would have read them, with their bytes; the
 // hits the gathering's budget evicted, with where they had been found, and refused, each with the call
