@@ -58,11 +58,11 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 	if err != nil {
 		return "", nil, err
 	}
-	common, used := evidence.Format(shared, sectionChars)
+	common, used, _ := evidence.Format(shared, evidence.Limit{Chars: sectionChars})
 	own = slices.DeleteFunc(own, func(h retrieval.Hit) bool { // what the shared blocks hold already
 		return slices.ContainsFunc(used, func(u retrieval.Hit) bool { return u.ChunkID == h.ChunkID })
 	})
-	sources, mine := evidence.Format(own, evidenceChars-len(common))
+	sources, mine, _ := evidence.Format(own, evidence.Limit{Chars: evidenceChars - len(common)})
 	used = append(used, mine...)
 	if len(used) == 0 {
 		return "No indexed code matched this topic, so it cannot be confirmed from the current code.", nil, nil

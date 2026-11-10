@@ -15,18 +15,22 @@ import (
 	"strings"
 	"time"
 
+	"deepcode/internal/knowledge/chat/harness"
+	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/knowledge/retrieval/twins"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/repo/catalog"
 )
 
-// Limits bound one gathering. Rounds and Chars must be set: at 0 the first
-// round is the last.
+// Limits bound one gathering. Rounds and the Limit's Chars must be set
+// (math.MaxInt for no bytes): at 0 the first round is the last. The evidence's
+// Limit is the answer's evidence budget: its blocks as evidence.Format renders
+// them, the first search's hits too, in tokens too when it Counts.
 type Limits struct {
-	Rounds int           // the model's replies
-	Chars  int           // bytes of the evidence as evidence.Format renders it, the first search's hits too: the answer's evidence budget
-	Time   time.Duration // 0: none but the caller's
+	Rounds int // the model's replies
+	evidence.Limit
+	Time time.Duration // 0: none but the caller's
 }
 
 // Request is a question to gather the evidence for.
@@ -39,8 +43,8 @@ type Request struct {
 }
 
 // Result is the evidence gathered, Hits in the order the answer reads them
-// (evidence), with the counts of every search summed. Its evidence.Size,
-// summed, is at most Limits.Chars: evidence.Format shows all of it.
+// (evidence), with the counts of every search summed. Its blocks, summed,
+// are within Limits' evidence.Limit: evidence.Format shows all of them.
 type Result struct {
 	retrieval.Result
 	// Origins are where Hits came from, one each, in Hits' order. They are kept
@@ -76,6 +80,7 @@ const (
 	StopStalled  = "stalled"  // maxStalls rounds in a row added nothing
 	StopTime     = "time"     // Limits.Time, or the caller's deadline, passed
 	StopError    = "error"    // the model failed: what was gathered stands
+	StopContext  = "context"  // the next request would not fit the model's context, its older results masked (harness.Next)
 )
 
 const (
@@ -93,11 +98,13 @@ var gatherPrompt = fmt.Sprintf(`You gather the source code needed to answer a qu
 type Emit func(event string, data any)
 
 // Gatherer gathers evidence by asking Model, searching with Retriever and
-// reading files through Catalog: the snapshot's indexed content alone.
+// reading files through Catalog: the snapshot's indexed content alone. Fit,
+// when set, fits each request to the model's context (harness.Next).
 type Gatherer struct {
 	Model     *ai.OpenAI
 	Retriever *retrieval.Retriever
 	Catalog   *catalog.Catalog
+	Fit       *harness.Fit
 }
 
 // state is one gathering's: the evidence, in groups, and what is held.
@@ -112,6 +119,9 @@ type state struct {
 	seen                  map[string]bool // calls run, by tool and arguments
 	calls                 int             // calls that returned code, each follow's too: the first search is call 0
 	messages, followed    map[string]bool // the snapshot's message types (twins.Names), and those followed
+	short                 map[int]string  // each result's line, by call key, which masks it (harness.Next)
+	answered              map[int]int     // the reply each result answered, by call key
+	tokens                map[string]int  // each block's tokens, by the block, once counted (cost)
 }
 
 // Gather gathers the evidence for req's question. It never fails: an error
@@ -125,7 +135,7 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 		defer cancel()
 	}
 	s := start(g, req)
-	first := request(req, s.res.Refused)
+	first := s.request()
 	var err error
 	if s.messages, err = twins.Names(ctx, g.Retriever.Store, req.Snapshot.ID); err != nil && ctx.Err() == nil {
 		log.Printf("chat: no message types to follow: %v", err)
@@ -138,12 +148,16 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 			s.res.Stop = StopRounds
 			break
 		}
-		_, calls, err := ex.Next(ctx)
+		_, calls, err := s.next(ctx, ex, emit)
 		if err != nil {
 			s.res.Stop = StopError
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			switch {
+			case errors.Is(ctx.Err(), context.DeadlineExceeded):
 				s.res.Stop = StopTime
-			} else if ctx.Err() == nil {
+			case ctx.Err() == nil:
+				if errors.Is(err, harness.ErrFull) {
+					s.res.Stop = StopContext
+				}
 				log.Printf("chat: gathering stopped, answering from what it holds: %v", err)
 			}
 			break
@@ -168,6 +182,7 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 				grew = grew || added
 			}
 			ex.Answer(call, result)
+			s.answered[call.Key] = s.res.Rounds
 		}
 		if grew {
 			stalls = 0
@@ -192,7 +207,8 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 // start is a gathering's state, its evidence the first search's hits, in rank
 // order, as many as fit the budget: the rest refused.
 func start(g Gatherer, req Request) *state {
-	s := &state{g: g, req: req, res: Result{Result: req.First, Calls: map[string]int{}}, held: map[int64]found{}, seen: map[string]bool{}, followed: map[string]bool{}}
+	s := &state{g: g, req: req, res: Result{Result: req.First, Calls: map[string]int{}}, held: map[int64]found{}, seen: map[string]bool{}, followed: map[string]bool{},
+		short: map[int]string{}, answered: map[int]int{}, tokens: map[string]int{}}
 	for i, h := range req.First.Hits {
 		if _, held := s.held[h.ChunkID]; !held {
 			s.admit(h, found{Origin{Round: 1, Tool: "first", Chars: len(h.Content)}, 0, i})
@@ -201,15 +217,41 @@ func start(g Gatherer, req Request) *state {
 	return s
 }
 
+// next asks for the model's next reply, through the gathering's Fit when it
+// has one: a request that would not fit the model's context has the results
+// answered before the last reply masked to their short lines, which a compact
+// event counts.
+func (s *state) next(ctx context.Context, ex *ai.Exchange, emit Emit) (string, []ai.ToolCall, error) {
+	if s.g.Fit == nil {
+		return ex.Next(ctx)
+	}
+	masked := s.g.Fit.Masked
+	defer func() {
+		if n := s.g.Fit.Masked - masked; n > 0 {
+			emit("compact", map[string]any{"masked": n})
+		}
+	}()
+	return s.g.Fit.Next(ctx, ex, func() map[int]string {
+		out := map[int]string{}
+		for key, round := range s.answered {
+			if line, ok := s.short[key]; ok && round < s.res.Rounds {
+				out[key] = line
+			}
+		}
+		return out
+	})
+}
+
 // request asks the model to gather, from the first search's hits, naming those
 // the evidence's budget left out.
-func request(req Request, left []Out) ai.Prompt {
+func (s *state) request() ai.Prompt {
+	req, left := s.req, s.res.Refused
 	found := "The first search found nothing."
 	if len(req.First.Hits) > 0 {
 		found = "The first search found:\n" + list(req.First.Hits)
 	}
 	if len(left) > 0 {
-		found += fmt.Sprintf("Not in the evidence, over its budget of %d bytes: %s.\n", req.Chars, ranges(left, true))
+		found += fmt.Sprintf("Not in the evidence, over its budget of %s: %s.\n", s.units(req.Chars, req.Tokens), s.ranges(left, true))
 	}
 	return ai.Prompt{Static: gatherPrompt, Dynamic: fmt.Sprintf("Repository: %s\nQuestion: %s\n\n%s", req.Repo, req.Question, found)}
 }

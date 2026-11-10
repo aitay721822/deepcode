@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/platform/ai"
@@ -117,12 +118,15 @@ func model(t *testing.T, replies ...string) (*ai.OpenAI, *[][]ai.Message) {
 // TestDraw: a map of lines the sources lack is asked for once more, after the
 // request, with the map (cut to maxEcho) and groundNote, and fails as
 // ErrInvalid the second time; an answer that is no map fails at once with
-// ai.ErrSchema; the count drawing hears runs on over both replies; an empty
+// ai.ErrSchema; the count drawing hears runs on over both replies; the retry
+// is no larger than Fixed holds, a map past maxEcho filling it; an empty
 // trace list is the model's answer; the map is written out with a citation
 // per location.
 func TestDraw(t *testing.T) {
 	made := strings.Replace(good, "src/server/router.go", "nope.go", 1)
 	long := strings.Replace(made, `"title":"Auth"`, `"title":"x`+strings.Repeat("é", maxEcho)+`"`, 1) // 2 bytes each, after 11: cut inside one
+	ascii := strings.Replace(made, `"title":"Auth"`, `"title":"x`+strings.Repeat("e", maxEcho)+`"`, 1)
+	req := Request{Question: "How is auth done?", Hits: hits}
 	for _, c := range []struct {
 		replies []string
 		traces  int
@@ -132,13 +136,14 @@ func TestDraw(t *testing.T) {
 		{[]string{"Sure! Here is the map:"}, 0, ai.ErrSchema, ""},
 		{[]string{"{}"}, 0, ai.ErrSchema, ""}, // JSON, but no map: not taken for one with nothing in it
 		{[]string{long, good}, 1, nil, long[:maxEcho-1] + "…"},
+		{[]string{ascii, good}, 1, nil, ascii[:maxEcho] + "…"},
 		{[]string{made, good}, 1, nil, made},
 		{[]string{made, made}, 0, ErrInvalid, made},
 		{[]string{`{"title":"","description":"","traces":[]}`}, 0, nil, ""},
 	} {
 		m, asked := model(t, c.replies...)
 		var heard []int
-		got, err := Draw(context.Background(), m, Request{Question: "How is auth done?", Hits: hits}, func(n int) { heard = append(heard, n) })
+		got, err := Draw(context.Background(), m, req, func(n int) { heard = append(heard, n) })
 		total := 0
 		for _, r := range c.replies {
 			total += len(r)
@@ -150,7 +155,14 @@ func TestDraw(t *testing.T) {
 		if len(*asked) < 2 {
 			continue
 		}
-		first, retry := (*asked)[0], (*asked)[1]
+		first, retry, spent := (*asked)[0], (*asked)[1], 0
+		for _, msg := range retry {
+			spent += utf8.RuneCountInString(msg.Content)
+		}
+		fixed := Fixed(req, func(p ai.Prompt) int { n, _ := p.Size(utf8.RuneCountInString); return n }) // in characters, at least as many as tokens
+		if spent > fixed || c.echo == ascii[:maxEcho]+"…" && fixed-spent != len("…")-1 {
+			t.Errorf("%.30q: the retry sent %d characters, Fixed %d", c.replies[0], spent, fixed)
+		}
 		if n := len(retry); n != len(first)+2 || retry[n-2] != (ai.Message{Role: "assistant", Content: c.echo}) ||
 			retry[n-1] != (ai.Message{Role: "user", Content: groundNote}) || retry[n-3].Content != first[len(first)-1].Content {
 			t.Errorf("%.30q: the retry ends %q", c.replies[0], retry[max(n-3, 0):])

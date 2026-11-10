@@ -1,19 +1,16 @@
-// Package bench measures deepcode on the benchmark repositories (cases_test.go)
-// end to end, and writes data/bench/latest.json and latest.md for comparing it
-// with DeepWiki and Code Wiki. It runs only when asked, against the real model:
+// Package bench measures deepcode on the benchmark repositories (cases_test.go) end to end, and writes
+// data/bench/latest.json and latest.md for comparing it with DeepWiki and Code Wiki. It runs only when
+// asked, against the real model:
 //
 //	DEEPCODE_BENCH=1 DEEPCODE_CHAT_MODEL=... go test -run TestBench -timeout 0 -v ./test/bench/
 //
-// with the DEEPCODE_CHAT_* settings deepcode serve reads (the key only ever in
-// the environment), and DEEPCODE_EMBED_* for vector search, read as serve
-// reads them (lexical search only without DEEPCODE_EMBED_MODEL).
-// DEEPCODE_BENCH_REPOS=chi,axum picks repositories, and
-// DEEPCODE_BENCH_PARALLEL=1,2 writes each first wiki once per number of pages
-// written at a time (DEEPCODE_WIKI_PARALLEL, else 1, by default), the last
-// one kept. Without a chat model only indexing, the graph and the retrieval
-// eval are measured; DEEPCODE_BENCH_WIKI=0 leaves the wikis out, for a run of
-// the answers alone. TestJudge re-judges a stored run's answers
-// (judge_test.go).
+// with the DEEPCODE_CHAT_* settings deepcode serve reads (the key only ever in the environment), and
+// DEEPCODE_EMBED_* for vector search, read as serve reads them (lexical search only without
+// DEEPCODE_EMBED_MODEL). DEEPCODE_BENCH_REPOS=chi,axum picks repositories, and DEEPCODE_BENCH_PARALLEL=1,2
+// writes each first wiki once per number of pages written at a time (DEEPCODE_WIKI_PARALLEL, else 1, by
+// default), the last one kept. Without a chat model only indexing, the graph and the retrieval eval are
+// measured; DEEPCODE_BENCH_WIKI=0 leaves the wikis out, for a run of the answers alone. TestJudge
+// re-judges a stored run's answers (judge_test.go).
 package bench
 
 import (
@@ -35,6 +32,7 @@ import (
 	"unicode"
 
 	"deepcode/internal/knowledge/chat"
+	"deepcode/internal/knowledge/chat/harness"
 	chatstore "deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
@@ -181,14 +179,15 @@ func setup(t *testing.T, work string) *rig {
 		Embed: embed, Vectors: vectors, Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
 	if llm := chatModel(t, r.meter.add); llm != nil {
 		pages, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), "0")) // 0, the default, when unset
-		if err != nil || pages < 0 {
-			t.Fatalf("DEEPCODE_WIKI_MAX_PAGES holds %q, which is no number of pages", os.Getenv("DEEPCODE_WIKI_MAX_PAGES"))
+		counter, err2 := harness.LoadTokens(os.Getenv("DEEPCODE_CHAT_TOKENIZER"))     // OpenAI's o200k_base when unset, as serve counts
+		if err != nil || pages < 0 || err2 != nil {
+			t.Fatalf("DEEPCODE_WIKI_MAX_PAGES holds %q, which is no number of pages; DEEPCODE_CHAT_TOKENIZER: %v", os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), err2)
 		}
 		if os.Getenv("DEEPCODE_BENCH_WIKI") != "0" {
 			r.wiki = &wiki.Generator{Store: &wikistore.Store{DB: db}, Graph: graphs, Catalog: r.cat, Retriever: r.ret, Chat: llm, Language: "English", MaxPages: pages,
 				Planned: func(p wiki.Planning) { r.planned = &p }}
 		}
-		r.chat = &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: r.cat, Retriever: r.ret, Chat: llm}
+		r.chat = &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: r.cat, Retriever: r.ret, Chat: llm, Tokens: counter}
 	}
 	return r
 }
@@ -209,6 +208,12 @@ func chatModel(t *testing.T, measure func(ai.Usage)) *ai.OpenAI {
 		}
 		llm.Temperature = &temp
 	}
+	window, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_CHAT_CONTEXT"), "0")) // 0, unknown, when unset
+	ratio, err2 := strconv.ParseFloat(cmp.Or(os.Getenv("DEEPCODE_COMPACT_RATIO"), "0.8"), 64)
+	if err != nil || window < 0 || window > 0 && window <= llm.Room() || err2 != nil || !(ratio > 0 && ratio <= 1) { // NaN too
+		t.Fatalf("DEEPCODE_CHAT_CONTEXT %q, DEEPCODE_COMPACT_RATIO %q: want none or more than %d tokens, and a ratio above 0 and at most 1", os.Getenv("DEEPCODE_CHAT_CONTEXT"), os.Getenv("DEEPCODE_COMPACT_RATIO"), llm.Room())
+	}
+	llm.Window, llm.CompactRatio = window, ratio
 	return llm
 }
 

@@ -85,8 +85,12 @@ type Tool struct {
 func (f Format[T]) Tool(description string) Tool { return Tool{description, f.schema} }
 
 // ToolCall is a call the model made: its id, the function's name and its
-// arguments as the model wrote them.
-type ToolCall struct{ ID, Name, Arguments string }
+// arguments as the model wrote them, and its Key, the calls before it in its
+// Exchange: unique where an id may not be.
+type ToolCall struct {
+	ID, Name, Arguments string
+	Key                 int
+}
 
 // Decode reads text, f's JSON, into a T, its schema checked, so {} is not a T
 // with nothing in it.
@@ -270,21 +274,95 @@ var errSpent = errors.New("the model's reply reached the output budget: raise DE
 // Exchange is a conversation in which the model may call tools, held in the
 // SDK's params of the API its client asks by and continued as the SDK's
 // README continues one: each reply is appended as the model gave it, then
-// each call's result. Replies come whole, not streamed.
+// each call's result. Replies come whole, not streamed. It keeps the text the
+// next request sends, piece by piece, for its caller to count in the model's
+// tokens (Size); a call is known by its Key, as two calls may share an id.
 type Exchange struct {
-	c     *OpenAI
-	chat  openai.ChatCompletionNewParams
-	resp  responses.ResponseNewParams
-	chars int // characters of the messages, replies and results so far, each request's for Measure
+	c       *OpenAI
+	chat    openai.ChatCompletionNewParams
+	resp    responses.ResponseNewParams
+	pieces  []string // the messages, the tools' definitions, each reply's text and calls, each result
+	sizes   []int    // each piece as Size counted it, -1 until it does
+	answers map[int]answered
+	calls   int   // the calls so far, which number the next one's Key
+	sent    int   // the pieces the last request sent
+	used    Usage // the last reply's
+}
+
+// answered is where a call's result stands: its piece, and its message or
+// input item in the params.
+type answered struct{ piece, at int }
+
+// Size is the next request's text in count's units, each piece counted once
+// (count must not change), and the part of it the last request sent.
+func (e *Exchange) Size(count func(string) int) (next, sent int) {
+	for i, p := range e.pieces {
+		if e.sizes[i] < 0 {
+			e.sizes[i] = count(p)
+		}
+		if next += e.sizes[i]; i < e.sent {
+			sent += e.sizes[i]
+		}
+	}
+	return next, sent
+}
+
+// Added is the pieces the last request answered did not send: its reply's
+// and the results'; all of them before the first reply.
+func (e *Exchange) Added() int { return len(e.pieces) - e.sent }
+
+// Used is the last reply's Usage: InTokens as the server counted them, 0 when
+// it reported none.
+func (e *Exchange) Used() Usage { return e.used }
+
+// add keeps s as the next piece, and says which.
+func (e *Exchange) add(s string) int {
+	e.pieces, e.sizes = append(e.pieces, s), append(e.sizes, -1)
+	return len(e.pieces) - 1
+}
+
+// chars is the pieces' characters.
+func (e *Exchange) chars() (n int) {
+	for _, p := range e.pieces {
+		n += utf8.RuneCountInString(p)
+	}
+	return n
+}
+
+// Compact gives the calls short, by Key, the text short gives them in place
+// of their results, in the params as they stand: the replies and the other
+// results stay as they were, and so does a result no longer than its text.
+// It returns how many it replaced.
+func (e *Exchange) Compact(short map[int]string) int {
+	n := 0
+	for key, text := range short {
+		a, ok := e.answers[key]
+		if !ok || len(text) >= len(e.pieces[a.piece]) {
+			continue
+		}
+		e.pieces[a.piece], e.sizes[a.piece], n = text, -1, n+1
+		if e.c.API == Responses {
+			id := e.resp.Input.OfInputItemList[a.at].OfFunctionCallOutput.CallID
+			e.resp.Input.OfInputItemList[a.at] = responses.ResponseInputItemParamOfFunctionCallOutput(text)
+			e.resp.Input.OfInputItemList[a.at].OfFunctionCallOutput.CallID = id
+			continue
+		}
+		e.chat.Messages[a.at] = openai.ToolMessage(text, e.chat.Messages[a.at].OfTool.ToolCallID)
+	}
+	return n
 }
 
 // Exchange starts a conversation from p in which the model may call tools,
 // its replies and their results following p's messages. The arguments are
 // asked for strict, as structured outputs are.
 func (c *OpenAI) Exchange(p Prompt, tools []Tool) *Exchange {
-	e, messages := &Exchange{c: c}, p.messages()
+	e, messages := &Exchange{c: c, answers: map[int]answered{}}, p.messages()
 	for _, m := range messages {
-		e.chars += utf8.RuneCountInString(m.Content)
+		e.add(m.Content)
+	}
+	for _, t := range tools {
+		schema, _ := json.Marshal(t.JSON) // a map from JSON, so it marshals again
+		e.add(t.Name + "\n" + t.Description + "\n" + string(schema))
 	}
 	if c.API == Responses {
 		e.resp = c.responsesParams(messages)
@@ -308,14 +386,23 @@ func (e *Exchange) Next(ctx context.Context) (text string, calls []ToolCall, err
 	ctx, cancel := e.c.withTimeout(ctx)
 	defer cancel()
 	defer func() { err = cause(ctx, err) }()
-	usage := Usage{InChars: e.chars}
+	sent, usage := len(e.pieces), Usage{InChars: e.chars()}
 	defer func() {
+		if err == nil { // a refused request sent nothing the next one will not
+			e.sent = sent
+			if text != "" {
+				e.add(text) // the reply is sent back with every request after it
+			}
+			for i := range calls {
+				calls[i].Key, e.calls = e.calls, e.calls+1
+				e.add(calls[i].Name + calls[i].Arguments)
+			}
+		}
 		usage.OutChars = utf8.RuneCountInString(text)
 		for _, call := range calls {
 			usage.OutChars += utf8.RuneCountInString(call.Arguments)
 		}
-		e.chars += usage.OutChars // the reply is sent back with every request after it
-		if e.c.Measure != nil {
+		if e.used = usage; e.c.Measure != nil {
 			e.c.Measure(usage)
 		}
 	}()
@@ -327,14 +414,15 @@ func (e *Exchange) Next(ctx context.Context) (text string, calls []ToolCall, err
 
 // Answer gives the model result as what call returned.
 func (e *Exchange) Answer(call ToolCall, result string) {
-	e.chars += utf8.RuneCountInString(result)
+	a := answered{piece: e.add(result)}
 	if e.c.API == Responses {
 		out := responses.ResponseInputItemParamOfFunctionCallOutput(result)
 		out.OfFunctionCallOutput.CallID = openai.String(call.ID)
-		e.resp.Input.OfInputItemList = append(e.resp.Input.OfInputItemList, out)
-		return
+		a.at, e.resp.Input.OfInputItemList = len(e.resp.Input.OfInputItemList), append(e.resp.Input.OfInputItemList, out)
+	} else {
+		a.at, e.chat.Messages = len(e.chat.Messages), append(e.chat.Messages, openai.ToolMessage(result, call.ID))
 	}
-	e.chat.Messages = append(e.chat.Messages, openai.ToolMessage(result, call.ID))
+	e.answers[call.Key] = a
 }
 
 // complete asks Chat Completions (/chat/completions) for the next reply of

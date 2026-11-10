@@ -1,13 +1,18 @@
 import { motion } from 'motion/react'
-import type { SearchStep, Source } from '../../types/repo/chat'
+import type { Source, Step } from '../../types/repo/chat'
 import { Card } from '../ui/display/card'
 import { Progress } from '../ui/feedback/progress'
 
 const step =
   "flex items-center gap-2.5 py-1 text-muted-foreground before:text-brand before:content-['›'] after:min-w-6 after:flex-1 after:border-b after:border-dashed after:content-['']"
 
-/** What a call of the model's did, in a line: what it searched for, which lines it read, whose users it found. */
-function describe(s: SearchStep): string {
+/**
+ * What a step did, in a line: what a call of the model's searched for, which lines it read, whose users it found; or
+ * how a request was made smaller to fit the model's context.
+ */
+function describe(s: Step): string {
+  if ('masked' in s) return `已遮蔽 ${s.masked} 段較早的搜尋結果`
+  if ('summarized' in s) return '較早的對話已整理成摘要'
   switch (s.tool) {
     case 'search_code':
       return `搜尋：${s.args.query}${s.args.path_prefix ? `（於 ${s.args.path_prefix}）` : ''}`
@@ -21,7 +26,7 @@ function describe(s: SearchStep): string {
 }
 
 /** The retrieval trail shown while an answer is being prepared: what the model searched for and read, then the sources. */
-export function SearchSteps({ sources, steps }: { sources: Source[]; steps: SearchStep[] }) {
+export function SearchSteps({ sources, steps }: { sources: Source[]; steps: Step[] }) {
   return (
     <Card asChild className="gap-4 px-5 py-[18px]">
       <section aria-live="polite">

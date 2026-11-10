@@ -52,14 +52,21 @@ export type SearchStep =
   | { round: number; tool: 'read_file'; args: { path: string; start_line: number; end_line: number } }
   | { round: number; tool: 'users'; args: { name: string } }
 
+/** What made a request smaller to fit the model's context: earlier search results masked, or earlier turns summed up. */
+export type CompactStep = { masked: number } | { summarized: number }
+
+/** A line of the retrieval trail: a call of the model's, or a request made smaller. */
+export type Step = SearchStep | CompactStep
+
 /**
  * One server-sent event of a streamed answer: conversation, search (each call of the model's while it gathers the
- * code), evidence (what the answer is written from), delta…, done (or error at any point). A code map sends drawing…
- * (how much of it has come) in place of delta….
+ * code), compact (a request made smaller to fit the model's context), evidence (what the answer is written from),
+ * delta…, done (or error at any point). A code map sends drawing… (how much of it has come) in place of delta….
  */
 export type ChatEvent =
   | { event: 'conversation'; data: ConversationRef }
   | { event: 'search'; data: SearchStep }
+  | { event: 'compact'; data: CompactStep }
   | { event: 'evidence'; data: { sources: Source[]; rounds: number } }
   | { event: 'delta'; data: string }
   | { event: 'drawing'; data: { chars: number } }

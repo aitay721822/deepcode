@@ -13,6 +13,9 @@ type Config struct {
 	ReasoningEffort                string   // sent as reasoning_effort when set
 	Temperature                    *float64 // sent as temperature when set
 	MaxOutputTokens                int      // 0 leaves it to the server
+	ChatContext                    int      // the chat model's context in tokens; 0: unknown (ai.OpenAI.Window)
+	CompactRatio                   float64  // the share of it a request fills before it is made smaller
+	ChatTokenizer                  string   // the chat model's tokenizer.json; "" counts its tokens by o200k_base (harness.LoadTokens)
 	LLMTimeout                     time.Duration
 	LLMRPM                         int // 0 = unlimited
 

@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -57,6 +58,14 @@ func (p Prompt) messages() []Message {
 	return out
 }
 
+// Size is p's messages in count's units, and how many there are.
+func (p Prompt) Size(count func(string) int) (size, messages int) {
+	for _, m := range p.messages() {
+		size, messages = size+count(m.Content), messages+1
+	}
+	return size, messages
+}
+
 // After is the prompt that goes on from p once the model answered reply: p's
 // Dynamic and reply join Previous, and dynamic is what is new.
 func (p Prompt) After(reply, dynamic string) Prompt {
@@ -83,9 +92,78 @@ type OpenAI struct {
 	// (stream_options.include_usage), which the Responses API always gives. The
 	// bench sets it; a server that rejects the option fails the request.
 	Measure func(Usage)
+	// Window is the model's context in tokens, 0 when not set (Context).
+	// CompactRatio is the share of it a request may fill before it is made
+	// smaller (package chat/harness); 0 means 0.8.
+	Window       int
+	CompactRatio float64
 
-	mu   sync.Mutex
-	next time.Time
+	mu      sync.Mutex
+	next    time.Time
+	learned int // the context a server reported (Learn)
+}
+
+// DefaultOutput is the room, in tokens, kept in the context for an answer
+// whose size MaxTokens leaves to the server.
+const DefaultOutput = 8192
+
+// Room is the tokens kept in the context for the answer: MaxTokens, else
+// DefaultOutput.
+func (c *OpenAI) Room() int { return cmp.Or(c.MaxTokens, DefaultOutput) }
+
+// Context is the model's context in tokens: Window, or the smaller context a
+// server reported (Learn), or 0 when neither is known.
+func (c *OpenAI) Context() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.learned > 0 && (c.Window == 0 || c.learned < c.Window) {
+		return c.learned
+	}
+	return c.Window
+}
+
+// Learn keeps n, the context a server reported in an ErrContext, for as long
+// as the process runs: no server reports it until a request passes it.
+func (c *OpenAI) Learn(n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if n > 0 {
+		c.learned = n
+	}
+}
+
+// ErrContext is a request the server refused as longer than the model's
+// context: OpenAI's code context_length_exceeded, llama.cpp's type
+// exceed_context_size_error. Prompt and Context are the request's tokens and
+// the context's when the server gives them, as llama.cpp does, else 0.
+type ErrContext struct {
+	Prompt, Context int
+	err             error // the refusal as fail words it
+}
+
+func (e *ErrContext) Error() string {
+	if e.err == nil {
+		return "the request is longer than the model's context"
+	}
+	return e.err.Error()
+}
+
+// overflow is err, a refusal whose body is body, as an ErrContext when the body
+// says the request was longer than the context; else err. Other servers' words
+// for it are added once seen, not guessed.
+func overflow(body []byte, err error) error {
+	var b struct {
+		Error struct {
+			Code    json.RawMessage `json:"code"`
+			Type    string          `json:"type"`
+			Prompt  int             `json:"n_prompt_tokens"`
+			Context int             `json:"n_ctx"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &b) != nil || string(b.Error.Code) != `"context_length_exceeded"` && b.Error.Type != "exceed_context_size_error" {
+		return err
+	}
+	return &ErrContext{Prompt: b.Error.Prompt, Context: b.Error.Context, err: err}
 }
 
 // maxBody bounds an answer's body: a batch's vectors are some megabytes, a
@@ -123,7 +201,8 @@ func (c *OpenAI) middleware(req *http.Request, next option.MiddlewareNext) (*htt
 // request's error carries its status and the server's message (quote): the
 // SDK's names the status alone, and for a message it cannot read as OpenAI's
 // ({"error":"model not loaded"}, as LM Studio sends) it is a JSON error with
-// neither. An error the server sends inside a stream is quoted as well.
+// neither. An error the server sends inside a stream is quoted as well. A
+// request refused as longer than the context is an ErrContext.
 func (c *OpenAI) fail(path string, res *http.Response, err error) error {
 	var api *openai.Error
 	var stream *ssestream.StreamError
@@ -140,11 +219,11 @@ func (c *OpenAI) fail(path string, res *http.Response, err error) error {
 		// is masked too.
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 2048+int64(len(c.APIKey))))
 		if msg := c.quote(body); msg != "" {
-			return fmt.Errorf("%s %s: %s: %s", c.ModelName, path, res.Status, msg)
+			return overflow(body, fmt.Errorf("%s %s: %s: %s", c.ModelName, path, res.Status, msg))
 		}
 		return fmt.Errorf("%s %s: %s", c.ModelName, path, res.Status)
 	case errors.As(err, &stream):
-		return c.refused(path, stream.Message)
+		return overflow(stream.Event.Data, c.refused(path, stream.Message))
 	}
 	return fmt.Errorf("%s %s: %w", c.ModelName, path, err)
 }

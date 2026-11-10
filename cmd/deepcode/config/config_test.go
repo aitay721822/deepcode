@@ -40,7 +40,7 @@ func TestDefaults(t *testing.T) {
 		cfg.CacheMB != 64 || cfg.MaxRepoMB != 1024 || cfg.MaxFiles != 20000 || cfg.MaxFileKB != 512 || cfg.MaxIndexMB != 200 ||
 		cfg.WikiLanguage != "Traditional Chinese (Taiwan)" || cfg.SessionTTL != 720*time.Hour || cfg.GitProtocols != "http:https" || len(cfg.TrustedProxies) != 0 ||
 		cfg.MaxOutputTokens != 0 || cfg.LLMRPM != 0 || cfg.WikiParallel != 1 || cfg.WikiMaxPages != 64 || cfg.Temperature != nil ||
-		cfg.ChatAPI != "completions" {
+		cfg.ChatAPI != "completions" || cfg.ChatContext != 0 || cfg.CompactRatio != 0.8 {
 		t.Errorf("defaults: addr %q, %+v", addr, cfg)
 	}
 }
@@ -62,23 +62,28 @@ workers: 4
 llm_timeout: 90s
 sync_every: 0
 trusted_proxies: [127.0.0.1, "10.0.0.0/8"]
+chat_context: 8193
+compact_ratio: 0.5
+chat_tokenizer: tok.json
 `)
 	t.Setenv("DEEPCODE_CHAT_MODEL", "")
 	cfg, addr, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if addr != "127.0.0.1:8080" || cfg.CacheMB != 64 || cfg.Workers != 4 || cfg.EmbedKey != "file-key" {
+	if addr != "127.0.0.1:8080" || cfg.CacheMB != 64 || cfg.Workers != 4 || cfg.EmbedKey != "file-key" || cfg.ChatContext != 8193 || cfg.CompactRatio != 0.5 || cfg.ChatTokenizer != "tok.json" {
 		t.Errorf("empty values in the file: addr %q, %+v", addr, cfg)
 	}
 	t.Setenv("DEEPCODE_WORKERS", "8")
+	t.Setenv("DEEPCODE_CHAT_CONTEXT", "524288")
+	t.Setenv("DEEPCODE_COMPACT_RATIO", "1")
 	cfg, _, err = Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.ChatModel != "file-model" || cfg.ChatAPI != "responses" || cfg.EmbedURL != "http://embed:9000/v1" || cfg.ReasoningEffort != "none" ||
 		cfg.Workers != 8 || cfg.LLMTimeout != 90*time.Second || cfg.SyncEvery != 0 || cfg.Temperature == nil || *cfg.Temperature != 0.2 ||
-		!slices.Equal(cfg.TrustedProxies, []string{"127.0.0.1", "10.0.0.0/8"}) {
+		!slices.Equal(cfg.TrustedProxies, []string{"127.0.0.1", "10.0.0.0/8"}) || cfg.ChatContext != 524288 || cfg.CompactRatio != 1 {
 		t.Errorf("file then env: %+v", cfg)
 	}
 
@@ -118,6 +123,13 @@ func TestBadValues(t *testing.T) {
 		{name: "temperature", env: map[string]string{"DEEPCODE_TEMPERATURE": "3"}, want: []string{`DEEPCODE_TEMPERATURE="3": want a number from 0 to 2`}},
 		{name: "temperature text", file: "temperature: warm\n", want: []string{`temperature in deepcode.yaml="warm": want a number from 0 to 2`}},
 		{name: "temperature NaN", env: map[string]string{"DEEPCODE_TEMPERATURE": "NaN"}, want: []string{`DEEPCODE_TEMPERATURE="NaN": want a number from 0 to 2`}},
+		{name: "ratio zero", env: map[string]string{"DEEPCODE_COMPACT_RATIO": "0"}, want: []string{`DEEPCODE_COMPACT_RATIO="0": want a number above 0 and at most 1`}},
+		{name: "ratio past 1", file: "compact_ratio: 1.5\n", want: []string{`compact_ratio in deepcode.yaml="1.5": want a number above 0 and at most 1`}},
+		{name: "ratio NaN", env: map[string]string{"DEEPCODE_COMPACT_RATIO": "NaN"}, want: []string{`DEEPCODE_COMPACT_RATIO="NaN": want a number above 0`}},
+		{name: "negative context", env: map[string]string{"DEEPCODE_CHAT_CONTEXT": "-1"}, want: []string{`DEEPCODE_CHAT_CONTEXT="-1": want a whole number from 0 to`}},
+		{name: "context in the room", env: map[string]string{"DEEPCODE_CHAT_CONTEXT": "8192"}, want: []string{`DEEPCODE_CHAT_CONTEXT="8192": want more tokens than the answer's room, 8192`}},
+		{name: "context in max output", file: "chat_context: 4096\n", env: map[string]string{"DEEPCODE_MAX_OUTPUT_TOKENS": "4096"},
+			want: []string{`chat_context in deepcode.yaml="4096": want more tokens than the answer's room, 4096`}},
 		{name: "url without scheme", env: map[string]string{"DEEPCODE_CHAT_BASE_URL": "localhost:8080/v1"}, want: []string{`DEEPCODE_CHAT_BASE_URL="(not shown, as it may hold a key)": want an http or https URL`}},
 		{name: "embed url", file: "embed_base_url: ftp://host/v1\n", want: []string{`embed_base_url in deepcode.yaml="ftp://host": want an http or https URL`}},
 		{name: "list for a value", file: "chat_model: [a, b]\n", want: []string{`chat_model in deepcode.yaml="[a b]": want text`}},

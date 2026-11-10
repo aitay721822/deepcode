@@ -173,9 +173,21 @@ func localRemote(t *testing.T) {
 	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/acme/demo.git")
 }
 
-// TestBadSettingCreatesNoAdmin: a setting that stops the start is caught
-// before the first administrator is created, so no one-time password is
-// printed for a server that never ran.
+// TestProviders: the chat model is the one the settings name, with its
+// context and the share of it a request may fill; none without a model.
+func TestProviders(t *testing.T) {
+	if chatP, embedP := Providers(Config{ChatModel: "m", ChatContext: 524288, CompactRatio: 0.5}); chatP == nil || chatP.Window != 524288 || chatP.CompactRatio != 0.5 || embedP != nil {
+		t.Errorf("%+v %+v", chatP, embedP)
+	}
+	if chatP, _ := Providers(Config{ChatContext: 524288}); chatP != nil {
+		t.Errorf("no model: %+v", chatP)
+	}
+}
+
+// TestBadSettingCreatesNoAdmin: a setting that stops the start, a proxy that
+// is no address or a chat tokenizer that cannot be read, is caught before the
+// first administrator is created, so no one-time password is printed for a
+// server that never ran.
 func TestBadSettingCreatesNoAdmin(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -184,8 +196,10 @@ func TestBadSettingCreatesNoAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := New(ctx, Config{DataDir: dir, TrustedProxies: []string{"proxy.local"}}, db, http.NotFoundHandler(), true); err == nil {
-		t.Fatal("started with a proxy that is no address")
+	for _, cfg := range []Config{{DataDir: dir, TrustedProxies: []string{"proxy.local"}}, {DataDir: dir, ChatModel: "m", ChatTokenizer: filepath.Join(dir, "none.json")}} {
+		if _, err := New(ctx, cfg, db, http.NotFoundHandler(), true); err == nil || cfg.ChatModel != "" && !strings.Contains(err.Error(), "DEEPCODE_CHAT_TOKENIZER") {
+			t.Fatalf("started with %+v: %v", cfg, err)
+		}
 	}
 	var users int
 	if err := db.QueryRow(`SELECT count(*) FROM users`).Scan(&users); err != nil || users != 0 {

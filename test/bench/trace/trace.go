@@ -14,20 +14,25 @@ import (
 // that it was not ("dropped", which the gathering's budget keeps empty), each
 // with the round and tool that found it; the hits that budget evicted and
 // refused, each with the round and tool of the call that did it; the sources'
-// bytes as rendered, against the budget; the references resolved to a path
-// that differs from the one written; and the answer as the model streamed it,
-// before its citations were checked, so that a citation the check dropped can
-// still be read. Times are seconds since the question.
+// bytes as rendered, against the budget; the model's context, threshold and
+// shares, the tool results masked and the turns summed up to fit it; the
+// references resolved to a path that differs from the one written; and the
+// answer as the model streamed it, before its citations were checked, so that
+// a citation the check dropped can still be read. Times are seconds since the
+// question.
 type Trace struct {
-	Calls    []Call         `json:"calls"`
-	Gathered float64        `json:"gathered"` // the evidence event's time
-	Shown    []Source       `json:"shown"`
-	Dropped  []Source       `json:"dropped"`
-	Evicted  []Source       `json:"evicted"`
-	Refused  []Source       `json:"refused"`
-	Chars    map[string]int `json:"chars"` // rendered, budget
-	Resolved int            `json:"resolved"`
-	Raw      string         `json:"raw"`
+	Calls      []Call         `json:"calls"`
+	Gathered   float64        `json:"gathered"` // the evidence event's time
+	Shown      []Source       `json:"shown"`
+	Dropped    []Source       `json:"dropped"`
+	Evicted    []Source       `json:"evicted"`
+	Refused    []Source       `json:"refused"`
+	Chars      map[string]int `json:"chars"`  // rendered, budget
+	Window     map[string]int `json:"window"` // context, threshold, evidence, history, background
+	Masked     int            `json:"masked,omitempty"`
+	Summarized int            `json:"summarized,omitempty"`
+	Resolved   int            `json:"resolved"`
+	Raw        string         `json:"raw"`
 }
 
 type Call struct {
@@ -62,6 +67,11 @@ func (tr *Trace) Take(event string, data any, at time.Duration) {
 			tr.Gathered = seconds
 			tr.Shown, tr.Dropped, tr.Evicted, tr.Refused = sources(d["sources"]), sources(d["dropped"]), sources(d["evicted"]), sources(d["refused"])
 			tr.Chars, _ = d["chars"].(map[string]int)
+			tr.Window, _ = d["window"].(map[string]int)
+			tr.Masked, _ = d["masked"].(int)
+		case "compact":
+			n, _ := d["summarized"].(int)
+			tr.Summarized += n
 		case "cited":
 			tr.Resolved, _ = d["resolved"].(int)
 		}

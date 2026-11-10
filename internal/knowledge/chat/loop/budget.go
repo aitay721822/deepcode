@@ -3,6 +3,7 @@ package loop
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -28,22 +29,25 @@ type found struct {
 	call, rank int
 }
 
-// admit adds h, found as f says, to the evidence when the evidence's size
-// (evidence.Size, summed) stays within Chars with it. When it would not, chunks
-// that other calls found are evicted until it does, in this order: by call,
-// oldest first, so the first search's go first, then within a call the lowest
-// ranked first. Ranges read are never evicted. When evicting all of them would
-// not make room, none is evicted and h is refused: it is not added.
+// admit adds h, found as f says, to the evidence when the evidence stays
+// within its Limit with it (cost, summed). When it would not, chunks that
+// other calls found are evicted until it does, in this order: by call, oldest
+// first, so the first search's go first, then within a call the lowest ranked
+// first. Ranges read are never evicted. When evicting all of them would not
+// make room, none is evicted and h is refused: it is not added.
 func (s *state) admit(h retrieval.Hit, f found) bool {
 	undo := s.hold(h, f)
 	hits, _ := s.evidence()
-	over := size(hits) - s.req.Chars
-	if over <= 0 {
+	chars, tokens := s.size(hits)
+	over, overTokens := chars-s.req.Chars, tokens-s.req.Tokens
+	fits := func() bool { return over <= 0 && (overTokens <= 0 || !s.req.Counts()) }
+	if fits() {
 		return true
 	}
 	var out []retrieval.Hit
 	for _, c := range s.evictable(hits[len(s.reads):], f.call) {
-		if out, over = append(out, c), over-evidence.Size(c); over <= 0 {
+		chars, tokens := s.cost(c)
+		if out, over, overTokens = append(out, c), over-chars, overTokens-tokens; fits() {
 			for _, c := range out {
 				s.evict(c, f)
 			}
@@ -105,34 +109,75 @@ func (s *state) evict(c retrieval.Hit, by found) {
 func (s *state) note(evicted, refused int) string {
 	var b strings.Builder
 	if out := s.res.Evicted[evicted:]; len(out) > 0 {
-		fmt.Fprintf(&b, "To make room, these left the evidence: %s. A later call may find them again.\n", ranges(out, false))
+		fmt.Fprintf(&b, "To make room, these left the evidence: %s. A later call may find them again.\n", s.ranges(out, false))
 	}
 	if out := s.res.Refused[refused:]; len(out) > 0 {
 		hits, _ := s.evidence()
-		fmt.Fprintf(&b, "Not added, over the evidence budget: %s; %d bytes left of %d. Read a narrower range, or call done.\n",
-			ranges(out, true), s.req.Chars-size(hits), s.req.Chars)
+		fmt.Fprintf(&b, "Not added, over the evidence budget: %s; %s. Read a narrower range, or call done.\n", s.ranges(out, true), s.left(s.size(hits)))
 	}
 	return b.String()
 }
 
 // ranges names hits by path and lines, with their sizes in the evidence when
 // sizes says.
-func ranges(out []Out, sizes bool) string {
+func (s *state) ranges(out []Out, sizes bool) string {
 	parts := make([]string, len(out))
 	for i, o := range out {
 		parts[i] = fmt.Sprintf("%s:%d-%d", o.Path, o.StartLine, o.EndLine)
 		if sizes {
-			parts[i] += fmt.Sprintf(" (%d bytes)", evidence.Size(o.Hit))
+			parts[i] += " (" + s.units(s.cost(o.Hit)) + ")"
 		}
 	}
 	return strings.Join(parts, ", ")
 }
 
-// size is the bytes of hits as evidence.Format renders them, whole.
-func size(hits []retrieval.Hit) int {
-	n := 0
-	for _, h := range hits {
-		n += evidence.Size(h)
+// units names chars bytes and tokens tokens, each when the budget bounds it:
+// bytes unless a deep answer's evidence takes the room its context leaves,
+// tokens when it Counts.
+func (s *state) units(chars, tokens int) string {
+	var parts []string
+	if s.req.Chars < math.MaxInt {
+		parts = append(parts, fmt.Sprintf("%d bytes", chars))
 	}
-	return n
+	if s.req.Counts() {
+		parts = append(parts, fmt.Sprintf("%d tokens", tokens))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// left is what the budget has left past evidence of chars bytes and tokens
+// tokens, in the units it bounds.
+func (s *state) left(chars, tokens int) string {
+	var parts []string
+	if s.req.Chars < math.MaxInt {
+		parts = append(parts, fmt.Sprintf("%d bytes left of %d", s.req.Chars-chars, s.req.Chars))
+	}
+	if s.req.Counts() {
+		parts = append(parts, fmt.Sprintf("%d tokens left of %d", s.req.Tokens-tokens, s.req.Tokens))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// cost is h's block in the evidence (evidence.Block): its bytes, and its
+// tokens when the budget Counts them, each block counted once.
+func (s *state) cost(h retrieval.Hit) (chars, tokens int) {
+	block := evidence.Block(h)
+	if !s.req.Counts() {
+		return len(block), 0
+	}
+	n, ok := s.tokens[block]
+	if !ok {
+		n = s.req.Count(block)
+		s.tokens[block] = n
+	}
+	return len(block), n
+}
+
+// size is hits' cost, summed: the evidence as evidence.Format renders it, whole.
+func (s *state) size(hits []retrieval.Hit) (chars, tokens int) {
+	for _, h := range hits {
+		c, t := s.cost(h)
+		chars, tokens = chars+c, tokens+t
+	}
+	return chars, tokens
 }

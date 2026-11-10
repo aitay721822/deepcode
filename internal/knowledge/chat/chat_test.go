@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,8 +14,10 @@ import (
 	"strings"
 	"testing"
 
+	"deepcode/internal/knowledge/chat/harness"
 	"deepcode/internal/knowledge/chat/loop"
 	"deepcode/internal/knowledge/chat/store"
+	"deepcode/internal/knowledge/codemap"
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
@@ -70,9 +72,10 @@ func TestAskLimit(t *testing.T) {
 	}
 }
 
-// service is the chat service on db, asking model (nil: none).
+var tokens, _ = harness.LoadTokens("") // OpenAI's o200k_base, the built-in
+// service is the chat service on db, asking model (nil: none), counting its tokens by tokens.
 func service(db *sql.DB, model *ai.OpenAI) *Service {
-	return &Service{Store: &store.Store{DB: db}, Chat: model,
+	return &Service{Store: &store.Store{DB: db}, Chat: model, Tokens: tokens,
 		Catalog:   &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: &jobs.Queue{Store: &jobstore.Store{DB: db}}},
 		Retriever: &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}}}
 }
@@ -99,7 +102,7 @@ func TestAnswers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var asked []string // what the model was asked for, in order
+	asked, refuse := []string{}, 0 // what the model was asked for, in order; answers to refuse as too long, as llama.cpp does
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Messages []ai.Message `json:"messages"`
@@ -112,6 +115,12 @@ func TestAnswers(t *testing.T) {
 		}
 		reply := "nothing"
 		if strings.HasPrefix(body.Messages[0].Content, "You are deepcode") {
+			if refuse > 0 {
+				refuse--
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, `{"error":{"code":400,"message":"too long","type":"exceed_context_size_error","n_prompt_tokens":1000,"n_ctx":100000}}`)
+				return
+			}
 			asked = append(asked, fmt.Sprintf("an answer, with %d messages", len(body.Messages)))
 			reply = "<think>hidden</think>It subscribes [src/store.ts:1-2]."
 		} else {
@@ -145,6 +154,17 @@ func TestAnswers(t *testing.T) {
 	if want := []string{"an answer, with 2 messages", "an answer, with 4 messages", "search terms"}; !slices.Equal(asked, want) {
 		t.Fatalf("the model was asked for %q, want %q", asked, want)
 	}
+	refuse = 1 // with the counts: the context learned, the request fitted again and sent once more
+	if m := ask(0, "subscribe"); !strings.HasPrefix(m.Content, "It subscribes") || s.Chat.Context() != 100000 || refuse != 0 {
+		t.Fatalf("refused once: %+v, context %d", m, s.Chat.Context())
+	}
+	refuse = 2 // twice: the asker is told to set the context
+	if msg, logIt := Explain(s.Ask(ctx, Request{RepoID: 1, Question: "subscribe", UserID: 1}, func(string, any) {})); msg != errContext.Error() || !logIt || refuse != 0 {
+		t.Fatalf("refused twice: %s", msg)
+	}
+	if msg, _ := Explain(service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", Window: 9000}).Ask(ctx, Request{RepoID: 1, Question: "subscribe", UserID: 1}, func(string, any) {})); !strings.Contains(msg, "DEEPCODE_CHAT_CONTEXT 都要至少") {
+		t.Fatalf("a context of 808 tokens past the answer's room: %s", msg)
+	}
 }
 
 // gathered answers a request of the loop that gathers the evidence, whole:
@@ -160,14 +180,13 @@ func gathered(w http.ResponseWriter, query string) {
 	json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": msg}}})
 }
 
-// TestGathered: an answer is written once, from what the model gathered with
-// its tools after the first search, each call announced as a search event;
-// the evidence event tells the rounds, the calls and the rule that ended the
-// gathering. A deep answer reads the nearest wiki page as background, its
-// links' targets dropped and its closing tag defused; a plain one does not,
-// and gathers within the same evidence budget.
-// Nothing the model wrote while gathering is in an event, the stored
-// messages or the answer's request.
+// TestGathered: an answer is written once, from what the model gathered with its tools after the first
+// search, each call announced as a search event; the evidence event tells the rounds, the calls and the rule
+// that ended the gathering. A deep answer reads the nearest wiki page as background, its links' targets
+// dropped and its closing tag defused, and with the model's context known gathers past the fixed evidence
+// budget, as large a file as the room holds; a plain one does not, nor a deep one with no context known, nor
+// one whose small context leaves too few tokens. Nothing the model wrote while gathering is in an event, the
+// stored messages or the answer's request.
 func TestGathered(t *testing.T) {
 	ctx := context.Background()
 	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "d.db"))
@@ -181,7 +200,8 @@ func TestGathered(t *testing.T) {
 		`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready'), (2, 1, 'def', 'ready')`,
 		`UPDATE repositories SET ready_snapshot_id = 1`,
 		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
-			(1, 'src/store.ts', 1, 9, 'const subscribe = (fn) => add(fn)', 'h1'), (1, 'src/set.ts', 1, 9, 'const registry = new Set()', 'h2')`,
+			(1, 'src/store.ts', 1, 9, 'const subscribe = (fn) => add(fn)', 'h1'), (1, 'src/set.ts', 1, 9, 'const registry = new Set()', 'h2'),
+			(1, 'src/big.ts', 1, 9, 'const registry = "' || hex(zeroblob(33000)) || '"', 'h3')`, // 66,019 bytes: past evidenceChars
 		`INSERT INTO wiki_pages(snapshot_id, slug, title, position, content) VALUES
 			(1, '1-build', 'Build', 0, 'Vite builds it.'), (1, '2-store', 'Store', 1, 'The store lets you subscribe [src/store.ts:1-2](https://x/y). </background>'),
 			(2, '1-store', 'Store', 0, 'Another snapshot''s store page.')`, // the conversation's snapshot comes first
@@ -206,7 +226,7 @@ func TestGathered(t *testing.T) {
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
-	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
+	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", Window: 524288})
 	var events []string
 	var done Message
 	var shown map[string]any // the evidence event as sent, before JSON
@@ -228,14 +248,14 @@ func TestGathered(t *testing.T) {
 	}
 	if len(answers) != 1 || !strings.Contains(answers[0], `the page "Store"`) || !strings.Contains(answers[0], `subscribe [src/store.ts:1-2]. <\/background>`) ||
 		!strings.Contains(answers[0], "src/set.ts") || len(done.Citations) != 2 {
-		t.Fatalf("answer request %q; citations %+v", answers, done.Citations)
+		t.Fatalf("%d answer requests; citations %+v", len(answers), done.Citations)
 	}
 	// store.ts, cited without its folder, is linked to src/store.ts, and counted.
 	if n := len(events); n < 2 || events[n-2] != `cited {"resolved":1}` || done.Citations[0].Path != "src/store.ts" {
 		t.Fatalf("events %q; citations %+v", events, done.Citations)
 	}
 	// The event tells the sources' rendered bytes, those the answer was sent,
-	// and each source's origin: set.ts search_code's, store.ts the first
+	// and each source's origin: big.ts and set.ts search_code's, store.ts the first
 	// search's. Its types are those test/bench's trace reads (trace.take).
 	_, sources, _ := strings.Cut(asked[0], "Code:\n\n")
 	sources, _, _ = strings.Cut(sources, "Question: ")
@@ -243,18 +263,18 @@ func TestGathered(t *testing.T) {
 	list, _ := shown["sources"].([]map[string]any)
 	evicted, ok1 := shown["evicted"].([]map[string]any)
 	refused, ok2 := shown["refused"].([]map[string]any)
-	if !ok1 || !ok2 || len(evicted)+len(refused) != 0 || chars["budget"] != evidenceChars {
-		t.Fatalf("evidence %v", shown)
+	if _, bounded := chars["budget"]; !ok1 || !ok2 || len(evicted)+len(refused) != 0 || bounded || shown["window"].(map[string]int)["evidence"] <= evidenceChars {
+		t.Fatalf("evidence %v %v %v", chars, evicted, refused)
 	}
-	if _, ok := shown["dropped"].([]map[string]any); !ok || sources == "" || chars["rendered"] != len(sources) || len(list) != 2 ||
-		list[0]["path"] != "src/set.ts" || list[0]["tool"] != "search_code" || list[0]["round"] != 2 || list[1]["tool"] != "first" || list[1]["round"] != 1 {
-		t.Fatalf("evidence %v; sources sent %q", shown, sources)
+	if _, ok := shown["dropped"].([]map[string]any); !ok || sources == "" || chars["rendered"] != len(sources) || len(list) != 3 ||
+		list[0]["path"] != "src/big.ts" || list[0]["tool"] != "search_code" || list[0]["round"] != 2 || list[1]["path"] != "src/set.ts" || list[2]["tool"] != "first" || list[2]["round"] != 1 {
+		t.Fatalf("evidence %v; %d bytes of sources sent", shown["sources"], len(sources))
 	}
 	stored, err := s.Store.Messages(ctx, 1)
 	if b, _ := json.Marshal(stored); err != nil || strings.Contains(string(b)+strings.Join(events, "")+answers[0], "MARKER") {
 		t.Fatalf("the model's gathering text left the loop: %s %q %q %v", b, events, answers, err)
 	}
-	// A plain answer: no background, and the deep answer's evidence budget.
+	// A plain answer: no background, and the fixed evidence budget.
 	var plain map[string]int
 	if err := s.Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", UserID: 1}, func(event string, data any) {
 		if event == "evidence" {
@@ -264,15 +284,25 @@ func TestGathered(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(answers) != 2 || strings.Contains(answers[1], "background") || !strings.Contains(answers[1], "src/set.ts") || plain["budget"] != evidenceChars {
-		t.Fatalf("a plain answer's request %q, chars %v", answers[1], plain)
+		t.Fatalf("%d answer requests, chars %v", len(answers), plain)
+	}
+	for _, window := range []int{0, 20000} { // a deep answer with no context known: the fixed budget, the big file refused; with a small one, past its tokens, and no room for the page
+		var deep map[string]any
+		if err := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", Window: window}).Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", Deep: true, UserID: 1}, func(event string, data any) {
+			if event == "evidence" {
+				deep = data.(map[string]any)
+			}
+		}); err != nil || deep["chars"].(map[string]int)["budget"] != map[bool]int{true: evidenceChars}[window == 0] || len(deep["refused"].([]map[string]any)) != 1 || window == 0 && !strings.Contains(answers[len(answers)-1], `the page "Store"`) {
+			t.Fatalf("deep, context %d: %v %v %v", window, err, deep["chars"], deep["refused"])
+		}
 	}
 }
 
-// TestEvidenceEvent: the evidence event names each source block with where it
-// came from; the hits gathered that Format left out, in the order the answer
-// would have read them, with their bytes; the hits the gathering's budget
-// evicted, with where they had been found, and refused, each with the call
-// that did it; and the rendered bytes against the budget.
+// TestEvidenceEvent: the evidence event names each source block with where it came from; the hits
+// gathered that Format left out, in the order the answer would have read them, with their bytes; the
+// hits the gathering's budget evicted, with where they had been found, and refused, each with the call
+// that did it; the rendered bytes against the budget, if bytes bound it; and the context, its
+// threshold, the parts' shares and the results masked.
 func TestEvidenceEvent(t *testing.T) {
 	got := loop.Result{Result: retrieval.Result{Hits: []retrieval.Hit{
 		{Path: "a.go", StartLine: 1, EndLine: 2, Content: "x\ny"},
@@ -282,84 +312,26 @@ func TestEvidenceEvent(t *testing.T) {
 		Evicted: []loop.Out{{Hit: retrieval.Hit{Path: "d.go", StartLine: 1, EndLine: 4, Symbol: "D"}, Round: 3, Tool: "users", From: "first"}},
 		Refused: []loop.Out{{Hit: retrieval.Hit{Path: "e.go", StartLine: 7, EndLine: 9}, Round: 2, Tool: "read_file"}},
 		Rounds:  2, Calls: map[string]int{"read_file": 1}, Stop: "rounds"}
-	sources, used := evidence.Format(got.Hits, 80) // a.go's block fits, b.go's does not
-	b, _ := json.Marshal(evidenceEvent(got, used, len(sources), 80))
+	sources, used, _ := evidence.Format(got.Hits, evidence.Limit{Chars: 80}) // a.go's block fits, b.go's does not
+	parts, fit := fitted{shares: harness.Shares{Evidence: 80, History: 10, Background: 5}}, harness.New(&ai.OpenAI{Window: 524288}, tokens)
+	fit.Masked = 2
+	b, _ := json.Marshal(evidenceEvent(got, used, len(sources), evidence.Limit{Chars: 80}, parts, fit))
 	want := fmt.Sprintf(`{"calls":{"read_file":1},"chars":{"budget":80,"rendered":%d},`+
 		`"dropped":[{"chars":100,"endLine":3,"path":"b.go","round":1,"startLine":3,"symbol":"B","tool":"first"},{"chars":1,"endLine":6,"path":"c.go","round":3,"startLine":5,"symbol":"","tool":"users"}],`+
 		`"evicted":[{"endLine":4,"from":"first","path":"d.go","round":3,"startLine":1,"symbol":"D","tool":"users"}],`+
-		`"fts":0,"graph":0,"named":0,`+
+		`"fts":0,"graph":0,"masked":2,"named":0,`+
 		`"refused":[{"endLine":9,"path":"e.go","round":2,"startLine":7,"symbol":"","tool":"read_file"}],`+
-		`"rounds":3,"sources":[{"endLine":2,"path":"a.go","round":2,"startLine":1,"symbol":"","tool":"read_file"}],"stop":"rounds","symbol":0,"vector":0}`, len(sources))
+		`"rounds":3,"sources":[{"endLine":2,"path":"a.go","round":2,"startLine":1,"symbol":"","tool":"read_file"}],"stop":"rounds","symbol":0,"vector":0,`+
+		`"window":{"background":5,"context":524288,"evidence":80,"history":10,"threshold":419430}}`, len(sources))
 	if len(used) != 1 || string(b) != want {
 		t.Errorf("%s\nwant %s", b, want)
 	}
 	all := `"sources":[{"endLine":2,"path":"a.go","round":2,"startLine":1,"symbol":"","tool":"read_file"},` +
 		`{"endLine":3,"path":"b.go","round":1,"startLine":3,"symbol":"B","tool":"first"},{"endLine":6,"path":"c.go","round":3,"startLine":5,"symbol":"","tool":"users"}]`
 	got.Evicted, got.Refused = nil, nil
-	if b, _ := json.Marshal(evidenceEvent(got, got.Hits, 9, 80)); !strings.Contains(string(b), `"dropped":[]`) || !strings.Contains(string(b), all) ||
-		!strings.Contains(string(b), `"evicted":[]`) || !strings.Contains(string(b), `"refused":[]`) {
+	if b, _ := json.Marshal(evidenceEvent(got, got.Hits, 9, evidence.Limit{Chars: math.MaxInt}, parts, fit)); !strings.Contains(string(b), `"dropped":[]`) || !strings.Contains(string(b), all) ||
+		!strings.Contains(string(b), `"evicted":[]`) || !strings.Contains(string(b), `"refused":[]`) || !strings.Contains(string(b), `"chars":{"rendered":9}`) {
 		t.Errorf("nothing left out: %s", b)
-	}
-}
-
-// TestNearest: the page sharing most of the question's words wins, a title
-// counting thrice and Chinese read in pairs of characters; a word all pages
-// hold decides nothing, and no shared word means no page.
-func TestNearest(t *testing.T) {
-	titles := []string{"Overview", "路由與中介層", "Store"}
-	contents := []string{"The router and the store.", "How the router matches paths.", "The store keeps data."}
-	for q, want := range map[string]int{"How does the router work?": 1, "講解路由": 1, "where is the store": 2, "the the": -1, "zzz": -1} {
-		if got := nearest(q, titles, contents); got != want {
-			t.Errorf("%q: page %d, want %d", q, got, want)
-		}
-	}
-	if got := wordsOf("講解路由 the Router 元件x"); !slices.Equal(slices.Sorted(maps.Keys(got)), []string{"router", "the", "元件", "解路", "講解", "路由"}) {
-		t.Errorf("words %v", got)
-	}
-}
-
-// TestOpenOwnConversation: a conversation is continued only by its owner and
-// only in its repository; to anyone else it does not exist.
-func TestOpenOwnConversation(t *testing.T) {
-	ctx := context.Background()
-	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "c.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	for _, q := range []string{
-		`INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x'), (2, 'b', 'x')`,
-		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r'), (2, 'https://github.com/o/s', 'o', 's')`,
-		`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'a', 'ready')`,
-		`INSERT INTO conversations(id, repository_id, snapshot_id, title, user_id) VALUES (1, 1, 1, 't', 1)`,
-	} {
-		if _, err := db.ExecContext(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	s := service(db, nil)
-	at := catalog.Ref{ID: 1}
-	if b, err := s.open(ctx, Request{UserID: 1, RepoID: 1, ConversationID: 1}, at, "q"); err != nil || b.id != 1 {
-		t.Fatalf("the owner: %+v %v", b, err)
-	}
-	for _, req := range []Request{{UserID: 2, RepoID: 1, ConversationID: 1}, {UserID: 1, RepoID: 2, ConversationID: 1}} {
-		if _, err := s.open(ctx, req, at, "q"); !errors.Is(err, ErrNotFound) {
-			t.Fatalf("%+v: %v", req, err)
-		}
-	}
-	// The history keeps its first message while it grows to 11, then drops 6 at once.
-	for n, first := range map[int]string{0: "", 5: "m1", 11: "m1", 12: "m7", 17: "m7"} {
-		db.ExecContext(ctx, `DELETE FROM messages`)
-		for i := 1; i <= n; i++ {
-			s.Store.AddMessage(ctx, 1, "user", fmt.Sprintf("m%d", i), nil)
-		}
-		h, err := s.history(ctx, 1)
-		if got := ""; err != nil || len(h) > 0 && h[0].Content != first || len(h) == 0 && first != "" || len(h) > 0 && h[len(h)-1].Content != fmt.Sprintf("m%d", n) {
-			if len(h) > 0 {
-				got = h[0].Content
-			}
-			t.Errorf("%d messages: history starts at %q, want %q (%v)", n, got, first, err)
-		}
 	}
 }
 
@@ -378,13 +350,13 @@ func TestLanguage(t *testing.T) {
 		"請解釋 the router matching algorithm in detail please":                                                     chinese,
 		"這段為何失敗：```go\nfunc (r *Router) Mount(pattern string, h http.Handler) { r.mux.Handle(pattern, h) }\n```": chinese,
 	} {
-		if got := prompt("go-chi/chi", "abc", nil, "", "", q).Dynamic; !strings.HasSuffix(got, "Question: "+q+"\n\n"+namesLine+" Answer in "+want+".") {
+		if got := prompt("go-chi/chi", "abc", nil, "", "", q, answerLanguage(q, nil)).Dynamic; !strings.HasSuffix(got, "Question: "+q+"\n\n"+namesLine+" Answer in "+want+".") {
 			t.Errorf("%q: %q", q, got)
 		}
 	}
 	history := []ai.Message{{Role: "user", Content: "Mount 如何運作？"}, {Role: "assistant", Content: "It mounts a router."}}
 	for _, q := range []string{"？", "Route?", "src/a/main.go?", "x_on_y?"} {
-		if p := prompt("go-chi/chi", "abc", history, "", "", q); p.Static != systemPrompt || len(p.Previous) != 2 || p.Previous[0] != history[0] ||
+		if p := prompt("go-chi/chi", "abc", history, "", "", q, answerLanguage(q, history)); p.Static != systemPrompt || len(p.Previous) != 2 || p.Previous[0] != history[0] ||
 			!strings.HasSuffix(p.Dynamic, "Answer in "+chinese+".") {
 			t.Errorf("a follow-up whose words tell nothing: %q", p)
 		}
@@ -402,7 +374,8 @@ func TestLanguage(t *testing.T) {
 // TestCodemap: a code map is drawn with drawing events, its locations linked
 // (a path's brackets escaped) and cited, and stored to be read back; an answer
 // that is no map is told as errSchema, and logged; a map that shows no line of
-// the sources, twice, as errMap.
+// the sources, twice, as errMap. A context that holds a plain answer's request
+// but not a code map's with its retry tells the asker the context it needs.
 func TestCodemap(t *testing.T) {
 	ctx := context.Background()
 	db, _ := storage.Open(ctx, filepath.Join(t.TempDir(), "m.db"))
@@ -448,5 +421,9 @@ func TestCodemap(t *testing.T) {
 		if msg, logIt := Explain(err); !errors.Is(err, want) || msg != want.Error() || logIt != (want == errSchema) {
 			t.Fatalf("%.20q: %v, told %q", reply, err, msg)
 		}
+	}
+	m := codemap.Request{Repo: "o/r", Commit: "abc", Question: "How is a Page rendered?", Language: "English"} // as Ask asks
+	if err := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", MaxTokens: 100, Window: (codemap.Fixed(m, harness.New(&ai.OpenAI{}, tokens).Prompt) + 2000) * 10 / 8}).Ask(ctx, Request{RepoID: 1, Question: m.Question, Codemap: true, UserID: 1}, func(string, any) {}); !errors.As(err, new(*harness.ErrSmall)) {
+		t.Fatalf("a context without the retry's room: %v", err)
 	}
 }

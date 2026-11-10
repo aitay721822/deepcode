@@ -1,7 +1,7 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { getConversation, streamChat } from '../../../api/repo/chat'
-import type { AskMode, Codemap, ConversationRef, Message, SearchStep, Source } from '../../../types/repo/chat'
+import type { AskMode, Codemap, ConversationRef, Message, Source, Step } from '../../../types/repo/chat'
 import type { Citation } from '../../../types/repo/code'
 import type { Repo } from '../../../types/repo/repo'
 
@@ -10,7 +10,7 @@ export type Turn = {
   answer: string
   citations: Citation[]
   sources: Source[]
-  steps: SearchStep[] // what the model searched for and read while gathering the code
+  steps: Step[] // what the model searched for and read while gathering the code, and what was made smaller to fit
   mode?: AskMode // how it was asked, when on this page
   codemap?: Codemap // an answer drawn as a code map
   drawn: number // how much of a code map has come, in characters, while it is drawn
@@ -128,7 +128,7 @@ export function useChat(repoId: string, conversationId?: string) {
                 replace: true,
                 resetScroll: false,
               })
-          } else if (event === 'search') {
+          } else if (event === 'search' || event === 'compact') {
             update((t) => ({ ...t, steps: [...t.steps, data] }))
           } else if (event === 'evidence') {
             update((t) => ({ ...t, sources: data.sources }))

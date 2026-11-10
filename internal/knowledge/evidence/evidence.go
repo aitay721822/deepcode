@@ -10,28 +10,49 @@ import (
 	"deepcode/internal/knowledge/retrieval"
 )
 
-// Format renders hits as numbered source blocks for a prompt, stopping at
-// maxChars; a single chunk longer than that is cut to its first lines. It
-// returns the hits as shown: only those lines may be cited.
-func Format(hits []retrieval.Hit, maxChars int) (string, []retrieval.Hit) {
+// Limit bounds the evidence: Chars bytes as Format renders it, and Tokens of
+// Count's tokens when it Counts.
+type Limit struct {
+	Chars, Tokens int
+	Count         func(string) int
+}
+
+// Counts reports whether l bounds tokens: Count is set and Tokens is below
+// Chars. A model's token is a byte or more, so Tokens of Chars or more bounds
+// nothing Chars does not.
+func (l Limit) Counts() bool { return l.Count != nil && l.Tokens < l.Chars }
+
+// Format renders hits as numbered source blocks for a prompt, stopping at l;
+// a single chunk longer than that is cut to its first lines (to l.Tokens bytes
+// for its tokens, as many as fit or fewer). It returns the hits as shown: only
+// those lines may be cited; and, when l has a Count, the blocks' tokens, each
+// block counted alone, whether or not l Counts them.
+func Format(hits []retrieval.Hit, l Limit) (text string, used []retrieval.Hit, tokens int) {
 	var b strings.Builder
-	var used []retrieval.Hit
 	for _, h := range hits {
-		block, h := render(h, maxChars)
-		if b.Len()+len(block) > maxChars && len(used) > 0 {
+		block, shown := render(h, l.Chars)
+		n := 0
+		if l.Count != nil {
+			if n = l.Count(block); n > l.Tokens && l.Counts() && len(used) == 0 {
+				block, shown = render(h, l.Tokens)
+				n = l.Count(block)
+			}
+		}
+		if (b.Len()+len(block) > l.Chars || tokens+n > l.Tokens && l.Counts()) && len(used) > 0 {
 			break
 		}
 		b.WriteString(block)
-		used = append(used, h)
+		used, tokens = append(used, shown), tokens+n
 	}
-	return b.String(), used
+	return b.String(), used, tokens
 }
 
-// Size is the bytes of h's block as Format writes it, uncut: hits whose sizes
-// sum to at most maxChars are all shown, whole.
-func Size(h retrieval.Hit) int {
+// Block is h's block as Format writes it, uncut: hits whose Blocks' bytes sum
+// to at most l.Chars are all shown, whole, when their tokens sum to at most
+// l.Tokens too.
+func Block(h retrieval.Hit) string {
 	block, _ := render(h, math.MaxInt)
-	return len(block)
+	return block
 }
 
 // render is h's block, its lines cut past maxChars but the first, and h as

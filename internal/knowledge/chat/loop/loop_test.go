@@ -91,7 +91,7 @@ func seed(t *testing.T, model string, fs []file, stmts ...string) (Gatherer, Req
 	r := &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}}
 	g := Gatherer{Model: &ai.OpenAI{BaseURL: model, ModelName: "m"}, Retriever: r,
 		Catalog: &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: &jobs.Queue{Store: &jobstore.Store{DB: db}}}}
-	return g, Request{Snapshot: catalog.Ref{ID: 1, CommitSHA: "abc"}, Repo: "o/r", Question: "How is a route found?", Limits: Limits{Rounds: 4, Chars: 40000}}
+	return g, Request{Snapshot: catalog.Ref{ID: 1, CommitSHA: "abc"}, Repo: "o/r", Question: "How is a route found?", Limits: Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}}
 }
 
 // call is one tool call of a scripted reply.
@@ -206,8 +206,8 @@ func TestGather(t *testing.T) {
 		t.Fatal(users, found, err, err2)
 	}
 	want := []retrieval.Hit{{Path: "src/tree.go", StartLine: 1, EndLine: 30, Content: tree}, users[0], found.Hits[0], req.First.Hits[0]}
-	sources, used := evidence.Format(res.Hits, req.Chars)
-	wantSources, wantUsed := evidence.Format(want, req.Chars)
+	sources, used, _ := evidence.Format(res.Hits, req.Limit)
+	wantSources, wantUsed, _ := evidence.Format(want, req.Limit)
 	if !reflect.DeepEqual(res.Hits, want) || sources != wantSources || !reflect.DeepEqual(used, wantUsed) || len(used) != len(res.Hits) || len(sources) != size(res.Hits) {
 		t.Errorf("hits %+v\nwant %+v", res.Hits, want)
 	}
@@ -224,14 +224,14 @@ func TestStops(t *testing.T) {
 		rounds  int
 		hits    int
 	}{
-		StopAnswered: {nil, Limits{Rounds: 4, Chars: 40000}, 1, 2},
-		StopRounds:   {[][]call{{read("go.mod")}, {read("src/mux.go")}, {read("src/tree.go")}}, Limits{Rounds: 2, Chars: 40000}, 2, 3},
+		StopAnswered: {nil, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}, 1, 2},
+		StopRounds:   {[][]call{{read("go.mod")}, {read("src/mux.go")}, {read("src/tree.go")}}, Limits{Rounds: 2, Limit: evidence.Limit{Chars: 40000}}, 2, 3},
 		// The first search's hits fit, with 20 bytes left (set below); each read is refused, the first told.
 		StopBudget: {[][]call{{read("src/tree.go")}, {read("gen/big.go")}}, Limits{Rounds: 4}, 2, 2},
 		// Only what the first search found, then the same call again: two rounds in a row that added nothing.
-		StopStalled: {[][]call{{module}, {module}}, Limits{Rounds: 4, Chars: 40000}, 2, 2},
-		StopError:   {nil, Limits{Rounds: 4, Chars: 40000}, 0, 2},
-		StopTime:    {nil, Limits{Rounds: 4, Chars: 40000, Time: 100 * time.Millisecond}, 0, 2},
+		StopStalled: {[][]call{{module}, {module}}, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}, 2, 2},
+		StopError:   {nil, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}, 0, 2},
+		StopTime:    {nil, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}, Time: 100 * time.Millisecond}, 0, 2},
 	} {
 		srv, asked := model(t, tc.replies...)
 		switch name {

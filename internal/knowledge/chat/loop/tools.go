@@ -99,7 +99,22 @@ func (s *state) run(ctx context.Context, call ai.ToolCall, emit Emit) (string, b
 	}
 	s.seen[call.Name+string(key)] = true
 	grew, note := s.add(call.Name, hits)
-	return text + note + s.follow(ctx, hits, follows), grew
+	followed := s.follow(ctx, hits, follows)
+	s.short[call.Key] = shortened(call, hits, followed)
+	return text + note + followed, grew
+}
+
+// shortened is what a call's result is masked to (harness.Next): the call and
+// the ranges it found, by path, lines and symbol, then what follow told of it,
+// which names ranges only. The code found stays in the evidence, or was
+// evicted as the model was told.
+func shortened(call ai.ToolCall, hits []retrieval.Hit, followed string) string {
+	at := make([]string, len(hits))
+	for i, h := range hits {
+		at[i] = strings.TrimSpace(fmt.Sprintf("%s:%d-%d %s", h.Path, h.StartLine, h.EndLine, h.Symbol))
+	}
+	return fmt.Sprintf("Result shortened to fit the model's context; what it found stays in the evidence unless evicted: %s %s found %s.\n%s",
+		call.Name, call.Arguments, cmp.Or(strings.Join(at, "; "), "nothing"), followed)
 }
 
 // follows is how far follow goes from a call's code: to the code using a

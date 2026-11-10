@@ -21,6 +21,8 @@
    chat_api_key: your-key
    chat_model: your-chat-model
    # embed_model: your-embedding-model
+   # chat_context: 524288
+   # chat_tokenizer: tokenizer.json
    ```
 
    每個鍵也可以用環境變數設定，例如 `DEEPCODE_CHAT_MODEL`，環境變數會覆寫檔案。

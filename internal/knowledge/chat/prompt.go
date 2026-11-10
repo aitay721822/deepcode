@@ -122,10 +122,10 @@ const namesLine = "Name in backticks the types, calls and annotations the answer
 
 // prompt assembles the rules, the recent turns, then the repository, a deep
 // answer's background block ("" for none), the code (sources), the question,
-// namesLine and the language line.
-func prompt(repo, sha string, history []ai.Message, background, sources, question string) ai.Prompt {
+// namesLine and the language line, in lang (answerLanguage).
+func prompt(repo, sha string, history []ai.Message, background, sources, question, lang string) ai.Prompt {
 	return ai.Prompt{Static: systemPrompt, Previous: history, Dynamic: fmt.Sprintf("Repository: %s at commit %s\n\n%sCode:\n\n%sQuestion: %s\n\n%s Answer in %s.",
-		repo, sha, background, sources, question, namesLine, answerLanguage(question, history))}
+		repo, sha, background, sources, question, namesLine, lang)}
 }
 
 // retrievalQuery is what a question is searched with.

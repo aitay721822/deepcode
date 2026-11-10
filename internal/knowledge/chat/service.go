@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
+	"deepcode/internal/knowledge/chat/background"
+	"deepcode/internal/knowledge/chat/harness"
 	"deepcode/internal/knowledge/chat/loop"
 	"deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/codemap"
@@ -27,7 +30,8 @@ type Service struct {
 	Store     *store.Store
 	Catalog   *catalog.Catalog
 	Retriever *retrieval.Retriever
-	Chat      *ai.OpenAI // nil: not configured
+	Chat      *ai.OpenAI      // nil: not configured
+	Tokens    *harness.Tokens // counts Chat's tokens (harness.LoadTokens)
 
 	mu     sync.Mutex
 	asking map[int64]int // answers being written, by user
@@ -43,14 +47,23 @@ var (
 	errModel    = errors.New("語言模型沒有回應；請稍後再試")
 	errMap      = errors.New("語言模型沒有畫出有效的 Codemap；請再試一次，或改用一般問答")
 	errSchema   = errors.New("語言模型伺服器不支援 structured outputs（json_schema），無法畫出 Codemap；請管理員改用支援的端點")
+	errContext  = errors.New("問題連同程式碼超出了語言模型的上下文；請管理員把 DEEPCODE_CHAT_CONTEXT 設為模型的上下文大小")
 )
 
 // Explain is what the asker is told about err from Ask: one of the errors
-// above, or a generic line, since other errors may quote SQL or a server's
-// answer. logIt reports whether err belongs in the server log: the model's
-// failures and unexplained errors do; what the asker can act on, or the
-// startup log already says (no chat model), does not.
+// above, a context too small for the question (harness.ErrSmall, its words
+// naming the context it needs), or a generic line, since other errors may
+// quote SQL or a server's answer. logIt reports whether err belongs in the
+// server log: the model's failures and unexplained errors do; what the asker
+// can act on, or the startup log already says (no chat model), does not.
 func Explain(err error) (msg string, logIt bool) {
+	var small *harness.ErrSmall
+	switch {
+	case errors.As(err, &small):
+		return small.Error(), true
+	case errors.As(err, new(*ai.ErrContext)):
+		return errContext.Error(), true
+	}
 	for _, known := range []error{ErrNotFound, errQuestion, errNoModel, errIndexing, errBusy, errMap} {
 		if errors.Is(err, known) {
 			return known.Error(), false
@@ -68,7 +81,7 @@ type Request struct {
 	RepoID         int64  `json:"-"`              // the row id; the API takes the public id
 	ConversationID int64  `json:"conversationId"` // 0 starts one; else one of UserID's
 	Question       string `json:"question"`
-	Deep           bool   `json:"deep"`    // search more rounds and read a wiki page first (deep.go)
+	Deep           bool   `json:"deep"`    // search more rounds, read a wiki page first (deep.go), and with the model's context known gather all the evidence it holds
 	Codemap        bool   `json:"codemap"` // answer with a code map (package codemap), from deep evidence
 	UserID         int64  `json:"-"`       // who asks
 }
@@ -78,18 +91,34 @@ type Emit func(event string, data any)
 
 const (
 	evidenceHits  = 10
-	evidenceChars = 64000 // Deep's too: at 40000 an eShop payment answer evicted the handler it found, its reads holding 46%
+	evidenceChars = 64000 // a deep answer's too while the context is unknown: at 40000 an eShop payment answer evicted the handler it found
 	maxQuestion   = 4000  // runes
 	maxAsking     = 2     // answers one user may have written at a time, in all their tabs
 	noEvidence    = "無法從目前程式碼確認 — no indexed code matched this question."
 )
 
-// What gathering the evidence may take. A deep answer, and a code map, may
-// take twice the rounds and more time.
+// What gathering the evidence may take, its budget aside (limit). A deep
+// answer, and a code map, may take twice the rounds and more time.
 var (
-	gathering     = loop.Limits{Rounds: 4, Chars: evidenceChars, Time: 45 * time.Second}
-	deepGathering = loop.Limits{Rounds: 8, Chars: evidenceChars, Time: 120 * time.Second}
+	gathering     = loop.Limits{Rounds: 4, Time: 45 * time.Second}
+	deepGathering = loop.Limits{Rounds: 8, Time: 120 * time.Second}
 )
+
+// limit is the evidence's budget for a's shares: evidenceChars bytes and, once
+// the model's context is known, its share in tokens. A deep answer's evidence
+// is held to evidenceChars only while the context is unknown: once it is
+// known, it takes all the room the context leaves (asking.rest), in tokens.
+// Its tokens are counted either way, as the answer's request is (asking.tokens).
+func (a asking) limit(sh harness.Shares) evidence.Limit {
+	l := evidence.Limit{Chars: evidenceChars, Tokens: sh.Evidence, Count: a.fit.Count}
+	switch {
+	case a.fit.Context() == 0:
+		l.Tokens = math.MaxInt
+	case a.rest:
+		l.Chars = math.MaxInt
+	}
+	return l
+}
 
 // Ask runs one question end to end, emitting: conversation, search* (each
 // call of the model's while it gathers the evidence, package loop), evidence,
@@ -123,7 +152,7 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	}
 	emit("conversation", map[string]any{"id": conv.id, "snapshotId": conv.snap.ID, "commitSha": conv.snap.CommitSHA})
 
-	history, err := s.history(ctx, conv.id)
+	turns, err := s.history(ctx, conv.id)
 	if err != nil {
 		return err
 	}
@@ -131,43 +160,77 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	if _, err := s.Store.AddMessage(ctx, conv.id, "user", q, nil); err != nil {
 		return err
 	}
-	repo, asked := r.Owner+"/"+r.Name, retrievalQuery(history, q)
+	past := harness.Messages(turns)
+	repo, sha, asked, lang := r.Owner+"/"+r.Name, conv.snap.CommitSHA, retrievalQuery(past, q), answerLanguage(q, past)
 	first, err := s.search(ctx, conv.snap.ID, repo, asked)
 	if err != nil {
 		return err
 	}
-	limits, background := gathering, ""
+	limits, bg := gathering, background.Page{}
 	if req.Deep || req.Codemap {
 		limits = deepGathering
-		if background, err = s.background(ctx, req.RepoID, conv.snap.ID, asked); err != nil {
+		if bg, err = s.wikiPage(ctx, req.RepoID, conv.snap.ID, asked); err != nil {
 			return err
 		}
 	}
-	got := loop.Gatherer{Model: s.Chat, Retriever: s.Retriever, Catalog: s.Catalog}.Gather(ctx,
-		loop.Request{Snapshot: conv.snap, Repo: repo, Question: asked, First: first, Limits: limits}, loop.Emit(emit))
-	sources, used := evidence.Format(got.Hits, limits.Chars)
-	emit("evidence", evidenceEvent(got, used, len(sources), limits.Chars))
-	link := func(c evidence.Citation) string {
-		return gitserver.SourceURL(r.Provider, r.URL, conv.snap.CommitSHA, c.Path, c.StartLine, c.EndLine)
-	}
+	m := codemap.Request{Repo: repo, Commit: sha, Question: q, Language: lang}
+	fit := harness.New(s.Chat, s.Tokens)
+	a := asking{conv: conv.id, fit: fit, fixed: fit.Prompt(prompt(repo, sha, nil, "", "", q, lang)), turns: turns, page: bg, rest: req.Deep && !req.Codemap, emit: emit}
 	if req.Codemap {
-		return s.drawMap(ctx, conv.id, codemap.Request{Repo: repo, Commit: conv.snap.CommitSHA, History: history, Background: background,
-			Sources: sources, Question: q, Language: answerLanguage(q, history), Hits: used}, link, emit)
+		a.fixed = codemap.Fixed(m, fit.Prompt)
 	}
+	// The gathering's budget: the evidence's share of the room, the conversation
+	// fitted only to what the gathered evidence leaves of it.
+	sh, err := a.fit.Share(a.fixed, a.want(evidenceChars), a.rest)
+	if err != nil {
+		return err
+	}
+	limits.Limit = a.limit(sh)
+	got := loop.Gatherer{Model: s.Chat, Retriever: s.Retriever, Catalog: s.Catalog, Fit: a.fit}.Gather(ctx,
+		loop.Request{Snapshot: conv.snap, Repo: repo, Question: asked, First: first, Limits: limits}, loop.Emit(emit))
+	_, _, gathered := evidence.Format(got.Hits, limits.Limit) // within the budget, whole
+	link := func(c evidence.Citation) string {
+		return gitserver.SourceURL(r.Provider, r.URL, sha, c.Path, c.StartLine, c.EndLine)
+	}
+	// Fitted, and once more after a refusal as too long that said by how much
+	// (harness.Learn).
+	for retried := false; ; retried = true {
+		parts, err := s.fit(ctx, a, gathered)
+		if err != nil {
+			return err
+		}
+		l := a.limit(parts.shares)
+		sources, used, tokens := evidence.Format(got.Hits, l)
+		emit("evidence", evidenceEvent(got, used, len(sources), l, parts, a.fit))
+		if req.Codemap {
+			m.History, m.Background, m.Sources, m.Hits = parts.history, parts.background, sources, used
+			err = s.drawMap(ctx, conv.id, m, link, emit)
+		} else {
+			err = s.answer(ctx, conv.id, prompt(repo, sha, parts.history, parts.background, sources, q, lang), used, lang, link, emit)
+		}
+		if err == nil || retried || !a.fit.Learn(err, a.tokens(parts, tokens)) {
+			return err
+		}
+	}
+}
+
+// answer streams the model's answer to p, written from used, and stores it
+// with its citations linked; with no evidence it says so without the model.
+func (s *Service) answer(ctx context.Context, conv int64, p ai.Prompt, used []retrieval.Hit, lang string, link func(evidence.Citation) string, emit Emit) error {
 	answer := noEvidence
 	if len(used) == 0 {
 		emit("delta", noEvidence)
-	} else if answer, err = s.Chat.Stream(ctx, prompt(repo, conv.snap.CommitSHA, history, background, sources, q), func(d string) { emit("delta", d) }); err != nil {
+	} else if reply, err := s.Chat.Stream(ctx, p, func(d string) { emit("delta", d) }); err != nil {
 		return fmt.Errorf("%w: %w", errModel, err)
 	} else {
-		answer = ai.StripThinking(answer)
+		answer = ai.StripThinking(reply)
 	}
 	content, cites, resolved := evidence.LinkCitations(answer, used, link)
 	emit("cited", map[string]any{"resolved": resolved})
 	if len(cites) == 0 && answer != noEvidence {
-		content += "\n\n" + uncited(answerLanguage(q, history))
+		content += "\n\n" + uncited(lang)
 	}
-	msg, err := s.Store.AddMessage(ctx, conv.id, "assistant", content, cites)
+	msg, err := s.Store.AddMessage(ctx, conv, "assistant", content, cites)
 	if err != nil {
 		return err
 	}
@@ -263,15 +326,39 @@ func (s *Service) search(ctx context.Context, snapshotID int64, repo, query stri
 	return s.Retriever.Search(ctx, snapshotID, strings.Join(terms[:min(len(terms), 24)], " ")+"\n"+query, evidenceHits)
 }
 
+// wikiPage is the written wiki page that shares the most words with the
+// question (background.Nearest), or the zero page when none does. The pages
+// are the conversation's snapshot's, else the newest of the repository's
+// indexed snapshots that has written ones.
+func (s *Service) wikiPage(ctx context.Context, repoID, snapshotID int64, question string) (background.Page, error) {
+	titles, contents, err := s.Store.WikiPages(ctx, repoID, snapshotID)
+	if err != nil {
+		return background.Page{}, err
+	}
+	i := background.Nearest(question, titles, contents)
+	if i < 0 {
+		return background.Page{}, nil
+	}
+	return background.Of(titles[i], contents[i]), nil
+}
+
 // evidenceEvent is the evidence event's payload. used is what Format took of
 // got.Hits, their head: each source block, with where it came from
 // (loop.Origin); got.Hits that Format left out ("dropped"), in the order the
 // answer would have read them, which the gathering's budget keeps empty; the
 // hits that budget evicted and refused (loop.Out), with the round and tool of
 // the call that did it; and the sources' bytes as rendered, against that
-// budget ("chars"). Then the gathering's counts, rounds (the first search's
-// counting), calls and stop.
-func evidenceEvent(got loop.Result, used []retrieval.Hit, rendered, budget int) map[string]any {
+// budget in bytes, l's, none for a deep answer with the context known
+// ("chars"). Then the gathering's counts, rounds (the first search's
+// counting), calls and stop; the model's context and threshold in tokens (0:
+// unknown) with the parts' shares in tokens, the evidence's its budget, or
+// while the context is unknown the tokens each part wants ("window"), and the
+// tool results the gathering masked to fit it.
+func evidenceEvent(got loop.Result, used []retrieval.Hit, rendered int, l evidence.Limit, parts fitted, fit *harness.Fit) map[string]any {
+	chars := map[string]int{"rendered": rendered}
+	if l.Chars < math.MaxInt {
+		chars["budget"] = l.Chars
+	}
 	source := func(h retrieval.Hit, round int, tool string) map[string]any {
 		return map[string]any{"path": h.Path, "symbol": h.Symbol, "startLine": h.StartLine, "endLine": h.EndLine, "round": round, "tool": tool}
 	}
@@ -295,6 +382,9 @@ func evidenceEvent(got loop.Result, used []retrieval.Hit, rendered, budget int) 
 		return out
 	}
 	return map[string]any{"sources": sources, "dropped": dropped, "evicted": outs(got.Evicted), "refused": outs(got.Refused),
-		"chars": map[string]int{"rendered": rendered, "budget": budget},
-		"fts":   got.FTS, "vector": got.Vector, "symbol": got.Symbol, "named": got.Named, "graph": got.Graph, "rounds": got.Rounds + 1, "calls": got.Calls, "stop": got.Stop}
+		"chars": chars,
+		"fts":   got.FTS, "vector": got.Vector, "symbol": got.Symbol, "named": got.Named, "graph": got.Graph, "rounds": got.Rounds + 1, "calls": got.Calls, "stop": got.Stop,
+		"window": map[string]int{"context": fit.Context(), "threshold": fit.Threshold(),
+			"evidence": parts.shares.Evidence, "history": parts.shares.History, "background": parts.shares.Background},
+		"masked": fit.Masked}
 }

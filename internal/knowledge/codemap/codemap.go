@@ -67,7 +67,7 @@ const maxEcho = 8000
 // told how much of the replies has come, as it comes. The map has no traces
 // only when the model found nothing to map.
 func Draw(ctx context.Context, model *ai.OpenAI, r Request, drawing func(chars int)) (Map, error) {
-	p, n := prompt(r), 0
+	p, n := Prompt(r), 0
 	for try := 0; ; try++ {
 		m, reply, err := ai.StreamJSON(ctx, model, p, format, func(d string) {
 			if n += len(d); drawing != nil {

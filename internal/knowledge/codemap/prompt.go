@@ -28,9 +28,18 @@ Rules:
 const groundNote = "None of those locations is a line the <source> blocks show: each needs a path as a source block names it, " +
 	"a line number shown there, and the code of that line copied exactly. Reply with the corrected JSON object only."
 
-// prompt assembles the rules, the recent turns, then the repository, the
-// background, the sources, the question and the language line.
-func prompt(r Request) ai.Prompt {
+// Fixed is what r's requests hold besides its history, background and
+// sources, as size counts a prompt: the first request's own lines, and what a
+// second one adds, groundNote and the map it sends back, at most maxEcho bytes
+// and "…", so at most as many tokens.
+func Fixed(r Request, size func(ai.Prompt) int) int {
+	r.History, r.Background, r.Sources = nil, "", ""
+	return size(Prompt(r).After("", groundNote)) + maxEcho + len("…")
+}
+
+// Prompt is r's first request: the rules, the recent turns, then the
+// repository, the background, the sources, the question and the language line.
+func Prompt(r Request) ai.Prompt {
 	return ai.Prompt{Static: systemPrompt, Previous: r.History, Dynamic: fmt.Sprintf(
 		"Repository: %s at commit %s\n\n%sSources:\n\n%sQuestion: %s\n\nDraw the code map for this question as the JSON object only. Write its prose in %s.",
 		r.Repo, r.Commit, r.Background, r.Sources, r.Question, r.Language)}

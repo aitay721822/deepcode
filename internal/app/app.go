@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"deepcode/internal/app/server/authapi"
 	"deepcode/internal/app/server/repoapi"
 	"deepcode/internal/knowledge/chat"
+	"deepcode/internal/knowledge/chat/harness"
 	chatstore "deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
@@ -75,6 +77,13 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 		return nil, err
 	}
 	chatP, embedP := Providers(cfg)
+	var counter *harness.Tokens
+	if chatP != nil {
+		if counter, err = harness.LoadTokens(cfg.ChatTokenizer); err != nil {
+			return nil, fmt.Errorf("chat tokenizer (DEEPCODE_CHAT_TOKENIZER): %w", err)
+		}
+		log.Printf("chat: the model's tokens are counted by %s", counter.Name) // o200k_base: set chat_tokenizer for a model with its own
+	}
 	mem := cache.New(cfg.CacheMB << 20)
 	vectors := &vectorstore.SQLite{DB: db}
 	graphs := &graph.Graph{Store: &graphstore.Store{DB: db}}
@@ -84,7 +93,7 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	queue := jobs.New(&jobstore.Store{DB: db}, bus, cfg.JobTimeout)
 	cat := &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: queue, Git: gitc, Servers: servers, Cache: mem,
 		MaxRepoKB: int64(cfg.MaxRepoMB) << 10, ChatModel: cfg.ChatModel, EmbedModel: cfg.EmbedModel}
-	conversations := &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: cat, Retriever: retriever, Chat: chatP}
+	conversations := &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: cat, Retriever: retriever, Chat: chatP, Tokens: counter}
 	wikis := &wikistore.Store{DB: db}
 	accounts := &account.Service{Store: &accountstore.Store{DB: db}}
 	roles := &role.Service{Store: &rolestore.Store{DB: db}}
@@ -144,7 +153,8 @@ func (a *App) Run(ctx context.Context) error {
 func Providers(cfg Config) (chatP, embedP *ai.OpenAI) {
 	if cfg.ChatModel != "" {
 		chatP = &ai.OpenAI{BaseURL: cfg.ChatURL, APIKey: cfg.ChatKey, ModelName: cfg.ChatModel, API: cfg.ChatAPI,
-			MaxTokens: cfg.MaxOutputTokens, ReasoningEffort: cfg.ReasoningEffort, Temperature: cfg.Temperature, Timeout: cfg.LLMTimeout, RPM: cfg.LLMRPM}
+			MaxTokens: cfg.MaxOutputTokens, ReasoningEffort: cfg.ReasoningEffort, Temperature: cfg.Temperature, Timeout: cfg.LLMTimeout, RPM: cfg.LLMRPM,
+			Window: cfg.ChatContext, CompactRatio: cfg.CompactRatio}
 	}
 	if cfg.EmbedModel != "" {
 		embedP = &ai.OpenAI{BaseURL: cfg.EmbedURL, APIKey: cfg.EmbedKey, ModelName: cfg.EmbedModel,

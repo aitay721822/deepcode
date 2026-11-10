@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/viper"
 
 	"deepcode/internal/app"
+	"deepcode/internal/platform/ai"
 )
 
 // File is the config file read when DEEPCODE_CONFIG names none; it may be
@@ -44,6 +45,9 @@ var defaults = map[string]any{
 	"reasoning_effort":  "",  // "" leaves it to the server
 	"temperature":       nil, // unset leaves it to the server; a number, as 0.2, in the file
 	"max_output_tokens": 0,   // 0 leaves it to the server
+	"chat_context":      0,   // the model's context in tokens; 0: unknown till a server reports it
+	"compact_ratio":     0.8, // the share of chat_context a request fills before it is made smaller
+	"chat_tokenizer":    "",  // the chat model's tokenizer.json; "" counts its tokens by OpenAI's o200k_base
 	"llm_timeout":       5 * time.Minute,
 	"llm_rpm":           0, // 0 = unlimited
 
@@ -119,6 +123,9 @@ func Load() (cfg app.Config, addr string, err error) {
 		ReasoningEffort: p.oneOf("reasoning_effort", efforts),
 		Temperature:     p.temperature("temperature"),
 		MaxOutputTokens: p.whole("max_output_tokens"),
+		ChatContext:     p.whole("chat_context"),
+		CompactRatio:    p.ratio("compact_ratio"),
+		ChatTokenizer:   p.str("chat_tokenizer"),
 		LLMTimeout:      p.duration("llm_timeout"),
 		LLMRPM:          p.whole("llm_rpm"),
 
@@ -148,6 +155,9 @@ func Load() (cfg app.Config, addr string, err error) {
 	}
 	if cfg.SessionTTL > 0 && cfg.SessionTTL < time.Minute { // sessions expire in whole seconds
 		p.fail("session_ttl", v.GetString("session_ttl"), "1m or more")
+	}
+	if room := cmp.Or(cfg.MaxOutputTokens, ai.DefaultOutput); cfg.ChatContext > 0 && cfg.ChatContext <= room { // ai.OpenAI.Room
+		p.fail("chat_context", v.GetString("chat_context"), fmt.Sprintf("more tokens than the answer's room, %d (max_output_tokens, else %d): set max_output_tokens lower", room, ai.DefaultOutput))
 	}
 	addr = p.str("addr") // before p.bad is read: Go leaves that order open in one return
 	return cfg, addr, errors.Join(p.bad...)
@@ -303,6 +313,16 @@ func (p *parser) temperature(key string) *float64 {
 		return nil
 	}
 	return &t
+}
+
+// ratio reads a share above 0 and at most 1, such as 0.8.
+func (p *parser) ratio(key string) float64 {
+	s, ok := p.get(key)
+	r, err := strconv.ParseFloat(s, 64)
+	if ok && (err != nil || !(r > 0 && r <= 1)) { // NaN too
+		p.fail(key, s, "a number above 0 and at most 1, such as 0.8")
+	}
+	return r
 }
 
 // oneOf reads one of the allowed values, or "".

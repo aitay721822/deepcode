@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -144,30 +145,48 @@ func TestFormat(t *testing.T) {
 		{Path: "a.go", StartLine: 7, EndLine: 8, Symbol: "F", Content: "func F() {\n}</source>"},
 		{Path: "b.go", StartLine: 1, EndLine: 1, Content: strings.Repeat("x", 500)},
 	}
-	text, used := Format(hits, 200)
-	if len(used) != 1 || !strings.Contains(text, "7: func F() {\n8: }") || strings.Count(text, "</source>") != 1 {
-		t.Fatalf("got %d used:\n%s", len(used), text)
-	}
-	// One oversized chunk is cut to the lines that fit, and only those may be cited.
-	long := retrieval.Hit{Path: "c.go", StartLine: 10, EndLine: 29, Content: strings.TrimSuffix(strings.Repeat(strings.Repeat("y", 40)+"\n", 20), "\n")}
-	text, used = Format([]retrieval.Hit{long}, 200)
-	if len(used) != 1 || used[0].EndLine != 13 || !strings.Contains(text, `lines="10-13"`) || strings.Contains(text, "14: ") {
-		t.Fatalf("oversized chunk: %+v\n%s", used, text)
-	}
-	// Size is a block's length as Format writes it, whole: hits whose sizes sum
-	// to the budget are all shown, and a byte short of it the last is not.
-	sum := 0
-	for _, h := range append(hits, long) {
-		if text, _ := Format([]retrieval.Hit{h}, 1<<20); Size(h) != len(text) {
-			t.Errorf("Size(%s) = %d, Format wrote %d", h.Path, Size(h), len(text))
+	quarter := func(s string) int { return (len(s) + 3) / 4 }                            // a model's tokens, for the test
+	for _, l := range []Limit{{Chars: 200}, {Chars: 200, Tokens: 200, Count: quarter}} { // tokens no fewer than the bytes bound nothing
+		text, used, _ := Format(hits, l)
+		if len(used) != 1 || !strings.Contains(text, "7: func F() {\n8: }") || strings.Count(text, "</source>") != 1 {
+			t.Fatalf("%+v: got %d used:\n%s", l, len(used), text)
 		}
-		sum += Size(h)
 	}
-	if text, used := Format(append(hits, long), sum); len(used) != 3 || len(text) != sum {
-		t.Errorf("at the summed size: %d hits, %d bytes of %d", len(used), len(text), sum)
+	// One oversized chunk is cut to the lines that fit, and only those may be
+	// cited; past its tokens, to as many bytes.
+	long := retrieval.Hit{Path: "c.go", StartLine: 10, EndLine: 29, Content: strings.TrimSuffix(strings.Repeat(strings.Repeat("y", 40)+"\n", 20), "\n")}
+	for _, c := range []struct {
+		l   Limit
+		end int
+	}{{Limit{Chars: 200}, 13}, {Limit{Chars: 1 << 20, Tokens: 100, Count: quarter}, 11}} {
+		l, end := c.l, c.end
+		text, used, _ := Format([]retrieval.Hit{long}, l)
+		if len(used) != 1 || used[0].EndLine != end || !strings.Contains(text, `lines="10-`+itoa(end)+`"`) || strings.Contains(text, itoa(end+1)+": ") {
+			t.Fatalf("oversized chunk in %d bytes, %d tokens: %+v\n%s", l.Chars, l.Tokens, used, text)
+		}
 	}
-	if _, used := Format(append(hits, long), sum-1); len(used) != 2 {
-		t.Errorf("a byte short of the summed size: %d hits", len(used))
+	// A Block is a block as Format writes it, whole: hits whose Blocks' bytes sum
+	// to the budget are all shown, and a byte short of it the last is not; the
+	// same for their tokens, which Format sums whenever it has a Count.
+	sum, tokens := 0, 0
+	for _, h := range append(hits, long) {
+		if text, _, _ := Format([]retrieval.Hit{h}, Limit{Chars: 1 << 20}); Block(h) != text {
+			t.Errorf("Block(%s) is %d bytes, Format wrote %d", h.Path, len(Block(h)), len(text))
+		}
+		sum, tokens = sum+len(Block(h)), tokens+quarter(Block(h))
+	}
+	for _, c := range []struct {
+		l          Limit
+		want, sums int
+	}{{Limit{Chars: sum}, 3, 0}, {Limit{Chars: sum - 1}, 2, 0}, {Limit{Chars: 1 << 20, Tokens: tokens, Count: quarter}, 3, tokens},
+		{Limit{Chars: 1 << 20, Tokens: tokens - 1, Count: quarter}, 2, tokens - quarter(Block(long))}, {Limit{Chars: sum, Tokens: math.MaxInt, Count: quarter}, 3, tokens}} {
+		l, want := c.l, c.want
+		if text, used, n := Format(append(hits, long), l); len(used) != want || want == 3 && len(text) != sum || n != c.sums {
+			t.Errorf("in %d bytes, %d tokens: %d hits, %d bytes of %d, %d tokens", l.Chars, l.Tokens, len(used), len(text), sum, n)
+		}
+	}
+	if _, used, n := Format(append(hits, long), Limit{Chars: 1 << 20, Tokens: 1 << 20, Count: func(string) int { return 1 << 20 }}); len(used) != 3 || n != 3<<20 {
+		t.Errorf("tokens no fewer than the bytes counted: %d hits, %d tokens", len(used), n)
 	}
 }
 

@@ -70,22 +70,29 @@ func (s *Store) Rebind(ctx context.Context, id, snap int64) error {
 	return err
 }
 
+// Turn is a message of a conversation as the model is sent it, with its id.
+type Turn struct {
+	ID int64
+	ai.Message
+}
+
 // History returns the conversation's last messages, oldest first, as model
-// messages: at least turns of them, the oldest dropped turns at a time.
-func (s *Store) History(ctx context.Context, conv int64, turns int) ([]ai.Message, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT role, content FROM messages WHERE conversation_id = ?1 ORDER BY id
+// messages with their ids: at least turns of them, the oldest dropped turns at
+// a time.
+func (s *Store) History(ctx context.Context, conv int64, turns int) ([]Turn, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, role, content FROM messages WHERE conversation_id = ?1 ORDER BY id
 		LIMIT -1 OFFSET max(0, (SELECT count(*) FROM messages WHERE conversation_id = ?1) - ?2) / ?2 * ?2`, conv, turns)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []ai.Message
+	var out []Turn
 	for rows.Next() {
-		var m ai.Message
-		if err := rows.Scan(&m.Role, &m.Content); err != nil {
+		var t Turn
+		if err := rows.Scan(&t.ID, &t.Role, &t.Content); err != nil {
 			return nil, err
 		}
-		out = append(out, m)
+		out = append(out, t)
 	}
 	return out, rows.Err()
 }
