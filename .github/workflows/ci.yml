@@ -52,11 +52,14 @@ jobs:
             while read -r name url; do
               [ -d ~/eval-git/"$name".git ] || git clone --bare --quiet "$url" ~/eval-git/"$name".git
             done
-      - name: Eval (lexical; a skipped corpus fails)
+      - name: Eval (lexical; every corpus must report its score)
         run: |
           set -o pipefail
           DEEPCODE_EVAL_GIT=~/eval-git go test -count=1 -timeout 10m -v ./test/eval/ | tee eval.log
           if grep -E "set DEEPCODE_EVAL_GIT|is not a \.git directory|not in a git checkout" eval.log; then exit 1; fi
+          want=$(grep -c '{Name: "' test/eval/cases.go); got=$(grep -c 'recall@' eval.log)
+          grep 'recall@' eval.log | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$got" -ne "$want" ]; then echo "$got of $want corpora reported a score"; exit 1; fi
 
   build: # what is released: deepcode.exe for Windows amd64 only
     if: github.event_name == 'push'
