@@ -1,6 +1,10 @@
 package app
 
-import "time"
+import (
+	"time"
+
+	"deepcode/internal/platform/ai"
+)
 
 // Config is everything the application needs; cmd/deepcode/config fills it
 // from the config file and DEEPCODE_* variables, and flags override that.
@@ -42,3 +46,7 @@ type Config struct {
 	// X-Forwarded-For names the client; none: the peer is the client.
 	TrustedProxies []string
 }
+
+// Room is the tokens the chat model's context keeps for an answer, as the
+// chat provider Providers makes keeps them (ai.OpenAI.Room).
+func (c Config) Room() int { return (&ai.OpenAI{MaxTokens: c.MaxOutputTokens}).Room() }

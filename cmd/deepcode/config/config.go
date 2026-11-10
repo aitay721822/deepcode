@@ -21,7 +21,6 @@ import (
 	"github.com/spf13/viper"
 
 	"deepcode/internal/app"
-	"deepcode/internal/platform/ai"
 )
 
 // File is the config file read when DEEPCODE_CONFIG names none; it may be
@@ -156,8 +155,8 @@ func Load() (cfg app.Config, addr string, err error) {
 	if cfg.SessionTTL > 0 && cfg.SessionTTL < time.Minute { // sessions expire in whole seconds
 		p.fail("session_ttl", v.GetString("session_ttl"), "1m or more")
 	}
-	if room := cmp.Or(cfg.MaxOutputTokens, ai.DefaultOutput); cfg.ChatContext > 0 && cfg.ChatContext <= room { // ai.OpenAI.Room
-		p.fail("chat_context", v.GetString("chat_context"), fmt.Sprintf("more tokens than the answer's room, %d (max_output_tokens, else %d): set max_output_tokens lower", room, ai.DefaultOutput))
+	if room := cfg.Room(); cfg.ChatContext > 0 && cfg.ChatContext <= room {
+		p.fail("chat_context", v.GetString("chat_context"), fmt.Sprintf("more tokens than the answer's room, %d (max_output_tokens, else its default): set max_output_tokens lower", room))
 	}
 	addr = p.str("addr") // before p.bad is read: Go leaves that order open in one return
 	return cfg, addr, errors.Join(p.bad...)
