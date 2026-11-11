@@ -2,8 +2,12 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
+	"slices"
+	"strings"
 
 	"deepcode/internal/platform/storage"
 )
@@ -134,25 +138,83 @@ func (s *Store) Dependencies(ctx context.Context, snap int64, paths []string, li
 }
 
 // Declarations returns the declarations of the snapshot's files in paths,
-// each file's in an order that moving them within the file keeps.
+// each file's in an order that moving them within the file keeps: a function
+// by its signature, a type by the text it spans, so a field or a method that
+// changes reaches it; a class spans its methods' bodies too.
 func (s *Store) Declarations(ctx context.Context, snap int64, paths map[string]bool) (map[string][]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT path, kind || ' ' || qualified_name || ' ' || signature AS d FROM symbols
-		WHERE snapshot_id = ? ORDER BY path, d`, snap)
+	if len(paths) == 0 {
+		return map[string][]string{}, nil
+	}
+	args := []any{snap}
+	for p := range paths {
+		args = append(args, p)
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT f.path, c.content FROM source_files f JOIN file_contents c ON c.hash = f.content_hash
+		WHERE f.snapshot_id = ? AND f.path IN (`+storage.Placeholders(len(paths))+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	texts := map[string]string{}
+	for rows.Next() {
+		var p, text string
+		if err := rows.Scan(&p, &text); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		texts[p] = text
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	rows, err = s.DB.QueryContext(ctx, `SELECT path, kind, qualified_name, signature, start_line, end_line FROM symbols
+		WHERE snapshot_id = ? ORDER BY path`, snap)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	parts := map[string][]string{}
 	for rows.Next() {
-		var p, d string
-		if err := rows.Scan(&p, &d); err != nil {
+		var p, kind, qual, sig string
+		var start, end int
+		if err := rows.Scan(&p, &kind, &qual, &sig, &start, &end); err != nil {
 			return nil, err
 		}
 		if paths[p] {
-			parts[p] = append(parts[p], d)
+			parts[p] = append(parts[p], declaration(kind, qual, sig, texts[p], start, end))
 		}
 	}
+	for _, ds := range parts {
+		slices.Sort(ds)
+	}
 	return parts, rows.Err()
+}
+
+// types are the declaration kinds a change of body is a change of the
+// declaration: a type's fields, methods or variants are what its users use.
+var types = map[string]bool{"annotation": true, "class": true, "delegate": true, "enum": true, "interface": true,
+	"record": true, "struct": true, "trait": true, "type": true, "union": true}
+
+// declaration is a symbol's fingerprint: a type's text from its first to its
+// last line, the line numbers left out so moving it keeps it, or a function's
+// signature; the signature when the text is gone.
+func declaration(kind, qual, sig, content string, start, end int) string {
+	if types[kind] && content != "" {
+		if body, ok := declarationText(content, start, end); ok {
+			sum := sha256.Sum256([]byte(body))
+			return kind + " " + qual + " sha256:" + hex.EncodeToString(sum[:])
+		}
+	}
+	return kind + " " + qual + " " + sig
+}
+
+// declarationText is content's lines start to end, both counted from 1 and
+// included; false when the range is past them.
+func declarationText(content string, start, end int) (string, bool) {
+	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	if start < 1 || start > len(lines) || end < start {
+		return "", false
+	}
+	return strings.Join(lines[start-1:min(end, len(lines))], "\n"), true
 }
 
 // scanPaths reads the paths that a query of one text column returned.

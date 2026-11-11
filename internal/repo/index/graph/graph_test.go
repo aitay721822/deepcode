@@ -234,6 +234,56 @@ func TestImpact(t *testing.T) {
 	}
 }
 
+// TestImpactTypeBody (item 4): a type's whole declaration is compared, so a
+// field, a method or a variant that changes reaches its importers, while the
+// same declaration moved down its file or a function body changed reaches
+// none: a function keeps its signature.
+func TestImpactTypeBody(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	g := &Graph{Store: &store.Store{DB: db}}
+	run(t, db, `INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r')`)
+	run(t, db, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES
+		(1, 1, 'a', 'ready'), (2, 1, 'b', 'ready'), (3, 1, 'c', 'ready'), (4, 1, 'd', 'ready'),
+		(5, 1, 'e', 'ready'), (6, 1, 'f', 'ready'), (7, 1, 'g', 'ready'), (8, 1, 'h', 'ready')`)
+	cases := []struct {
+		base, next    int64
+		before, after string
+		name, kind    string
+		start, end    [2]int
+		want          bool
+	}{
+		{1, 2, "type T struct {\n\tA int\n}\n", "type T struct {\n\tB string\n}\n", "T", "struct", [2]int{1, 3}, [2]int{1, 3}, true},
+		{3, 4, "type I interface {\n\tA()\n}\n", "type I interface {\n\tB()\n}\n", "I", "interface", [2]int{1, 3}, [2]int{1, 3}, true},
+		{5, 6, "type T struct {\n\tA int\n}\n", "\n\ntype T struct {\n\tA int\n}\n", "T", "struct", [2]int{1, 3}, [2]int{3, 5}, false},
+		{7, 8, "func F() {\n\tprintln(1)\n}\n", "func F() {\n\tprintln(2)\n}\n", "F", "function", [2]int{1, 3}, [2]int{1, 3}, false},
+	}
+	for _, c := range cases {
+		for _, s := range []struct {
+			snap  int64
+			text  string
+			lines [2]int
+		}{{c.base, c.before, c.start}, {c.next, c.after, c.end}} {
+			addFile(t, db, s.snap, "pkg/t.go", "go", s.text)
+			addFile(t, db, s.snap, "main.go", "go", "package main\n\nimport \"m/pkg\"\n")
+			run(t, db, `INSERT INTO file_edges(snapshot_id, src, dst) VALUES (?, 'main.go', 'pkg/t.go')`, s.snap)
+			run(t, db, `INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line, signature)
+				VALUES (?, 'pkg/t.go', ?, ?, ?, ?, ?, ?)`, s.snap, c.name, c.name, c.kind, s.lines[0], s.lines[1],
+				strings.Split(strings.TrimLeft(s.text, "\n"), "\n")[0])
+		}
+	}
+	for _, c := range cases {
+		got, err := g.Impact(ctx, c.base, c.next, map[string]bool{"pkg/t.go": true})
+		want := map[string]bool{}
+		if c.want {
+			want["main.go"] = true
+		}
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %v (%v), want %v", c.name, got, err, want)
+		}
+	}
+}
+
 // TestDiagram: the directories are cut as deep as keeps them at most
 // maxNodes; past that the busiest arrows that fit are drawn, at most
 // maxEdges, and a label cannot end its quotes.

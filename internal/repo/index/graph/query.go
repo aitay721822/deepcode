@@ -34,10 +34,9 @@ func (g *Graph) Dependencies(ctx context.Context, snap int64, paths []string, li
 // or changed, the file's removal included), changed importers too, as an edit
 // elsewhere in one leaves its call of the lost declaration as it was. A change
 // inside function bodies reaches no importer, and neither does a new
-// declaration: what imported the file before does not use it.
-// ponytail: a declaration is compared by its first line, so
-// a struct's new field or a Go interface's new method goes unseen; compare
-// the chunks of declarations if that bites.
+// declaration: what imported the file before does not use it. A type's whole
+// declaration is compared, so a field, method or variant that changes reaches
+// it, and a class's range holds its methods' bodies; a function's signature is.
 func (g *Graph) Impact(ctx context.Context, base, snap int64, changed map[string]bool) (map[string]bool, error) {
 	before, err := g.Store.Declarations(ctx, base, changed)
 	if err != nil {
