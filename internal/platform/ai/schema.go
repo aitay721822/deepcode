@@ -199,12 +199,29 @@ func (e *DecodeError) Error() string { return fmt.Sprintf("not the JSON of %s (%
 
 func (e *DecodeError) Unwrap() error { return e.Err }
 
-// StreamJSON streams c's answer to p in f's JSON, relaying its text as it
-// comes, and reads it into a T (Decode); reply is the answer as written. An
+// indented closes the instructions of every request for JSON: a server that
+// does not constrain the model's decoding (Strata) gets JSON written on one
+// line, which the model ended a closer short in 8 of 24 replies to a plan's
+// outline, three objects deep; written a key a line, in none of 40.
+const indented = "Write the JSON indented, each key on a line of its own."
+
+// JSON is p as StreamJSON sends it, its instructions ending with indented:
+// what a request for JSON is sized by.
+func (p Prompt) JSON() Prompt {
+	if p.Static == "" {
+		p.Static = indented
+	} else {
+		p.Static += "\n" + indented
+	}
+	return p
+}
+
+// StreamJSON streams c's answer to p.JSON() in f's JSON, relaying its text as
+// it comes, and reads it into a T (Decode); reply is the answer as written. An
 // answer that is not f's JSON is an error wrapping ErrSchema; one cut at the
 // output budget says so instead.
 func StreamJSON[T any](ctx context.Context, c *OpenAI, p Prompt, f Format[T], onDelta func(string)) (v T, reply string, err error) {
-	reply, spent, err := c.stream(ctx, p.messages(), &f.schema, onDelta)
+	reply, spent, err := c.stream(ctx, p.JSON().messages(), &f.schema, onDelta)
 	if err != nil {
 		return v, reply, err
 	}

@@ -79,6 +79,20 @@ func TestThreshold(t *testing.T) {
 	}
 }
 
+// TestSummaryRoom: a summary's request is sized as it is sent (ai.Prompt.JSON):
+// a context that leaves its one message 60 tokens asks the model, a token less
+// does not.
+func TestSummaryRoom(t *testing.T) {
+	need := o200k.Count(ai.Prompt{Static: summaryPrompt}.JSON().Static) + 300 + 60
+	for room, asked := range map[int]bool{need: true, need - 1: false} {
+		m, sent := model(t, `400 {"error":{"message":"no"}}`)
+		m.Window, m.CompactRatio = room+m.MaxTokens, 1
+		if _, err := New(m, o200k).summarize(context.Background(), "", []ai.Message{{Role: "user", Content: "q"}}); err == nil || len(sent()) > 0 != asked {
+			t.Errorf("a room of %d: %v, %d asked", room, err, len(sent()))
+		}
+	}
+}
+
 // TestShare: at 524,288 tokens every part gets the fixed share it wants; at
 // 16,000 the background goes first, the conversation keeps summaryRoom for its
 // summary, the evidence takes the rest, never less than minEvidence; with no

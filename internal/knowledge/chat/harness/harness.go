@@ -361,7 +361,8 @@ const summaryPrompt = `You sum up the earlier part of a conversation about a rep
 // with messages, each cut to fit the threshold. The names come first, so that
 // a summary cut to its share or to maxSummary loses topics before them.
 func (f *Fit) summarize(ctx context.Context, prior string, messages []ai.Message) (string, error) {
-	room := f.Room() - f.tokens.Count(summaryPrompt) - f.tokens.Count(prior) - 300 // the request's own lines, and the schema's
+	p := ai.Prompt{Static: summaryPrompt}
+	room := f.Room() - f.tokens.Count(p.JSON().Static) - f.tokens.Count(prior) - 300 // the request's own lines, and the schema's
 	each := room / max(len(messages), 1)
 	if each < 60 {
 		return "", errors.New("the model's context has no room to sum up the conversation")
@@ -374,7 +375,8 @@ func (f *Fit) summarize(ctx context.Context, prior string, messages []ai.Message
 	for _, m := range messages {
 		fmt.Fprintf(&b, "\n%s: %s\n", m.Role, f.cut(m.Content, each))
 	}
-	s, _, err := ai.StreamJSON(ctx, f.model, ai.Prompt{Static: summaryPrompt, Dynamic: b.String()}, summedFormat, nil)
+	p.Dynamic = b.String()
+	s, _, err := ai.StreamJSON(ctx, f.model, p, summedFormat, nil)
 	if err != nil {
 		return "", err
 	}

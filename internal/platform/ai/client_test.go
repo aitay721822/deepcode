@@ -114,10 +114,10 @@ func TestStreamEnds(t *testing.T) {
 	}
 }
 
-// TestFormat: StreamJSON asks for the schema made from a Go type, strict, on each API, and reads the answer into
-// it; Generate asks for none. An answer the server sent that is not that JSON fails with ErrSchema, naming what
-// the endpoint must support; a request the server refuses fails with its words, as any other, not ErrSchema;
-// JSON cut at the output budget says so instead.
+// TestFormat: StreamJSON asks for the schema made from a Go type, strict, on each API, its instructions ending
+// with indented, and reads the answer into it; Generate asks for neither. An answer sent that is not that JSON
+// fails with ErrSchema, naming what the endpoint must support; a request the server refuses fails with its
+// words, as any other, not ErrSchema; JSON cut at the output budget says so instead.
 func TestFormat(t *testing.T) {
 	type page struct {
 		Title string   `json:"title"`
@@ -156,10 +156,10 @@ func TestFormat(t *testing.T) {
 	} {
 		c := &OpenAI{BaseURL: srv.URL, ModelName: "m", API: api}
 		mode.Store("")
-		if v, _, err := StreamJSON(context.Background(), c, Prompt{}, f, nil); err != nil || len(v.Pages) != 1 || v.Pages[0].Files[0] != "a.go" || !strings.Contains(body.Load().(string), want) {
+		if v, _, err := StreamJSON(context.Background(), c, Prompt{Static: "S"}, f, nil); err != nil || len(v.Pages) != 1 || v.Pages[0].Files[0] != "a.go" || !strings.Contains(body.Load().(string), want) || !strings.Contains(body.Load().(string), `"S\n`+indented+`"`) {
 			t.Errorf("%s: %+v %v\n%s", api, v, err, body.Load())
 		}
-		if _, err := c.Generate(context.Background(), Prompt{}); err != nil || strings.Contains(body.Load().(string), "schema") {
+		if _, err := c.Generate(context.Background(), Prompt{}); err != nil || strings.Contains(body.Load().(string), "schema") || strings.Contains(body.Load().(string), indented) {
 			t.Errorf("%s, no format: %v\n%s", api, err, body.Load())
 		}
 		for m, says := range map[string]string{"prose": "m: the answer is not the JSON of plan", "shape": "m: the answer is not the JSON of plan", "refused": "400 Bad Request: {\"error\":{\"message\":\"response_format is not supported\"}}",
@@ -167,7 +167,7 @@ func TestFormat(t *testing.T) {
 			mode.Store(m)
 			_, _, err := StreamJSON(context.Background(), c, Prompt{}, f, nil)
 			schema := m == "prose" || m == "shape" // an answer sent (200) that is not the schema's JSON
-			if err == nil || !strings.Contains(err.Error(), says) || errors.Is(err, ErrSchema) != schema || schema && !strings.HasSuffix(err.Error(), ErrSchema.Error()) {
+			if err == nil || !strings.Contains(err.Error(), says) || errors.Is(err, ErrSchema) != schema || schema && !strings.HasSuffix(err.Error(), ErrSchema.Error()) || !strings.Contains(body.Load().(string), `"`+indented+`"`) {
 				t.Errorf("%s, %s: %v", api, m, err)
 			}
 		}
