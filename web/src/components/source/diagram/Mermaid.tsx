@@ -1,5 +1,8 @@
+import { Maximize2Icon, RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { highlight, splitHidden } from '../../../lib/style/highlight'
+import { Button } from '../../ui/controls/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../ui/overlay/dialog'
 import '../source.css'
 
 type MermaidApi = typeof import('mermaid').default
@@ -99,6 +102,10 @@ export function Mermaid({
   const [svg, setSvg] = useState('')
   const [failed, setFailed] = useState(false)
   const [theme, setTheme] = useState(() => document.documentElement.className)
+  const [open, setOpen] = useState(false)
+  const [view, setView] = useState({ s: 1, x: 0, y: 0 })
+  const viewport = useRef<HTMLDivElement>(null)
+  const drag = useRef<{ id: number; x: number; y: number } | null>(null)
   // The theme switch changes <html>'s class: the diagram is drawn again in the new colours.
   useEffect(() => {
     const watch = new MutationObserver(() => setTheme(document.documentElement.className))
@@ -118,7 +125,12 @@ export function Mermaid({
               setFailed(false)
             }
           },
-          () => live && setFailed(true),
+          () => {
+            if (live) {
+              setFailed(true)
+              setOpen(false)
+            }
+          },
         ),
       250,
     )
@@ -140,7 +152,107 @@ export function Mermaid({
       }
       node.setAttribute('aria-label', parts.join(' ').replace(/\s+/g, ' ').trim())
     }
-  }, [svg, pressable])
+  }, [svg, pressable, open])
+  // A wheel listener with preventDefault must not be passive; React's onWheel is.
+  useEffect(() => {
+    const el = viewport.current
+    if (!open || !el) return
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const r = el.getBoundingClientRect()
+      const px = e.clientX - r.left
+      const py = e.clientY - r.top
+      setView((v) => {
+        const s = Math.min(6, Math.max(0.3, v.s * (e.deltaY < 0 ? 1.1 : 0.9)))
+        const k = s / v.s
+        return { s, x: px - (px - v.x) * k, y: py - (py - v.y) * k }
+      })
+    }
+    el.addEventListener('wheel', wheel, { passive: false })
+    return () => el.removeEventListener('wheel', wheel)
+  }, [open])
+  const zoom = (k: number) => setView((v) => ({ ...v, s: Math.min(6, Math.max(0.3, v.s * k)) }))
+  const reset = () => setView({ s: 1, x: 0, y: 0 })
+  // The inline SVG goes while the dialog shows: two copies would share Mermaid's element ids.
+  const expand = (
+    <div className="mb-2 flex justify-end print:hidden">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => {
+          reset()
+          setOpen(true)
+        }}
+      >
+        <Maximize2Icon /> 全螢幕
+      </Button>
+    </div>
+  )
+  const full = (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        setOpen(v)
+        if (v) reset()
+      }}
+    >
+      <DialogContent
+        aria-describedby={undefined}
+        className="h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none print:hidden sm:max-w-none [&>div]:h-full [&>div]:grid-rows-[auto_minmax(0,1fr)] [&>div]:gap-0 [&>div]:overflow-hidden [&>div]:p-0"
+      >
+        <DialogHeader className="flex-row items-center justify-between gap-2 border-b px-4 py-3 pr-12 text-left">
+          <DialogTitle className="min-w-0 truncate font-sans text-base">{label}</DialogTitle>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" aria-label="縮小" onClick={() => zoom(0.8)}>
+              <ZoomOutIcon />
+            </Button>
+            <Button variant="ghost" size="sm" aria-label="重設" onClick={reset}>
+              <RotateCcwIcon />
+            </Button>
+            <Button variant="ghost" size="sm" aria-label="放大" onClick={() => zoom(1.25)}>
+              <ZoomInIcon />
+            </Button>
+          </div>
+        </DialogHeader>
+        <div
+          ref={viewport}
+          role="img"
+          aria-label={label}
+          className="relative min-h-0 flex-1 cursor-grab touch-none overflow-hidden select-none active:cursor-grabbing"
+          onPointerDown={(e) => {
+            if (e.button !== 0) return
+            e.preventDefault()
+            e.currentTarget.setPointerCapture(e.pointerId)
+            drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY }
+          }}
+          onPointerMove={(e) => {
+            const d = drag.current
+            if (!d || d.id !== e.pointerId) return
+            const dx = e.clientX - d.x
+            const dy = e.clientY - d.y
+            drag.current = { ...d, x: e.clientX, y: e.clientY }
+            setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }))
+          }}
+          onPointerUp={() => {
+            drag.current = null
+          }}
+          onPointerCancel={() => {
+            drag.current = null
+          }}
+          onLostPointerCapture={() => {
+            drag.current = null
+          }}
+        >
+          <div
+            className="w-full origin-top-left [&_svg]:!h-auto [&_svg]:!max-w-none"
+            style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }}
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
   if (hides || failed) {
     return (
       <pre>
@@ -156,24 +268,38 @@ export function Mermaid({
       if (id) onNode(id)
     }
     return (
-      // biome-ignore lint/a11y/useSemanticElements: a group of buttons (the diagram's nodes), not of a form's fields
-      <div
-        ref={box}
-        role="group"
-        aria-label={label}
-        className="diagram [&_g.node]:cursor-pointer [&_g.node:focus-visible]:outline-2 [&_g.node:focus-visible]:outline-ring"
-        onClick={(e) => press(e.target)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            press(e.target)
-          }
-        }}
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
+      <>
+        {expand}
+        {!open && (
+          // biome-ignore lint/a11y/useSemanticElements: a group of buttons (the diagram's nodes), not of a form's fields
+          <div
+            ref={box}
+            role="group"
+            aria-label={label}
+            className="diagram [&_g.node]:cursor-pointer [&_g.node:focus-visible]:outline-2 [&_g.node:focus-visible]:outline-ring"
+            onClick={(e) => press(e.target)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                press(e.target)
+              }
+            }}
+            // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+        )}
+        {full}
+      </>
     )
   }
-  // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
-  return <div role="img" aria-label={label} className="diagram" dangerouslySetInnerHTML={{ __html: svg }} />
+  return (
+    <>
+      {expand}
+      {!open && (
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
+        <div role="img" aria-label={label} className="diagram" dangerouslySetInnerHTML={{ __html: svg }} />
+      )}
+      {full}
+    </>
+  )
 }
