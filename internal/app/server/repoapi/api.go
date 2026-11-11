@@ -50,6 +50,7 @@ func (a *API) Mount(r gin.IRouter) {
 	r.GET("/repos/:id/search", read, a.search)
 
 	r.GET("/repos/:id/wiki", read, a.wiki)
+	r.GET("/repos/:id/wiki/export", read, a.exportWiki)
 	r.POST("/chat/stream", a.chatStream)
 	r.GET("/conversations/:id", a.conversation)
 }

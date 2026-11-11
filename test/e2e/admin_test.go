@@ -1,10 +1,13 @@
 package e2e
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -210,5 +213,50 @@ func checkDownloadLimit(t *testing.T, admin *client) {
 	})
 	if j := big.Job; j.Status != jobs.StatusFailed || j.Attempts != 1 || !strings.Contains(j.Error, "size limit of 1 MB (DEEPCODE_MAX_REPO_MB)") {
 		t.Fatalf("acme/big: %+v", j)
+	}
+}
+
+// checkWikiExport: the shown wiki downloads as a zip named for the repository
+// and commit, holding a README index and one file a page, linked at the commit.
+func checkWikiExport(t *testing.T, admin *client, repoID, sha string) {
+	t.Helper()
+	resp := admin.do(http.MethodGet, "/api/repos/"+repoID+"/wiki/export", "")
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `attachment; filename="acme-demo-wiki-` + sha[:7] + `.zip"`; resp.StatusCode != http.StatusOK ||
+		resp.Header.Get("Content-Type") != "application/zip" || resp.Header.Get("Content-Disposition") != want {
+		t.Fatalf("export: %d %q %q", resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Content-Disposition"))
+	}
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{}
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[f.Name] = string(b)
+	}
+	readme, page := files["README.md"], files["1-overview.md"]
+	link := "https://github.com/acme/demo/blob/" + sha + "/"
+	if len(files) != 5 || readme == "" || page == "" || !strings.Contains(readme, "Commit: `"+sha+"`") ||
+		!strings.Contains(readme, "- [1 Overview](1-overview.md)") || !strings.Contains(page, link) || !strings.Contains(page, "## Sources") {
+		t.Fatalf("export files %v: README %q, page %q", len(files), readme, page)
+	}
+	if resp2 := admin.do(http.MethodGet, "/api/repos/nope/wiki/export", ""); resp2.StatusCode != http.StatusNotFound {
+		resp2.Body.Close()
+		t.Fatalf("unknown repository: %d", resp2.StatusCode)
+	} else {
+		resp2.Body.Close()
 	}
 }

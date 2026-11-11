@@ -1,5 +1,9 @@
 import { Link } from '@tanstack/react-router'
+import { DownloadIcon } from 'lucide-react'
 import { motion } from 'motion/react'
+import { useState } from 'react'
+import { exportWiki } from '../../../api/repo/wiki'
+import { Button } from '../../../components/ui/controls/button'
 import { Spinner } from '../../../components/ui/feedback/spinner'
 import { cn } from '../../../lib/style/cn'
 import { markerRadius, slide } from '../../../lib/style/motion'
@@ -40,6 +44,25 @@ export function WikiNav({
   writing: boolean
 }) {
   const numbered = numbers(pages)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const ready = pages.some((p) => p.content)
+  async function save() {
+    setBusy(true)
+    setError('')
+    try {
+      const url = URL.createObjectURL(await exportWiki(repoId))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `wiki-${repoId}.zip`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 0)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <nav className="isolate flex flex-col gap-0.5" aria-label="Wiki 頁面">
       {pages.map((p, i) => {
@@ -82,6 +105,14 @@ export function WikiNav({
           </Link>
         )
       })}
+      <Button variant="outline" size="sm" className="mt-2 w-fit" busy={busy} disabled={!ready} onClick={save}>
+        {busy ? <Spinner /> : <DownloadIcon />} 匯出 Markdown
+      </Button>
+      {error && (
+        <p className="mt-1 text-[13px] [overflow-wrap:anywhere] text-destructive" role="alert">
+          {error}
+        </p>
+      )}
     </nav>
   )
 }

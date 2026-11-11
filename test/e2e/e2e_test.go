@@ -193,6 +193,7 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("wiki: %+v", wk)
 	}
 	checkJobConsole(t, admin, repo.ID)
+	checkWikiExport(t, admin, repo.ID, sha1)
 
 	// Chat: streamed answer; the grouped citation keeps the real reference
 	// and drops the made-up one.
