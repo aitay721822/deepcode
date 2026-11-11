@@ -1,19 +1,19 @@
 // Package wiki generates a DeepWiki-style set of pages for a snapshot: the
-// model plans them, in sections of the code that imports itself most, sized
-// by the repository (or .devin/wiki.json lists them), then writes each page
-// from retrieved evidence with checked citations, Parallel at a time.
-// A new snapshot carries over the pages of the previous wiki that its change
-// does not touch.
+// code's structure shapes it (its units and their sections, outline/place),
+// the model titles and plans the pages, each request held to its contract,
+// then writes each page from retrieved evidence with checked citations,
+// Parallel at a time. A new snapshot carries over the pages of the previous
+// wiki that its change does not touch.
 package wiki
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log"
 	"maps"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -22,7 +22,7 @@ import (
 	"deepcode/internal/knowledge/wiki/change"
 	"deepcode/internal/knowledge/wiki/fanout"
 	"deepcode/internal/knowledge/wiki/outline"
-	"deepcode/internal/knowledge/wiki/steering"
+	"deepcode/internal/knowledge/wiki/outline/place"
 	"deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/jobs"
@@ -39,7 +39,7 @@ type Generator struct {
 	Chat      *ai.OpenAI
 	Language  string
 	Parallel  int // pages planned or written at a time; 0 is one
-	MaxPages  int // the most pages a wiki gets; 0 is defaultMaxPages
+	MaxPages  int // the cost ceiling: the most pages a wiki gets, never a target; 0 is defaultMaxPages
 	// Planned, when set, is told how each plan the model makes went. The bench
 	// sets it.
 	Planned func(Planning)
@@ -47,7 +47,6 @@ type Generator struct {
 
 const (
 	defaultMaxPages = 64 // enough for DeepWiki's page counts on the bench's repositories
-	flatPages       = 8  // the most pages of a wiki too small for sections
 	pageHits        = 12
 	evidenceChars   = 48000 // a page's sources in all
 	sectionChars    = 24000 // of those, the ones a section's pages share
@@ -103,11 +102,7 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 		}
 	}
 	repo := r.Owner + "/" + r.Name
-	steer, err := g.steer(ctx, catalog.Ref{ID: snap, CommitSHA: sha}, progress)
-	if err != nil {
-		return err
-	}
-	pages, err := g.plannedPages(ctx, repoID, snap, src, repo, steer, progress)
+	pages, err := g.plannedPages(ctx, repoID, snap, src, repo, progress)
 	if err != nil {
 		return err
 	}
@@ -130,7 +125,7 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 			p := todo[i]
 			log := progress.With("[" + p.Title + "] ") // pages written at a time interleave their lines
 			log.Logf("== page %d of %d", p.Position+1, len(pages))
-			content, cites, err := g.write(ctx, snap, repo, src, p, pages, steer.Notes, log)
+			content, cites, err := g.write(ctx, snap, repo, src, p, pages, log)
 			if err != nil {
 				return err
 			}
@@ -159,73 +154,83 @@ func (g *Generator) setStatus(ctx context.Context, snap int64, s string) {
 	}
 }
 
-// store saves the snapshot's pages, in order, each keyed by its slug, and
-// the language they are written in, in one transaction: a resumed job must
-// not take half a plan for the whole.
-func (g *Generator) store(ctx context.Context, snap int64, pages []newPage) error {
+// store saves the snapshot's pages, in order, each keyed by its slug, the
+// language they are written in and the wiki's labels, in one transaction: a
+// resumed job must not take half a plan for the whole.
+func (g *Generator) store(ctx context.Context, snap int64, labels store.Labels, pages []newPage) error {
 	for i := range pages {
 		pages[i].Slug = slug(i, pages[i].Title)
 	}
-	return g.Store.Add(ctx, snap, g.Language, pages)
+	return g.Store.Add(ctx, snap, g.Language, labels, pages)
 }
 
 // carry starts the snapshot's wiki from the repository's newest finished wiki
-// in the same language: the same pages, each keeping its text unless the
-// change may touch it, so only the touched pages are written again; a kept
-// page's citations follow their lines, and its links go to the new commit. It
-// reports false, storing nothing, when there is no such wiki, when
-// .devin/wiki.json changed (it may list other pages), when more than half of
-// the files changed, when the change adds a directory, two levels deep as
-// planning sees them, that code outside it imports (a new subsystem, which
-// only a new plan gives a page), or, unless .devin/wiki.json lists the pages,
-// when the wiki is flat and the repository now calls for sections, or the
-// other way round.
-func (g *Generator) carry(ctx context.Context, repoID, snap int64, src source, listed bool, progress jobs.Progress) (bool, error) {
+// in the same language: the same pages, their files following the change
+// (place.Carry: a renamed file keeps its place, a deleted one leaves, a new
+// one joins a page of its unit), each keeping its text unless its files
+// changed or the change may touch it, so only those pages are written again;
+// a kept page's citations follow their lines, and its links go to the new
+// commit. It reports false, storing nothing, when there is no such wiki, when
+// that wiki was planned before pages held their files, when more than half
+// of the files changed, or when a section's worth of code came or went
+// (place.Replan).
+func (g *Generator) carry(ctx context.Context, repoID, snap int64, src source, progress jobs.Progress) (bool, error) {
 	base, baseSHA, err := g.Store.Base(ctx, repoID, snap, g.Language)
 	if errors.Is(err, store.ErrNotFound) {
 		return false, nil
 	} else if err != nil {
 		return false, err
 	}
+	old, err := g.Store.Pages(ctx, base)
+	if err != nil {
+		return false, err
+	}
+	if len(old) == 0 { // a ready wiki of no pages: nothing to carry
+		return false, nil
+	}
+	if slices.ContainsFunc(old, func(p page) bool { return p.Files == nil }) {
+		progress.Logf("the wiki of %.7s was planned before its pages held their files: planning anew", baseSHA)
+		return false, nil
+	}
 	changed, files, err := g.Catalog.Changed(ctx, base, snap)
 	if err != nil {
 		return false, err
 	}
-	if changed[steering.File] || 2*len(changed) > files {
-		progress.Logf("%d of %d files changed since %.7s, or %s did: planning anew", len(changed), files, baseSHA, steering.File)
+	if 2*len(changed) > files {
+		progress.Logf("%d of %d files changed since %.7s: planning anew", len(changed), files, baseSHA)
 		return false, nil
 	}
-	added, err := g.Graph.NewDirs(ctx, base, snap, 2)
+	was, err := g.structure(ctx, base)
 	if err != nil {
 		return false, err
 	}
-	if len(added) > 0 {
-		progress.Logf("since %.7s the code imports the new %s: planning anew", baseSHA, strings.Join(added, ", "))
+	is, err := g.structure(ctx, snap)
+	if err != nil {
+		return false, err
+	}
+	wasRaw, _ := place.Raw(was.paths, was.lines, was.declared)
+	isRaw, _ := place.Raw(is.paths, is.lines, is.declared)
+	if why := place.Replan(wasRaw, isRaw, is.edges); why != "" {
+		progress.Logf("since %.7s %s: planning anew", baseSHA, why)
 		return false, nil
 	}
+	renamed, deleted, added, err := g.moves(ctx, base, snap, changed, was.paths, is.paths, was.lines)
+	if err != nil {
+		return false, err
+	}
+	plan, heads := make([]outline.Page, len(old)), map[int]bool{}
+	for i, p := range old {
+		plan[i] = outline.Page{Title: p.Title, Chosen: p.Files.Chosen, Placed: p.Files.Placed, Units: p.Files.Units, Parent: p.Parent}
+		if p.Parent >= 0 {
+			heads[p.Parent] = true
+		}
+	}
+	plan, from, moved := place.Carry(plan, heads, renamed, deleted, added, place.Owners(isRaw, is.asides, is.lines), is.edges)
 	// A page may also read differently when a file it cites imports a
 	// declaration the change altered.
 	ripple, err := g.Graph.Impact(ctx, base, snap, changed)
 	if err != nil {
 		return false, err
-	}
-	old, err := g.Store.Pages(ctx, base)
-	if err != nil {
-		return false, err
-	}
-	if !listed { // a wiki planned flat, or before sections, gets them as the repository grows into them
-		n, err := g.Store.FileCount(ctx, snap)
-		if err != nil {
-			return false, err
-		}
-		// More pages than a flat plan holds: sections whose pages the model all failed to plan.
-		// ponytail: 8 such pages or fewer read as flat and are planned anew, which may fill them;
-		// store the shape if a model that keeps failing section plans replans every snapshot.
-		sectioned := len(old) > flatPages || slices.ContainsFunc(old, func(p page) bool { return p.Parent >= 0 })
-		if !outline.Fits(sectioned, n, cmp.Or(g.MaxPages, defaultMaxPages)) {
-			progress.Logf("the wiki of %.7s is no longer the shape %d files call for: planning anew", baseSHA, n)
-			return false, nil
-		}
 	}
 	cites, err := g.Store.Citations(ctx, base)
 	if err != nil {
@@ -238,14 +243,16 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, src source, l
 	link := func(sha string, c evidence.Citation) string {
 		return evidence.Link(c, gitserver.SourceURL(src.kind, src.url, sha, c.Path, c.StartLine, c.EndLine))
 	}
-	pages := make([]newPage, len(old))
+	pages := make([]newPage, len(plan))
 	kept := 0
-	for i, p := range old {
-		pages[i] = newPage{Title: p.Title, Query: p.Query, Parent: p.Parent}
+	for i, q := range plan {
+		p := old[from[i]]
+		pages[i] = newPage{Title: p.Title, Query: p.Query, Parent: q.Parent, Files: store.PageFiles{Chosen: q.Chosen, Placed: q.Placed, Units: q.Units}}
+		p.Files = &pages[i].Files
 		touched, err := g.touched(ctx, snap, p, cites[p.ID], u)
 		if err != nil {
 			return false, err
-		} else if touched {
+		} else if touched || moved[i] {
 			continue
 		}
 		// The cited lines read as they did: the citations follow them, the links to the new commit.
@@ -260,12 +267,65 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, src source, l
 		pages[i].Content, pages[i].Cites = strings.NewReplacer(swap...).Replace(p.Content), now
 		kept++
 	}
-	if err := g.store(ctx, snap, pages); err != nil {
+	labels, err := g.Store.Labels(ctx, base)
+	if err != nil {
 		return false, err
 	}
-	progress.Logf("carried %d of %d pages over from %.7s, where %d files differ and %d import a declaration it removed or altered; writing the rest",
-		kept, len(pages), baseSHA, len(changed), len(ripple))
+	if err := g.store(ctx, snap, labels, pages); err != nil {
+		return false, err
+	}
+	progress.Logf("carried %d of %d pages over from %.7s, where %d files differ (%d renamed, %d deleted, %d new) and %d import a declaration it removed or altered; writing the rest",
+		kept, len(pages), baseSHA, len(changed), len(renamed), len(deleted), len(added), len(ripple))
 	return true, nil
+}
+
+// moves splits the files that changed between base and snap (was and is
+// hold their paths, lines base's line counts): a path gone from base and a
+// new one with its content is a rename, unless it was empty, as many
+// unrelated files are; the rest gone are deleted, the rest new added, in
+// path order.
+func (g *Generator) moves(ctx context.Context, base, snap int64, changed map[string]bool, was, is []string, lines map[string]int) (map[string]string, map[string]bool, []string, error) {
+	var gone, fresh []string
+	for p := range changed {
+		_, in := slices.BinarySearch(was, p)
+		_, now := slices.BinarySearch(is, p)
+		if in && !now {
+			gone = append(gone, p)
+		} else if now && !in {
+			fresh = append(fresh, p)
+		}
+	}
+	sort.Strings(gone)
+	sort.Strings(fresh)
+	before, err := g.Store.Hashes(ctx, base, gone)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	after, err := g.Store.Hashes(ctx, snap, fresh)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	byHash := map[string]string{}
+	for _, p := range fresh {
+		if _, taken := byHash[after[p]]; !taken {
+			byHash[after[p]] = p
+		}
+	}
+	renamed, deleted, used := map[string]string{}, map[string]bool{}, map[string]bool{}
+	for _, p := range gone {
+		if n, ok := byHash[before[p]]; ok && !used[n] && lines[p] > 0 {
+			renamed[p], used[n] = n, true
+		} else {
+			deleted[p] = true
+		}
+	}
+	var added []string
+	for _, p := range fresh {
+		if !used[p] {
+			added = append(added, p)
+		}
+	}
+	return renamed, deleted, added, nil
 }
 
 // update is what a change did, as carry weighs each page against it.

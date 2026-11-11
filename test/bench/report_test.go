@@ -4,16 +4,19 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"deepcode/internal/knowledge/chat/loop"
 	"deepcode/internal/knowledge/wiki"
+	"deepcode/internal/knowledge/wiki/outline/place"
 	"deepcode/internal/platform/ai"
+	aicontract "deepcode/internal/platform/ai/contract"
+	"deepcode/test/bench/shape"
 	"deepcode/test/bench/trace"
 )
 
@@ -45,12 +48,14 @@ type result struct {
 	PageCitations int          `json:"pageCitations"`
 	CitationSpan  citationSpan `json:"citationSpan"` // lines per page citation
 
-	IndexFailed  bool      `json:"indexFailed"`  // the base was not indexed: nothing else was measured
-	IndexSeconds float64   `json:"indexSeconds"` // the first index, at base
-	Wiki         *wikiRun  `json:"wiki"`         // the first wiki, at base: its last run
-	WikiRuns     []wikiRun `json:"wikiRuns"`     // each run of it, by pages written at a time
-	Tree         []string  `json:"pageTree"`     // head's wiki, as a Markdown list
-	Topics       *coverage `json:"topicCoverage"`
+	IndexFailed  bool         `json:"indexFailed"`  // the base was not indexed: nothing else was measured
+	IndexSeconds float64      `json:"indexSeconds"` // the first index, at base
+	Wiki         *wikiRun     `json:"wiki"`         // the first wiki, at base: its last run
+	WikiRuns     []wikiRun    `json:"wikiRuns"`     // each run of it, by pages written at a time
+	Tree         []string     `json:"pageTree"`     // head's wiki, as a Markdown list
+	Topics       *coverage    `json:"topicCoverage"`
+	Plan         *shape.Shape `json:"plan"`          // head's wiki's
+	DeepWiki     int          `json:"deepWikiPages"` // DeepWiki's page count
 	Update       struct {
 		Failed         bool     `json:"failed"` // the head was not indexed: the rest is empty
 		ChangedFiles   int      `json:"changedFiles"`
@@ -79,8 +84,7 @@ type wikiRun struct {
 	OutChars  int     `json:"outputChars"`
 	// CachedTokens are the input tokens the server read from its prompt cache.
 	CachedTokens int `json:"cachedTokens"`
-	// Planning is the model's plan of the pages, nil when pages were carried
-	// over or listed by .devin/wiki.json.
+	// Planning is how the model's plan of the pages went, nil when they were carried over.
 	Planning *wiki.Planning `json:"planning,omitempty"`
 }
 
@@ -113,60 +117,6 @@ type answer struct {
 	// there was one, the gathering's replies, then the answer's, which an
 	// answer with no evidence does not make. Nil in older runs.
 	Requests []ai.Usage `json:"requests,omitempty"`
-}
-
-// clock times an answer by its events. An evidence event starts a draft at
-// the words that follow it. One that no words follow, after a rewrite, lists
-// the standing draft's sources again: the rewrite failed, and the draft
-// before it is the answer.
-type clock struct {
-	starts  []time.Duration // each draft's first words
-	pending bool            // an evidence event that no words followed yet
-}
-
-func (c *clock) tick(event string, now time.Duration) {
-	switch {
-	case event == "evidence":
-		c.pending = true
-	case event == "delta" && c.pending:
-		c.pending, c.starts = false, append(c.starts, now)
-	}
-}
-
-// read is when the answer's first words came, when those of the draft it
-// ended with, and how many drafts were written after the first.
-func (c *clock) read() (first, begun time.Duration, rewrites int) {
-	n := len(c.starts)
-	if n == 0 {
-		return 0, 0, 0
-	}
-	last := n - 1
-	if c.pending && n > 1 {
-		last--
-	}
-	return c.starts[0], c.starts[last], n - 1
-}
-
-// TestClock: an answer begins at its first words, and its last draft at that
-// draft's; a failed rewrite, its evidence listed again with no words after,
-// leaves the draft before it.
-func TestClock(t *testing.T) {
-	for events, want := range map[string][3]int{
-		"evidence delta delta":                                  {1, 1, 0}, // written once
-		"evidence delta search evidence delta delta":            {1, 4, 1}, // rewritten
-		"evidence delta evidence delta evidence":                {1, 1, 1}, // the rewrite failed after words
-		"evidence delta evidence evidence":                      {1, 1, 0}, // and before any
-		"evidence delta evidence delta evidence delta evidence": {1, 3, 2}, // the second rewrite failed
-		"evidence": {0, 0, 0},
-	} {
-		var c clock
-		for i, e := range strings.Fields(events) {
-			c.tick(e, time.Duration(i))
-		}
-		if first, begun, rewrites := c.read(); [3]int{int(first), int(begun), rewrites} != want {
-			t.Errorf("%s: %d %d %d, want %v", events, first, begun, rewrites, want)
-		}
-	}
 }
 
 // write saves the report as latest.json and latest.md in dir, and the JSON
@@ -211,7 +161,7 @@ func (rep report) markdown() string {
 			atHead(r, "languages", r.Languages), atHead(r, "chunks", r.Chunks), atHead(r, "symbols", r.Symbols), atHead(r, "edges", r.Edges),
 			atHead(r, "diagram", r.DiagramEdges), index, len(r.Errors))
 	}
-	p("\n## First wiki (base)\n\nTime by pages written at a time; the rest is the last run's. Lines per citation: the median and the most a page citation spans. Planning: its time, and its requests whose answer was not the structured output asked for.\n\n| Repository | Time | Pages | Model calls | Input tokens | Cached input | Output tokens | Input chars | Output chars | Page citations (head) | Lines per citation (head) | Planning |\n|---|---|---|---|---|---|---|---|---|---|---|---|")
+	p("\n## First wiki (base)\n\nTime by pages written at a time; the rest is the last run's. Lines per citation: the median and the most a page citation spans. Planning: its time and requests.\n\n| Repository | Time | Pages | Model calls | Input tokens | Cached input | Output tokens | Input chars | Output chars | Page citations (head) | Lines per citation (head) | Planning |\n|---|---|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
 		if w := r.Wiki; w != nil {
 			times := make([]string, len(r.WikiRuns))
@@ -230,7 +180,7 @@ func (rep report) markdown() string {
 			}
 			planning := "–" // no model planned it
 			if s := w.Planning; s != nil {
-				planning = fmt.Sprintf("%.1f s, %d of %d requests failed", s.Seconds, s.Failures, s.Requests)
+				planning = fmt.Sprintf("%.1f s, %d requests", s.Seconds, s.Requests)
 			}
 			p("| %s | %s | %s | %d | %s | %s | %s | %d | %d | %s | %s | %s |", r.Repo, cmp.Or(strings.Join(times, " · "), took(w)), count(r, "base pages", w.Pages), w.Calls,
 				tokens(w.InTokens), cached, tokens(w.OutTokens), w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations), lines, planning)
@@ -252,18 +202,18 @@ func (rep report) markdown() string {
 		}
 		p("| %s | %s | %s | %s | %s | %s |", r.Repo, changed, index, wiki, pages, calls)
 	}
-	p("\n## Topic coverage (head)\n\nDeepWiki's topics a page title or \"##\" or \"###\" heading names, a word of a name like WelcomeController counting; test and tooling pages cite only tests, CI, manifests or editor settings; unnamed code files are those no page's title or focus names.\n\n| Repository | Covered | Pages | Test and tooling pages | Missing | Unnamed code files |\n|---|---|---|---|---|---|")
+	p("\n## Topic coverage (head)\n\nDeepWiki's topics a page title or \"##\" or \"###\" heading names, a word of a name like WelcomeController counting; test and tooling pages cite only tests, CI, manifests or editor settings; unnamed code files are the code units' files on no page.\n\n| Repository | Covered | Pages | Test and tooling pages | Missing | Unnamed code files |\n|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
 		if c := r.Topics; c != nil {
-			left := fmt.Sprint(len(c.Unnamed))
-			if len(c.Unnamed) > 0 {
-				left += ": " + strings.Join(c.Unnamed[:min(len(c.Unnamed), 10)], ", ")
-			}
-			if len(c.Unnamed) > 10 {
-				left += ", …"
-			}
 			p("| %s | %d of %d (%d%%) | %d | %d (%d%%) | %s | %s |", r.Repo, c.Covered, c.Topics, 100*c.Covered/max(c.Topics, 1), r.Pages,
-				c.ToolingPages, 100*c.ToolingPages/max(r.Pages, 1), cmp.Or(strings.Join(c.Missing, ", "), "–"), left)
+				c.ToolingPages, 100*c.ToolingPages/max(r.Pages, 1), cmp.Or(strings.Join(c.Missing, ", "), "–"), listed(c.Unnamed))
+		}
+	}
+	p("\n## Plan\n\nThe head wiki's pages against DeepWiki's count. Thin pages hold files weighing under %d lines, crowded ones over %d. Ceiling and Contracts are the base wiki's plan, which head carries: Ceiling, when it bound, the pages the code's structure wanted; Contracts, per rule the plan broke, how often on the first reply / after its one repair / left for code to fix.\n\n| Repository | Pages | DeepWiki | Thin | Crowded | Projects without a page | Ceiling | Contracts |\n|---|---|---|---|---|---|---|---|",
+		place.LinesPerPage, shape.CrowdedPages*place.LinesPerPage)
+	for _, r := range rep.Repos {
+		if s := r.Plan; s != nil {
+			p("| %s | %d | %d | %d | %d | %s | %s |", r.Repo, s.Pages, r.DeepWiki, s.Thin, s.Crowded, listed(s.Homeless), planned(r.Wiki))
 		}
 	}
 	p("\n## Retrieval eval (head)\n\n| Repository | Questions | recall@10 | MRR |\n|---|---|---|---|")
@@ -439,6 +389,35 @@ func atHead(r result, step string, n int) string {
 	return count(r, step, n)
 }
 
+// listed shows how many names there are, and the first 10.
+func listed(names []string) string {
+	s := fmt.Sprint(len(names))
+	if len(names) > 0 {
+		s += ": " + strings.Join(names[:min(len(names), 10)], ", ")
+	}
+	if len(names) > 10 {
+		s += ", …"
+	}
+	return s
+}
+
+// planned is the ceiling and contracts cells of w's plan, "–" for a wiki no
+// model planned: each rule broken, as first/afterRepair/residual.
+func planned(w *wikiRun) string {
+	if w == nil || w.Planning == nil {
+		return "– | –"
+	}
+	ceiling, rules := "–", []string{}
+	if c := w.Planning.Ceiling; c != nil {
+		ceiling = fmt.Sprintf("%d wanted, %d planned (limit %d)", c.Wanted, c.Planned, c.Limit)
+	}
+	for _, r := range slices.Sorted(maps.Keys(w.Planning.Contracts)) {
+		c := w.Planning.Contracts[r]
+		rules = append(rules, fmt.Sprintf("%s %d/%d/%d", r, c.First, c.Repaired, c.Residual))
+	}
+	return ceiling + " | " + cmp.Or(strings.Join(rules, ", "), "none broken")
+}
+
 // took shows how long a wiki run took, and if it failed.
 func took(w *wikiRun) string {
 	if w.Failed {
@@ -462,8 +441,10 @@ func tokens(n int) string {
 // repository's answers that did not fail, their time (a repository with none
 // has no row); the report lands whole, with no file left aside.
 func TestMarkdown(t *testing.T) {
-	ok := result{Repo: "ok", Wiki: &wikiRun{Seconds: 10, Pages: 6, InTokens: 200, CachedTokens: 150, Planning: &wiki.Planning{Seconds: 4.25, Requests: 9}}}
-	broken := result{Repo: "broken", Wiki: &wikiRun{Failed: true, Seconds: 3, Planning: &wiki.Planning{Seconds: 1, Requests: 2, Failures: 1}}}
+	ok := result{Repo: "ok", Wiki: &wikiRun{Seconds: 10, Pages: 6, InTokens: 200, CachedTokens: 150, Planning: &wiki.Planning{Seconds: 4.25, Requests: 9,
+		Contracts: map[aicontract.Rule]aicontract.Count{"section.missing": {First: 2, Repaired: 1}, "flat.json": {First: 1}}, Ceiling: &wiki.Ceiling{Limit: 64, Wanted: 80, Planned: 64}}}}
+	broken := result{Repo: "broken", Wiki: &wikiRun{Failed: true, Seconds: 3, Planning: &wiki.Planning{Seconds: 1, Requests: 2}}}
+	ok.Plan, ok.DeepWiki, broken.Plan = &shape.Shape{Pages: 10, Thin: 1, Homeless: []string{"svc/"}}, 28, &shape.Shape{Pages: 3}
 	ok.Update.Wiki, ok.Update.PagesRewritten = &wikiRun{Seconds: 5, Pages: 6}, 1
 	broken.Update.Failed, broken.Errors = true, []string{"update index: boom"}
 	ok.Failed = []string{"symbols", "pages rewritten"} // a count whose query failed
@@ -480,7 +461,8 @@ func TestMarkdown(t *testing.T) {
 		"1 of 3 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language; 1 were not judged.",
 		"The judge is advisory, hand labels gate; its measured error: " + judgeError + ".",
 		"Evidence budget: 4 hits evicted, 1 refused; 3 citation references resolved to a path that differs from the one written by leading folders.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |",
-		"Answer decode |\n|---|---|---|---|---|---|---|\n| ok | 2 | 1.0 | 1.0 s | 0.7 s | 2.0 s | 10.0 tokens/s |\n\n**broken errors:**", "| 0 | 0 | 7 | 3, at most 40 | 4.2 s, 0 of 9 requests failed |", "| 0 | 0 | failed | failed | 1.0 s, 1 of 2 requests failed |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |"} {
+		"Answer decode |\n|---|---|---|---|---|---|---|\n| ok | 2 | 1.0 | 1.0 s | 0.7 s | 2.0 s | 10.0 tokens/s |\n\n**broken errors:**", "| 0 | 0 | 7 | 3, at most 40 | 4.2 s, 9 requests |", "| 0 | 0 | failed | failed | 1.0 s, 2 requests |",
+		"| Repository | Pages | DeepWiki | Thin | Crowded | Projects without a page | Ceiling | Contracts |\n|---|---|---|---|---|---|---|---|\n", "| ok | 10 | 28 | 1 | 0 | 1: svc/ | 80 wanted, 64 planned (limit 64) | flat.json 1/0/0, section.missing 2/1/0 |", "| broken | 3 | 0 | 0 | 0 | 0 | – | none broken |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the report lacks %q:\n%s", want, md)
 		}

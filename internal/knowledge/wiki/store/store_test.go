@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -41,6 +42,42 @@ func TestShownPicksSnapshot(t *testing.T) {
 	exec(`UPDATE snapshots SET wiki_status = 'ready' WHERE id = 2`)
 	if w, err := s.Shown(ctx, 1); err != nil || w.ID != 2 || w.CommitSHA != "b" || w.WikiStatus != "ready" {
 		t.Fatalf("snapshot %+v shown (%v), want 2 with the finished wiki", w, err)
+	}
+}
+
+// TestPlanRoundTrip (G22): a page's files and the wiki's labels read back as
+// stored, a page stored before them has none, a wiki before labels the zero
+// Labels; Hashes reads the named files' contents' hashes, a missing one none.
+func TestPlanRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "deepcode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r');
+		INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'a', 'ready'), (2, 1, 'b', 'ready');
+		INSERT INTO file_contents(hash, content) VALUES ('h1', 'x'), ('h2', 'y');
+		INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, 'a.go', 'go', 'h1', 1, 1), (1, 'b.go', 'go', 'h2', 1, 1);
+		INSERT INTO wiki_pages(snapshot_id, slug, title, position) VALUES (2, 'old', 'Old', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	s := &Store{DB: db}
+	files := PageFiles{Chosen: []string{"a.go"}, Placed: []string{"b.go"}, Units: []string{"./"}}
+	labels := Labels{Stack: "Technologie", OtherFiles: "Weitere Dateien"}
+	if err := s.Add(ctx, 1, "Deutsch", labels, []NewPage{{Slug: "1", Title: "Ü", Parent: -1}, {Slug: "2", Title: "A", Parent: 0, Files: files}}); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := s.Pages(ctx, 1)
+	got, gotErr := s.Labels(ctx, 1)
+	old, _ := s.Pages(ctx, 2)
+	none, noneErr := s.Labels(ctx, 2)
+	if err != nil || gotErr != nil || noneErr != nil || len(pages) != 2 || !reflect.DeepEqual(*pages[1].Files, files) || pages[1].Parent != 0 ||
+		got != labels || old[0].Files != nil || none != (Labels{}) {
+		t.Fatalf("pages %+v, labels %+v and %+v, old %+v (%v %v %v)", pages, got, none, old, err, gotErr, noneErr)
+	}
+	if h, err := s.Hashes(ctx, 1, []string{"a.go", "b.go", "gone.go"}); err != nil || !reflect.DeepEqual(h, map[string]string{"a.go": "h1", "b.go": "h2"}) {
+		t.Fatalf("hashes %v (%v)", h, err)
 	}
 }
 

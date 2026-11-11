@@ -14,12 +14,13 @@
 
    建置需要 Go 1.27+ 並啟用 CGO（Tree-sitter 需要 C 編譯器）、Node.js `^20.19` 或 `>=22.12`、Bash。執行需要系統 `git` 2.31+。
 
-2. 在執行檔旁建立 `deepcode.yaml`，填入 OpenAI 相容、支援 structured outputs 的 Chat API（語意檢索另需 Embedding API，可省略）：
+2. 在執行檔旁建立 `deepcode.yaml`，填入 OpenAI 相容的 Chat API（語意檢索另需 Embedding API，可省略）。伺服器須接受 `response_format`，但不必強制 schema：schema 只是引導，每個回覆都由 deepcode 自己檢查、要求修正一次，剩下的由程式補正。
 
    ```yaml
    chat_base_url: http://host:8080/v1
    chat_api_key: your-key
    chat_model: your-chat-model
+   # chat_api: completions  # 或 responses；有些伺服器的 /responses 遇到非 JSON 回覆會直接回錯，請用 completions
    # embed_model: your-embedding-model
    # chat_context: 524288
    # chat_tokenizer: tokenizer.json

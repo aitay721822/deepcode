@@ -3,233 +3,354 @@ package wiki
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"deepcode/internal/knowledge/wiki/fanout"
 	"deepcode/internal/knowledge/wiki/outline"
-	"deepcode/internal/knowledge/wiki/steering"
+	"deepcode/internal/knowledge/wiki/outline/contract"
+	"deepcode/internal/knowledge/wiki/outline/place"
+	"deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
+	aicontract "deepcode/internal/platform/ai/contract"
 	"deepcode/internal/platform/jobs"
-	"deepcode/internal/repo/catalog"
 	"deepcode/internal/repo/index/analyzer"
+	graphstore "deepcode/internal/repo/index/graph/store"
 )
 
-// steer reads the snapshot's .devin/wiki.json. A missing file steers nothing,
-// and so does an invalid one, which the job's output reports.
-func (g *Generator) steer(ctx context.Context, snap catalog.Ref, progress jobs.Progress) (steering.Steering, error) {
-	f, err := g.Catalog.File(ctx, snap, steering.File)
-	if errors.Is(err, catalog.ErrNotFound) {
-		return steering.Steering{}, nil
-	} else if err != nil {
-		return steering.Steering{}, err
-	}
-	s, err := steering.Parse(f.Content)
-	if err != nil {
-		progress.Logf("%s ignored: %v", steering.File, err)
-	}
-	return s, nil
+// Planning is how the model planned one wiki: the time it took, its
+// requests, each rule's counts (ai/contract), the validator's words on its
+// first schema.other, and the ceiling when it bound.
+type Planning struct {
+	Seconds   float64                              `json:"seconds"`
+	Requests  int                                  `json:"requests"`
+	Contracts map[aicontract.Rule]aicontract.Count `json:"contracts,omitempty"`
+	Other     string                               `json:"schemaOther,omitempty"`
+	Ceiling   *Ceiling                             `json:"ceiling,omitempty"`
 }
 
-const planPrompt = `You plan a concise technical wiki for a code repository. Reply with JSON only, no prose:
-{"pages":[{"title":"Overview","query":"keywords, paths and identifiers to search the code for this page"}]}
-Plan 4 to 8 pages. The first page is the overview. Every later page covers one subsystem, layer, workflow or key concept that really exists in this repository; the imports between directories, when listed, show which parts depend on which. Queries name concrete directories, files, types or functions taken from the layout below.`
+// Ceiling is the cost ceiling when it bound: the most pages, those the
+// code's structure wanted, and those planned.
+type Ceiling struct {
+	Limit   int `json:"limit"`
+	Wanted  int `json:"wanted"`
+	Planned int `json:"planned"`
+}
 
-const outlinePrompt = `You plan the sections of a technical wiki for a code repository. Reply with JSON only, no prose:
-{"overview":{"title":"Overview","query":"keywords, paths and identifiers to search the code for it"},"sections":[{"title":"…","query":"…"}]}
-The overview introduces the whole repository. Then give exactly one section for each numbered group of directories below, in that order: a title naming what that part of the code does, not just its directory, and a query naming concrete directories, files, types or functions in it.`
+// planRun tallies one plan, its requests made at a time.
+type planRun struct {
+	requests atomic.Int64
+	counts   aicontract.Counts
+	ceiling  *Ceiling
+}
 
-const sectionPrompt = `You plan the pages of one section of a technical wiki for a code repository. Reply with JSON only, no prose:
-{"pages":[{"title":"…","query":"keywords, paths and identifiers to search the code for this page"}]}
-Plan exactly as many pages as the user's message asks for: where the section's files hold fewer separate subjects, give its larger files, workflows, options and error handling pages of their own. Each covers one distinct component, workflow, feature or concept of the section's files, named plainly in its title; no two pages share a subject, and none repeats the section's overview or another section's subject. Tests, examples, guides and configuration files are grouped by the feature, workflow or tool they serve, never one page per file, and between them the pages' queries name every example, guide and folder of tests listed. A guide is listed with its sections, each a subject too: a page on a guide names in its query the guide and the sections it covers. Queries name concrete files, types or functions from the files listed.`
+// ask is the Ask of f's structured output by g's model, each request
+// counted in r.
+func ask[T any](g *Generator, r *planRun, f ai.Format[T]) contract.Ask[T] {
+	json := aicontract.JSON(g.Chat, f)
+	return func(ctx context.Context, p ai.Prompt) (T, string, error) {
+		r.requests.Add(1)
+		return json(ctx, p)
+	}
+}
 
 // plannedPages returns the snapshot's pages. When there are none yet, it
-// stores them first: carried over from the previous wiki, else the pages
-// .devin/wiki.json lists, else a plan the model makes.
-func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, src source, repo string, steer steering.Steering, progress jobs.Progress) ([]page, error) {
+// stores them first: carried over from the previous wiki, else a plan.
+func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, src source, repo string, progress jobs.Progress) ([]page, error) {
 	pages, err := g.Store.Pages(ctx, snap)
 	if err != nil || len(pages) > 0 {
 		return pages, err
 	}
 	progress.Stage("plan", 0, 0)
-	carried, err := g.carry(ctx, repoID, snap, src, len(steer.Pages) > 0, progress)
+	carried, err := g.carry(ctx, repoID, snap, src, progress)
+	if err != nil {
+		return nil, err
+	} else if carried {
+		return g.Store.Pages(ctx, snap)
+	}
+	progress.Logf("planning the wiki pages")
+	r, start := &planRun{}, time.Now()
+	plan, labels, err := g.plan(ctx, snap, repo, r, progress)
+	if r.ceiling != nil {
+		r.ceiling.Planned = len(plan)
+	}
+	counts := r.counts.Snapshot()
+	for _, rule := range slices.Sorted(maps.Keys(counts)) {
+		c := counts[rule]
+		progress.Logf("contract %s: %d on the first reply, %d after the repair, %d fixed by code", rule, c.First, c.Repaired, c.Residual)
+	}
+	if other := r.counts.Other(); other != "" {
+		progress.Logf("a reply broke its schema in a way no check names: %s", other)
+	}
+	if g.Planned != nil { // every request done: no lock needed; a failed plan too, as its counts are what it measures
+		g.Planned(Planning{Seconds: time.Since(start).Seconds(), Requests: int(r.requests.Load()), Contracts: counts, Other: r.counts.Other(), Ceiling: r.ceiling})
+	}
 	if err != nil {
 		return nil, err
 	}
-	if !carried {
-		plan := steer.Pages
-		if len(plan) > 0 {
-			progress.Logf("taking the pages %s lists", steering.File)
-		} else {
-			progress.Logf("planning the wiki pages")
-			t, start := &tally{}, time.Now()
-			plan, err = g.plan(ctx, snap, repo, steer.Notes, t, progress)
-			if t.Seconds = time.Since(start).Seconds(); g.Planned != nil { // every section done: no lock needed
-				g.Planned(t.Planning) // a failed plan too: its failures are what it measures
-			}
-			if err != nil {
-				return nil, err
-			}
-			if plan, err = g.readme(ctx, snap, plan, progress); err != nil {
-				return nil, err
-			}
-		}
-		stored := make([]newPage, len(plan))
-		titles := make([]string, len(plan))
-		for i, p := range plan {
-			stored[i], titles[i] = newPage{Title: p.Title, Query: p.Query, Parent: p.Parent}, p.Title
-		}
-		progress.Logf("planned %d pages: %s", len(plan), strings.Join(titles, " | "))
-		if err := g.store(ctx, snap, stored); err != nil {
-			return nil, err
-		}
+	stored := make([]newPage, len(plan))
+	titles := make([]string, len(plan))
+	for i, p := range plan {
+		stored[i] = newPage{Title: p.Title, Query: p.Query(), Parent: p.Parent, Files: store.PageFiles{Chosen: p.Chosen, Placed: p.Placed, Units: p.Units}}
+		titles[i] = p.Title
+	}
+	progress.Logf("planned %d pages: %s", len(plan), strings.Join(titles, " | "))
+	if err := g.store(ctx, snap, store.Labels(labels), stored); err != nil {
+		return nil, err
 	}
 	return g.Store.Pages(ctx, snap)
 }
 
-// plan asks the model for the wiki's pages. A repository too small for
-// sections gets one flat list from its layout. Else its code is grouped into
-// sections (outline.Sections) and the pages shared out among them by size:
-// the model titles the overview and each section from the layout and the
-// groups, then plans each section's pages from its files and what they
-// declare, Parallel sections at a time.
-func (g *Generator) plan(ctx context.Context, snap int64, repo, notes string, t *tally, progress jobs.Progress) ([]outline.Page, error) {
+// structure is what planning weighs of a snapshot, with no model: its
+// files' lines, what they declare, their imports, its code units and its
+// aside kinds, each with its cap.
+type structure struct {
+	paths        []string
+	lines        map[string]int
+	declared     map[string][]string
+	edges        []graphstore.Edge
+	code, asides []place.Unit
+}
+
+// structure reads snapshot snap's.
+func (g *Generator) structure(ctx context.Context, snap int64) (s structure, err error) {
+	if s.paths, err = g.Store.Paths(ctx, snap); err != nil {
+		return s, err
+	}
+	if s.lines, err = g.Store.Lines(ctx, snap); err != nil {
+		return s, err
+	}
+	if s.declared, err = g.declared(ctx, snap); err != nil {
+		return s, err
+	}
+	if s.edges, err = g.Graph.Edges(ctx, snap); err != nil {
+		return s, err
+	}
+	s.code, s.asides = place.Units(s.paths, s.lines, s.declared, s.edges)
+	p := 0
+	for _, u := range s.code {
+		p += u.Cap
+	}
+	place.Shares(s.asides, s.lines, p)
+	return s, nil
+}
+
+// plan plans the wiki from the code's structure (place): its units, their
+// caps within the cost ceiling, their sections. A small repository is one
+// request (flat). Else the model titles the overview, the sections and the
+// top-level pages (the outline), then plans each section's pages from its
+// files and what they declare, Parallel at a time, the tests and tooling
+// last, as their share follows the code pages planned. Code places every
+// file on a page, and the README's recipes. Each request is held to its
+// contract (ai/contract.Run), counted in r.
+func (g *Generator) plan(ctx context.Context, snap int64, repo string, r *planRun, progress jobs.Progress) ([]outline.Page, contract.Labels, error) {
 	layout, err := g.layout(ctx, snap)
 	if err != nil {
-		return nil, err
+		return nil, contract.Labels{}, err
 	}
-	files, err := g.Store.FileCount(ctx, snap) // what a wiki is sized by
+	s, err := g.structure(ctx, snap)
 	if err != nil {
-		return nil, err
+		return nil, contract.Labels{}, err
 	}
-	total, n := outline.Size(files, cmp.Or(g.MaxPages, defaultMaxPages))
-	about := fmt.Sprintf("Repository: %s\nWrite the page titles in %s.\n\n%s", repo, g.Language, notes)
-	if n == 0 {
-		reply, err := ask(ctx, g, t, outline.PlanFormat, planPrompt, about+layout, func(p outline.Plan) bool { return len(p.Titled(1)) > 0 })
-		if err != nil {
-			return nil, err
-		}
-		if plan := reply.Titled(min(total, flatPages)); len(plan) > 0 {
-			return plan, nil
-		}
-		return []outline.Page{{Title: "Overview", Query: "overview architecture entry point main modules", Parent: -1}}, nil
+	most := cmp.Or(g.MaxPages, defaultMaxPages)
+	code, sections, wanted := place.Ceiling(s.code, s.asides, s.edges, s.lines, most)
+	if wanted > most {
+		r.ceiling = &Ceiling{Limit: most, Wanted: wanted}
+		progress.Logf("the code's structure calls for up to %d pages, past the ceiling of %d: trimmed", wanted, most)
 	}
-	parts, edges, err := g.Graph.Parts(ctx, snap, 2*n)
+	about := fmt.Sprintf("Repository: %s\nWrite the page titles in %s.\n\n", repo, g.Language)
+	var plan []outline.Page
+	var labels contract.Labels
+	heads := map[int]bool{}
+	if place.Flat(code, s.asides, s.lines) {
+		plan, labels, err = g.flat(ctx, about, layout, append(slices.Clone(code), s.asides...), s, r)
+	} else {
+		plan, labels, heads, err = g.sectioned(ctx, about, layout, code, sections, s, r)
+	}
 	if err != nil {
-		return nil, err
+		return nil, labels, err
 	}
-	lines, err := g.Store.Lines(ctx, snap) // what a section's pages are shared out by
+	if plan, err = g.recipes(ctx, snap, plan, heads, r, progress); err != nil {
+		return nil, labels, err
+	}
+	var files []string
+	for _, u := range code {
+		files = append(files, u.Files...)
+	}
+	if left := place.Unnamed(plan, files); len(left) > 0 {
+		r.counts.Residual("place.unplaced", len(left))
+		progress.Logf("%d code files are on no page: %s", len(left), strings.Join(left[:min(len(left), 20)], ", "))
+	}
+	return plan, labels.Clean(), nil
+}
+
+// flat plans a small repository in one request, every page at the top.
+func (g *Generator) flat(ctx context.Context, about, layout string, units []place.Unit, s structure, r *planRun) ([]outline.Page, contract.Labels, error) {
+	f, err := contract.FlatFormat(units, true)
+	if err != nil { // past the structured-output limits: types only
+		if f, err = contract.FlatFormat(units, false); err != nil {
+			return nil, contract.Labels{}, err
+		}
+	}
+	reply, err := aicontract.Run(ctx, ai.Prompt{Static: contract.FlatPrompt, Dynamic: contract.FlatMessage(about, layout, units, s.declared, s.lines)},
+		contract.Flat(ask(g, r, f), units), &r.counts)
 	if err != nil {
-		return nil, err
+		return nil, contract.Labels{}, err
 	}
-	sections := outline.Sections(parts, edges, lines, n)
-	budgets := outline.Budgets(sections, lines, total-1)
-	var groups strings.Builder
-	for i, s := range sections {
-		fmt.Fprintf(&groups, "%d. %s (%d files): %s\n", i+1, sectionName(s), len(s.Files), strings.Join(outline.Pick(s.Files, lines, 12), ", "))
+	pages := place.Place(units, contract.Pages(reply.Units, units), s.edges)
+	return append([]outline.Page{reply.Overview.Page()}, pages...), reply.Labels, nil
+}
+
+// sectioned plans a wiki in sections: the outline, then each part's pages,
+// a section of two pages or more under a head of the outline's, one of a
+// single page that page at the top. It returns the pages, the labels and
+// the heads' indexes.
+func (g *Generator) sectioned(ctx context.Context, about, layout string, code []place.Unit, sections [][]int, s structure, r *planRun) ([]outline.Page, contract.Labels, map[int]bool, error) {
+	var parts []contract.Part
+	n, m := 0, 0
+	for _, sec := range sections {
+		us := make([]place.Unit, len(sec))
+		for i, j := range sec {
+			us[i] = code[j]
+		}
+		if len(us) == 1 && us[0].Cap == 1 {
+			m++
+			parts = append(parts, contract.Part{Key: fmt.Sprintf("p%d", m), Units: us})
+		} else {
+			n++
+			parts = append(parts, contract.Part{Key: fmt.Sprint(n), Units: us})
+		}
 	}
-	progress.Logf("%d sections of %d pages in all, from %d files", len(sections), total, files)
-	reply, err := ask(ctx, g, t, outline.OutlineFormat, outlinePrompt, about+layout+"\nGroups of directories, one per section, with some of their files:\n"+groups.String(),
-		func(o outline.Outline) bool {
-			_, _, ok := o.Heads(len(sections))
-			return ok
-		})
+	for _, a := range s.asides {
+		n++
+		parts = append(parts, contract.Part{Key: fmt.Sprint(n), Units: []place.Unit{a}, Kind: a.Kind})
+	}
+	keys, names := make([]string, len(parts)), map[string]string{}
+	for i, p := range parts {
+		keys[i], names[p.Key] = p.Key, contract.Name(p.Units[0].Key)
+	}
+	f, err := contract.OutlineFormat(keys)
 	if err != nil {
-		return nil, err
+		return nil, contract.Labels{}, nil, err
 	}
-	overview, heads, ok := reply.Heads(len(sections))
-	if !ok {
-		overview = outline.Page{Title: "Overview", Query: "overview architecture entry point main modules", Parent: -1}
-	}
-	for i := range sections {
-		if i == len(heads) {
-			heads = append(heads, outline.Page{})
-		}
-		if heads[i].Title == "" { // the model named none: named after its folders, or what it holds, and searching for them
-			query := cmp.Or(strings.Join(sections[i].Dirs, " "), strings.Join(outline.Pick(sections[i].Files, lines, 12), " "))
-			heads[i] = outline.Page{Title: sectionName(sections[i]), Query: outline.Fit(query), Parent: -1}
-		}
-	}
-	declared, err := g.declared(ctx, snap)
+	o, err := aicontract.Run(ctx, ai.Prompt{Static: contract.OutlinePrompt, Dynamic: contract.OutlineMessage(about, layout, parts, s.lines)},
+		contract.Outline(ask(g, r, f), keys, names), &r.counts)
 	if err != nil {
-		return nil, err
+		return nil, contract.Labels{}, nil, err
 	}
-	titles := make([]string, len(heads))
-	for i, h := range heads {
-		titles[i] = h.Title
+	titles := make([]string, len(parts))
+	for i, p := range parts {
+		titles[i] = o.Pages[p.Key].Page().Title
 	}
-	// A section of one page is that page; of two, two pages of their own, as
-	// one under the section's own would only repeat it; else the section's own
-	// page and the rest under it.
-	children := make([][]outline.Page, len(sections))
-	if err := fanout.Each(ctx, len(sections), g.Parallel, func(ctx context.Context, i int) error {
-		units := outline.Units(sections[i], lines) // the examples, guides and tests its pages are to name
-		want := budgets[i] - 1
-		if budgets[i] == 2 {
-			want = 2
-		} else if want == 0 {
-			g.cover(heads[i:i+1], sections[i], lines, progress)
-			outline.Spread(heads[i:i+1], units)
-			return nil
+	results := make([][]outline.Page, len(parts))
+	each := func(tied bool) error {
+		var todo []int
+		for i, p := range parts {
+			if place.Tied(p.Kind) == tied {
+				todo = append(todo, i)
+			}
 		}
-		var b strings.Builder // what all sections share first, for the prompt cache
-		fmt.Fprintf(&b, "%sThe wiki's sections: %s\n\nSection: %s. Focus: %s\nFiles of this section (%d), with what they declare:\n",
-			about, strings.Join(titles, " | "), heads[i].Title, heads[i].Query, len(sections[i].Files))
-		for _, f := range outline.Pick(sections[i].Files, lines, 200) {
-			fmt.Fprintf(&b, "%s %s\n", f, strings.Join(declared[f], ", "))
-		}
-		fmt.Fprintf(&b, "\nPlan exactly %d pages.", want)
-		reply, err := ask(ctx, g, t, outline.PlanFormat, sectionPrompt, b.String(), func(p outline.Plan) bool { return len(p.Titled(1)) > 0 })
-		if err != nil {
+		return fanout.Each(ctx, len(todo), g.Parallel, func(ctx context.Context, k int) (err error) {
+			i := todo[k]
+			results[i], err = g.part(ctx, parts[i], o.Pages[parts[i].Key].Page(), about, titles, s, r)
 			return err
-		}
-		children[i] = outline.Spread(g.cover(reply.Titled(want), sections[i], lines, progress), units)
-		return nil
-	}); err != nil {
-		return nil, err
+		})
 	}
-	plan := []outline.Page{overview}
-	for i, h := range heads {
-		if budgets[i] == 2 && len(children[i]) > 0 {
-			plan = append(plan, children[i]...)
+	if err := each(false); err != nil {
+		return nil, contract.Labels{}, nil, err
+	}
+	p := 0
+	for i := range parts {
+		if parts[i].Kind == "" {
+			p += len(results[i])
+		}
+	}
+	for i := range parts {
+		if a := &parts[i].Units[0]; place.Tied(parts[i].Kind) {
+			a.Cap = place.Share(*a, s.lines, p)
+		}
+	}
+	if err := each(true); err != nil {
+		return nil, contract.Labels{}, nil, err
+	}
+	plan, heads := []outline.Page{o.Overview.Page()}, map[int]bool{}
+	for i, part := range parts {
+		if len(results[i]) == 1 {
+			plan = append(plan, results[i][0])
 			continue
 		}
 		at := len(plan)
-		plan = append(plan, h)
-		for _, c := range children[i] {
+		head := o.Pages[part.Key].Page()
+		for _, u := range part.Units {
+			head.Units = append(head.Units, u.Key)
+		}
+		plan, heads[at] = append(plan, head), true
+		for _, c := range results[i] {
 			c.Parent = at
 			plan = append(plan, c)
 		}
 	}
-	return plan, nil
+	return plan, o.Labels, heads, nil
 }
 
-// cover has the pages of code section s name each of its code files
-// (outline.Cover): the model planning them names some files only. A file no
-// page has room for is reported in the job's output.
-func (g *Generator) cover(pages []outline.Page, s outline.Section, lines map[string]int, progress jobs.Progress) []outline.Page {
-	if s.Kind != "" {
-		return pages
+// part plans one part's pages, its files placed on them. A top-level code
+// page is the outline's head holding its unit's files; an aside of one page,
+// the head holding the kind's. Code and tooling are planned by unit (the
+// section request, split within the limits); tests, examples and docs by
+// assigning their units to pages (the aside request).
+func (g *Generator) part(ctx context.Context, p contract.Part, head outline.Page, about string, titles []string, s structure, r *planRun) ([]outline.Page, error) {
+	u := p.Units[0]
+	asides := place.AsideUnits(p.Kind, u.Files, s.lines)
+	switch {
+	case len(p.Units) == 1 && u.Cap == 1:
+		head.Placed = u.Files
+		if head.Units = []string{u.Key}; p.Kind != "" && p.Kind != analyzer.Tooling {
+			head.Units = nil
+			for _, a := range asides {
+				head.Units = append(head.Units, a.Key)
+			}
+		}
+		return []outline.Page{head}, nil
+	case p.Kind == "" || p.Kind == analyzer.Tooling:
+		split, formats, err := contract.Split(p.Units)
+		if err != nil {
+			return nil, err
+		}
+		var pages []outline.Page
+		for i := range split {
+			reply, err := aicontract.Run(ctx, ai.Prompt{Static: contract.SectionPrompt, Dynamic: contract.SectionMessage(about, titles, head.Title, p.Units, split[i], s.declared, s.lines)},
+				contract.Section(ask(g, r, formats[i]), split[i]), &r.counts)
+			if err != nil {
+				return nil, err
+			}
+			pages = append(pages, contract.Pages(reply, split[i])...)
+		}
+		r.counts.Residual("section.duplicate", contract.Distinct(pages)) // across split requests, each checked alone
+		return place.Place(p.Units, pages, s.edges), nil
 	}
-	pages, left := outline.Cover(pages, s.Files, lines)
-	if len(left) > 0 {
-		progress.Logf("%d code files of %s are named by no page, for want of room in their queries: %s",
-			len(left), sectionName(s), strings.Join(left[:min(len(left), 20)], ", "))
+	f, err := contract.AsideFormat(asides, u.Cap)
+	if err != nil {
+		return nil, err
 	}
-	return pages
+	reply, err := aicontract.Run(ctx, ai.Prompt{Static: contract.AsidePrompt, Dynamic: contract.AsideMessage(about, titles, head.Title, p.Kind, asides, s.declared, s.lines)},
+		contract.Aside(ask(g, r, f), asides, u.Cap, p.Kind), &r.counts)
+	if err != nil {
+		return nil, err
+	}
+	return place.Place(asides, contract.AsidePages(reply, asides), nil), nil
 }
 
-// readme has the pages name each recipe of the snapshot's README
-// (outline.Readme): the plan follows the code, and the README, a library's
-// own guide, is the project's tooling to planning. A recipe no page has room
-// for is reported in the job's output.
-func (g *Generator) readme(ctx context.Context, snap int64, plan []outline.Page, progress jobs.Progress) ([]outline.Page, error) {
+// recipes places the recipes of the snapshot's README (outline.Recipes) on
+// pages (place.Recipes): the plan follows the code, and the README, a
+// library's own guide, is the project's tooling to planning. A recipe no
+// page has room for is reported and counted.
+func (g *Generator) recipes(ctx context.Context, snap int64, plan []outline.Page, heads map[int]bool, r *planRun, progress jobs.Progress) ([]outline.Page, error) {
 	root, err := g.Store.RootFiles(ctx, snap)
 	if err != nil || len(root) == 0 {
 		return plan, err
@@ -237,85 +358,21 @@ func (g *Generator) readme(ctx context.Context, snap int64, plan []outline.Page,
 	if lang, _ := analyzer.Detect(root[0].Path); lang != "markdown" || !strings.HasPrefix(strings.ToLower(root[0].Path), "readme") {
 		return plan, nil
 	}
-	plan, left := outline.Readme(plan, root[0].Path, outline.Recipes(root[0].Content))
+	plan, left := place.Recipes(plan, root[0].Path, outline.Recipes(root[0].Content), heads)
 	if len(left) > 0 {
-		progress.Logf("%d sections of %s are named by no page, for want of room in their queries: %s", len(left), root[0].Path, strings.Join(left, " | "))
+		r.counts.Residual("recipe.unplaced", len(left))
+		progress.Logf("%d sections of %s are on no page, for want of room: %s", len(left), root[0].Path, strings.Join(left, " | "))
 	}
 	return plan, nil
 }
 
-// ask sends g's model a planning request for f's JSON and returns the reply,
-// asking once more when usable rejects it: one empty reply would leave a whole
-// section without pages. A reply that is not f's JSON fails the plan
-// (ai.ErrSchema). Each request is counted in t.
-func ask[T any](ctx context.Context, g *Generator, t *tally, f ai.Format[T], system, user string, usable func(T) bool) (T, error) {
-	p := ai.Prompt{Static: system, Dynamic: user}
-	for try := 0; ; try++ {
-		v, _, err := ai.StreamJSON(ctx, g.Chat, p, f, nil)
-		if t.add(err); err != nil || usable(v) || try == 1 {
-			return v, err
-		}
-	}
-}
-
-// Planning is how the model planned one wiki: the time it took, its requests,
-// and those whose answer was not the JSON asked for (structured-output
-// failures, ai.ErrSchema).
-type Planning struct {
-	Seconds  float64 `json:"seconds"`
-	Requests int     `json:"requests"`
-	Failures int     `json:"structuredOutputFailures"`
-}
-
-// tally counts a plan's requests, from sections planned at a time.
-type tally struct {
-	sync.Mutex
-	Planning
-}
-
-// add counts a request that ended with err.
-func (t *tally) add(err error) {
-	t.Lock()
-	defer t.Unlock()
-	if t.Requests++; errors.Is(err, ai.ErrSchema) {
-		t.Failures++
-	}
-}
-
-// sectionName names a section for the model: the code's by its directories,
-// the root as such; the others by what they hold.
-func sectionName(s outline.Section) string {
-	switch s.Kind {
-	case analyzer.Tests:
-		return "tests and benchmarks"
-	case analyzer.Examples:
-		return "examples"
-	case analyzer.Docs:
-		return "documentation and guides"
-	case analyzer.Tooling:
-		return "build, packaging, CI and editor configuration"
-	}
-	names := make([]string, len(s.Dirs))
-	for i, d := range s.Dirs {
-		if names[i] = d + "/"; d == "." {
-			names[i] = "the root folder"
-		}
-	}
-	return strings.Join(names[:min(6, len(names))], ", ")
-}
-
-// declared is, for each of the snapshot's files, the first types and
-// functions it declares, at most 6, or a guide's first 24 sections: what a
-// section's pages can be about, a long README's recipes each a subject.
+// declared is, for each of the snapshot's files, the types and functions it
+// declares, or a guide's sections, each once: a unit's subjects.
 func (g *Generator) declared(ctx context.Context, snap int64) (map[string][]string, error) {
 	out := map[string][]string{}
 	err := g.Store.Declared(ctx, snap, func(p, name string) {
-		most := 6
-		if lang, _ := analyzer.Detect(p); lang == "markdown" {
-			most = 24
-		}
-		if len(out[p]) < most && !slices.Contains(out[p], name) {
-			out[p] = append(out[p], outline.Clip(name, 60))
+		if !slices.Contains(out[p], name) {
+			out[p] = append(out[p], name)
 		}
 	})
 	return out, err

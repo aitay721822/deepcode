@@ -1,5 +1,5 @@
-// Package trace keeps how a bench answer was gathered and written, as the chat
-// service's events tell it.
+// Package trace keeps how a bench answer was gathered and written, and when,
+// as the chat service's events tell it.
 package trace
 
 import (
@@ -80,6 +80,39 @@ func (tr *Trace) Take(event string, data any, at time.Duration) {
 			tr.Raw += d
 		}
 	}
+}
+
+// Clock times an answer by its events. An evidence event starts a draft at
+// the words that follow it. One that no words follow, after a rewrite, lists
+// the standing draft's sources again: the rewrite failed, and the draft
+// before it is the answer.
+type Clock struct {
+	starts  []time.Duration // each draft's first words
+	pending bool            // an evidence event that no words followed yet
+}
+
+// Tick records event, which came at now.
+func (c *Clock) Tick(event string, now time.Duration) {
+	switch {
+	case event == "evidence":
+		c.pending = true
+	case event == "delta" && c.pending:
+		c.pending, c.starts = false, append(c.starts, now)
+	}
+}
+
+// Read is when the answer's first words came, when those of the draft it
+// ended with, and how many drafts were written after the first.
+func (c *Clock) Read() (first, begun time.Duration, rewrites int) {
+	n := len(c.starts)
+	if n == 0 {
+		return 0, 0, 0
+	}
+	last := n - 1
+	if c.pending && n > 1 {
+		last--
+	}
+	return c.starts[0], c.starts[last], n - 1
 }
 
 func sources(v any) []Source {

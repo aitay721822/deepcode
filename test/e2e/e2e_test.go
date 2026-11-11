@@ -21,7 +21,7 @@ import (
 	"deepcode/internal/app"
 	"deepcode/internal/knowledge/chat"
 	"deepcode/internal/knowledge/retrieval"
-	"deepcode/internal/knowledge/wiki"
+	"deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/platform/storage"
 )
@@ -185,10 +185,10 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	// Wiki: planned pages, written with commit-pinned citations.
-	var wk wiki.Wiki
+	var wk view.Wiki
 	admin.get(repoPath+"/wiki", &wk)
 	link := "https://github.com/acme/demo/blob/" + sha1 + "/"
-	if wk.Status != "ready" || len(wk.Pages) != 2 || wk.Pages[0].Slug != "1-overview" ||
+	if wk.Status != "ready" || len(wk.Pages) != 4 || wk.Pages[0].Slug != "1-overview" ||
 		!strings.Contains(wk.Pages[0].Content, link) || len(wk.Pages[0].Citations) == 0 {
 		t.Fatalf("wiki: %+v", wk)
 	}

@@ -2,9 +2,32 @@ package trace
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestClock: an answer begins at its first words, and its last draft at that
+// draft's; a failed rewrite, its evidence listed again with no words after,
+// leaves the draft before it.
+func TestClock(t *testing.T) {
+	for events, want := range map[string][3]int{
+		"evidence delta delta":                                  {1, 1, 0}, // written once
+		"evidence delta search evidence delta delta":            {1, 4, 1}, // rewritten
+		"evidence delta evidence delta evidence":                {1, 1, 1}, // the rewrite failed after words
+		"evidence delta evidence evidence":                      {1, 1, 0}, // and before any
+		"evidence delta evidence delta evidence delta evidence": {1, 3, 2}, // the second rewrite failed
+		"evidence": {0, 0, 0},
+	} {
+		var c Clock
+		for i, e := range strings.Fields(events) {
+			c.Tick(e, time.Duration(i))
+		}
+		if first, begun, rewrites := c.Read(); [3]int{int(first), int(begun), rewrites} != want {
+			t.Errorf("%s: %d %d %d, want %v", events, first, begun, rewrites, want)
+		}
+	}
+}
 
 // TestTake: a trace keeps each call with its arguments as JSON and when it
 // ran, when the gathering ended, the sources shown, dropped, evicted and

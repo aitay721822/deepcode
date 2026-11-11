@@ -10,47 +10,19 @@ import (
 	"strings"
 	"testing"
 
-	"deepcode/internal/knowledge/wiki/outline"
-	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/index/analyzer"
-	"deepcode/internal/repo/index/graph"
 )
 
 // coverage is how many of DeepWiki's topics head's wiki covers, how many of
 // its pages are about tests, CI, manifests or editor settings alone, and the
-// code files no page is planned on.
+// code files no page holds (shape.Shape's).
 type coverage struct {
 	Topics       int      `json:"topics"`
 	Covered      int      `json:"covered"`
 	Missing      []string `json:"missing"`
 	ToolingPages int      `json:"testAndToolingPages"`
 	Unnamed      []string `json:"unnamedCode"`
-}
-
-// unnamed are the code files of the snapshot's code sections that no page's
-// title or query names (outline.Unnamed): each is to be some page's subject.
-func unnamed(ctx context.Context, db *sql.DB, g *graph.Graph, snap int64) ([]string, error) {
-	parts, _, err := g.Parts(ctx, snap, 1)
-	if err != nil {
-		return nil, err
-	}
-	var files []string
-	for f, d := range parts {
-		if d != "" { // a test, example, doc or hidden file is ""
-			files = append(files, f)
-		}
-	}
-	slices.Sort(files)
-	stored, err := (&wikistore.Store{DB: db}).Pages(ctx, snap)
-	if err != nil {
-		return nil, err
-	}
-	pages := make([]outline.Page, len(stored))
-	for i, p := range stored {
-		pages[i] = outline.Page{Title: p.Title, Query: p.Query}
-	}
-	return outline.Unnamed(pages, files), nil
 }
 
 // citeLink is a citation's link, as the wiki writes it; its file is group 1.

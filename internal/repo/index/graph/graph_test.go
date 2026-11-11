@@ -215,17 +215,8 @@ func TestImpact(t *testing.T) {
 	if got, err := g.Impact(ctx, 1, 2, changed); err != nil || !reflect.DeepEqual(got, map[string]bool{"main.go": true, "internal/tools/gen/gen.go": true}) {
 		t.Errorf("a changed signature reached %v (%v), want main.go and gen.go", got, err)
 	}
-	if got, err := g.NewDirs(ctx, 1, 2, 2); err != nil || !reflect.DeepEqual(got, []string{"internal/tools"}) {
-		t.Errorf("new directories %v (%v)", got, err)
-	}
-	if got, _ := g.NewDirs(ctx, 2, 2, 2); len(got) != 0 {
-		t.Errorf("against itself: %v", got)
-	}
 	if got, err := g.Impact(ctx, 1, 3, map[string]bool{"internal/pkg/a.go": true}); err != nil || !reflect.DeepEqual(got, map[string]bool{"main.go": true}) {
 		t.Errorf("a removed file reached %v (%v), want main.go", got, err)
-	}
-	if got, _ := g.NewDirs(ctx, 1, 3, 2); len(got) != 0 {
-		t.Errorf("a directory only its own code and tests import: %v", got)
 	}
 	// The diagram cuts directories as deep as fit.
 	if d, err := g.Diagram(ctx, 2); err != nil || !strings.Contains(d, `["internal/tools/gen"]`) {
@@ -291,34 +282,5 @@ func TestDiagram(t *testing.T) {
 	}
 	if draw(nil) != "" {
 		t.Error("no edges, no diagram")
-	}
-}
-
-// TestParts: every file of code is cut to the least depth of levels that
-// gives enough directories, the folders leading to one other folding into
-// one level; tests, examples and docs to ""; and the imports between the
-// directories counted, those of tests aside.
-func TestParts(t *testing.T) {
-	paths := []string{"main.go", "README.md", "src/a/x.go", "src/a/y.go", "src/a/x_test.go", "src/b/z.go", "src/b/c/d/w.go", "examples/e.go"}
-	edges := []edge{{Src: "src/a/x.go", Dst: "src/b/z.go"}, {Src: "src/a/y.go", Dst: "src/b/c/d/w.go"}, {Src: "src/a/x_test.go", Dst: "src/b/z.go"}, {Src: "main.go", Dst: "src/a/x.go"}}
-	for _, c := range []struct {
-		least int
-		want  map[string]string
-		deps  []DirEdge
-	}{
-		{2, map[string]string{"main.go": ".", "src/a/x.go": "src", "src/a/y.go": "src", "src/b/z.go": "src", "src/b/c/d/w.go": "src"},
-			[]DirEdge{{".", "src", 1}}},
-		{4, map[string]string{"main.go": ".", "src/a/x.go": "src/a", "src/a/y.go": "src/a", "src/b/z.go": "src/b", "src/b/c/d/w.go": "src/b/c/d"},
-			[]DirEdge{{".", "src/a", 1}, {"src/a", "src/b", 1}, {"src/a", "src/b/c/d", 1}}},
-		{99, map[string]string{"main.go": ".", "src/a/x.go": "src/a", "src/a/y.go": "src/a", "src/b/z.go": "src/b", "src/b/c/d/w.go": "src/b/c/d"},
-			[]DirEdge{{".", "src/a", 1}, {"src/a", "src/b", 1}, {"src/a", "src/b/c/d", 1}}},
-	} {
-		got, deps := parts(paths, edges, c.least)
-		for _, p := range []string{"README.md", "src/a/x_test.go", "examples/e.go"} {
-			c.want[p] = ""
-		}
-		if !reflect.DeepEqual(got, c.want) || !reflect.DeepEqual(deps, c.deps) {
-			t.Errorf("least %d: %v %+v", c.least, got, deps)
-		}
 	}
 }

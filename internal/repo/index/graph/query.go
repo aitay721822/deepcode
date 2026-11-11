@@ -7,7 +7,13 @@ import (
 	"strings"
 
 	"deepcode/internal/repo/index/analyzer"
+	"deepcode/internal/repo/index/graph/store"
 )
+
+// Edges returns the snapshot's import edges between its files.
+func (g *Graph) Edges(ctx context.Context, snap int64) ([]store.Edge, error) {
+	return g.Store.Edges(ctx, snap)
+}
 
 // Dependencies returns up to limit files that paths import, paths themselves
 // aside, those more of them import first. Only this direction: a file that
@@ -80,90 +86,6 @@ func (g *Graph) DirEdges(ctx context.Context, snap int64, depth int) ([]DirEdge,
 	return group(edges, depth), err
 }
 
-// maxPartDepth is the deepest level Parts cuts files to.
-const maxPartDepth = 6
-
-// Parts cuts each of the snapshot's files, generated ones aside, to its
-// directory's first levels, as DirEdges cuts them but over every file rather
-// than the linked ones: at the least depth, up to maxPartDepth, that gives at
-// least least directories. A test, example or doc file is cut to "". It also
-// returns the imports between the directories, most first: the parts a
-// wiki's sections are made of, and how they depend on each other.
-func (g *Graph) Parts(ctx context.Context, snap int64, least int) (map[string]string, []DirEdge, error) {
-	paths, err := g.Store.HandWritten(ctx, snap)
-	if err != nil {
-		return nil, nil, err
-	}
-	edges, err := g.Store.Edges(ctx, snap)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, deps := parts(paths, edges, least)
-	return out, deps, nil
-}
-
-// parts is Parts for the files paths and their imports edges.
-func parts(paths []string, edges []edge, least int) (map[string]string, []DirEdge) {
-	out := map[string]string{}
-	var code []edge // each file of code once, as both ends: the tree is cut by their folders
-	for _, p := range paths {
-		if out[p] = ""; !secondary(p) {
-			code = append(code, edge{Src: p, Dst: p})
-		}
-	}
-	t := levels(code)
-	depth := 1
-	for ; depth < maxPartDepth; depth++ {
-		dirs := map[string]bool{}
-		for _, e := range code {
-			dirs[t.cut(e.Src, depth)] = true
-		}
-		if len(dirs) >= least {
-			break
-		}
-	}
-	for _, e := range code {
-		out[e.Src] = t.cut(e.Src, depth)
-	}
-	t.pairs = nil
-	for _, e := range edges {
-		if out[e.Src] != "" && out[e.Dst] != "" {
-			t.pairs = append(t.pairs, e.Src, e.Dst)
-		}
-	}
-	return out, t.group(depth)
-}
-
-// NewDirs returns the directories, cut to depth segments, that snapshot snap
-// holds and base did not and that files outside them import, tests, examples
-// and docs aside: a subsystem a change added and wired in.
-// ponytail: plain segments, not group's levels, so a new Java package under
-// src/main/java goes unseen here; cut both snapshots by one levels if it matters.
-func (g *Graph) NewDirs(ctx context.Context, base, snap int64, depth int) ([]string, error) {
-	paths, err := g.Store.Paths(ctx, base)
-	if err != nil {
-		return nil, err
-	}
-	old := map[string]bool{}
-	for _, p := range paths {
-		old[cut(p, depth)] = true
-	}
-	edges, err := g.Store.Edges(ctx, snap)
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	var out []string
-	for _, e := range edges {
-		if d := cut(e.Dst, depth); d != "." && !old[d] && !seen[d] && cut(e.Src, depth) != d && !secondary(e.Src) && !secondary(e.Dst) {
-			seen[d] = true
-			out = append(out, d)
-		}
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
 // group counts edges between directories cut to depth levels, most first,
 // leaving out those within one and those of tests, examples and docs.
 func group(edges []edge, depth int) []DirEdge { return levels(edges).group(depth) }
@@ -194,17 +116,6 @@ func (t tree) group(depth int) []DirEdge {
 // too: what such a file imports shows how the code is used, not how its parts
 // depend on each other, and examples alone can crowd a diagram of them.
 var secondary = analyzer.Secondary
-
-// cut is the directory of file p cut to its first depth segments, "." at the
-// root.
-func cut(p string, depth int) string {
-	d := dir(p)
-	if d == "" {
-		return "."
-	}
-	parts := strings.Split(d, "/")
-	return strings.Join(parts[:min(depth, len(parts))], "/")
-}
 
 // tree is the directories of the files that edges link, tests, examples and
 // docs aside, cut by levels: a level is a directory that holds one of the

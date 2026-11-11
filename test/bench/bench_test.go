@@ -54,6 +54,7 @@ import (
 	"deepcode/internal/repo/index/indexer"
 	indexstore "deepcode/internal/repo/index/indexer/store"
 	"deepcode/internal/repo/index/vectorstore"
+	"deepcode/test/bench/shape"
 	"deepcode/test/bench/trace"
 	"deepcode/test/eval"
 )
@@ -222,7 +223,7 @@ func chatModel(t *testing.T, measure func(ai.Usage)) *ai.OpenAI {
 // fails is noted and the rest go on where they can.
 func (r *rig) measure(t *testing.T, id int64, tg target) result {
 	ctx := context.Background()
-	res := result{Repo: tg.name, URL: tg.url, Base: tg.base, Head: tg.head}
+	res := result{Repo: tg.name, URL: tg.url, Base: tg.base, Head: tg.head, DeepWiki: tg.pages}
 	fail := func(step string, err error) {
 		res.Errors, res.Failed = append(res.Errors, step+": "+err.Error()), append(res.Failed, step)
 		t.Logf("%s %s: %v", tg.name, step, err)
@@ -324,12 +325,12 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 		fail("topics", err)
 	} else if n, err := toolingPages(ctx, r.db, snap); err != nil {
 		fail("topics", err)
-	} else if left, err := unnamed(ctx, r.db, r.ix.Graph, snap); err != nil {
+	} else if s, err := shape.Measure(ctx, r.db, snap); err != nil {
 		fail("topics", err)
 	} else if len(res.Tree) > 0 { // a wiki to measure
 		c := cover(tg.topics, heads)
-		c.ToolingPages, c.Unnamed = n, left
-		res.Topics = &c
+		c.ToolingPages, c.Unnamed = n, s.Unnamed
+		res.Topics, res.Plan = &c, &s
 	}
 	if d, err := r.ix.Graph.Diagram(ctx, snap); err != nil {
 		fail("diagram", err)
@@ -450,15 +451,15 @@ func (r *rig) writeWiki(ctx context.Context, id int64, sha string, fail func(str
 	return w
 }
 
-// ask asks q as a user would and times it (clock), keeping what its evidence
+// ask asks q as a user would and times it (trace.Clock), keeping what its evidence
 // event tells of the search: its rounds, and the gathering's calls and stop,
 // the trace of its events, and each of its model requests' usage.
 func (r *rig) ask(ctx context.Context, id int64, q string) answer {
 	r.meter.take()
-	a, start, c := answer{Question: q, Trace: &trace.Trace{}}, time.Now(), clock{}
+	a, start, c := answer{Question: q, Trace: &trace.Trace{}}, time.Now(), trace.Clock{}
 	err := r.chat.Ask(ctx, chat.Request{RepoID: id, Question: q, UserID: 1}, func(event string, data any) {
 		at := time.Since(start)
-		c.tick(event, at)
+		c.Tick(event, at)
 		a.Trace.Take(event, data, at)
 		if d, ok := data.(map[string]any); ok && event == "evidence" {
 			a.Rounds, _ = d["rounds"].(int)
@@ -468,7 +469,7 @@ func (r *rig) ask(ctx context.Context, id int64, q string) answer {
 			a.Answer, a.Citations = m.Content, len(m.Citations)
 		}
 	})
-	first, begun, rewrites := c.read()
+	first, begun, rewrites := c.Read()
 	a.FirstTokenSeconds, a.AnswerStartSeconds, a.Rewrites, a.Seconds = first.Seconds(), begun.Seconds(), rewrites, since(start)
 	_, _, a.Requests = r.meter.take()
 	if err != nil {

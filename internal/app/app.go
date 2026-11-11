@@ -35,6 +35,7 @@ import (
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/knowledge/wiki"
 	wikistore "deepcode/internal/knowledge/wiki/store"
+	"deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/events"
@@ -116,7 +117,7 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	handler, err := server.Router(
 		&authapi.API{Sessions: sessions, Tokens: tokens, OAuth: &oauth.Service{Store: &oauthstore.Store{DB: db}, Tokens: tokens}},
 		&repoapi.API{Sessions: sessions, Tokens: tokens, Catalog: cat, Importer: &importer.Service{Catalog: cat}, Servers: servers, Queue: queue,
-			Retriever: retriever, Chat: conversations, Wiki: wiki.Reader{Store: wikis, Graph: graphs}},
+			Retriever: retriever, Chat: conversations, Wiki: view.Reader{Store: wikis, Graph: graphs}},
 		&adminapi.API{Sessions: sessions, Accounts: accounts, Roles: roles, Servers: servers, Catalog: cat, Queue: queue, Bus: bus},
 		gin.H{"status": "ok", "chatModel": cfg.ChatModel, "embeddingModel": cfg.EmbedModel},
 		ui, loopback, cfg.TrustedProxies)

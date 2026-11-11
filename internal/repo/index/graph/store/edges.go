@@ -155,26 +155,6 @@ func (s *Store) Declarations(ctx context.Context, snap int64, paths map[string]b
 	return parts, rows.Err()
 }
 
-// Paths returns the paths of the snapshot's files.
-func (s *Store) Paths(ctx context.Context, snap int64) ([]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT path FROM source_files WHERE snapshot_id = ?`, snap)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanPaths(rows)
-}
-
-// HandWritten returns the paths of the snapshot's files that are not generated.
-func (s *Store) HandWritten(ctx context.Context, snap int64) ([]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT path FROM source_files WHERE snapshot_id = ? AND NOT generated`, snap)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanPaths(rows)
-}
-
 // scanPaths reads the paths that a query of one text column returned.
 func scanPaths(rows *sql.Rows) ([]string, error) {
 	var out []string

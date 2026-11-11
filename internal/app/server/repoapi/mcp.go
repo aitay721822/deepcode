@@ -20,7 +20,7 @@ import (
 	"deepcode/internal/access/token"
 	"deepcode/internal/app/server/httpx"
 	"deepcode/internal/knowledge/chat"
-	"deepcode/internal/knowledge/wiki"
+	wikiview "deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/repo/catalog"
 )
 
@@ -211,7 +211,7 @@ func (a *API) listTool(ctx context.Context, req *mcp.CallToolRequest, _ noArgs) 
 
 // numbered gives each wiki page its number as the wiki shows it: 2, and 2.1
 // for the first page under it.
-func numbered(pages []wiki.Page) []string {
+func numbered(pages []wikiview.Page) []string {
 	nums, at, under, top := make([]string, len(pages)), map[string]int{}, map[string]int{}, 0
 	for i, p := range pages {
 		if j, ok := at[p.Parent]; ok && p.Parent != "" {
@@ -227,10 +227,10 @@ func numbered(pages []wiki.Page) []string {
 }
 
 // wikiOf loads the repository's wiki, or says why it has none.
-func (a *API) wikiOf(ctx context.Context, req *mcp.CallToolRequest, name string) (wiki.Wiki, error) {
+func (a *API) wikiOf(ctx context.Context, req *mcp.CallToolRequest, name string) (wikiview.Wiki, error) {
 	r, err := a.repo(ctx, req, name, role.RepoRead)
 	if err != nil {
-		return wiki.Wiki{}, err
+		return wikiview.Wiki{}, err
 	}
 	w, err := a.Wiki.Load(ctx, r.ID)
 	if err != nil {

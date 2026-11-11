@@ -42,9 +42,8 @@ const overviewNote = "This page is the overview: include a \"##\" section on the
 // a diagram, drawn from the import graph.
 const drawnNote = "This page is the overview, and a diagram of the imports between the repository's directories is shown with it: draw no diagram of your own.\n\n"
 
-// write drafts page p, one of pages, from its sources, steered by the
-// repository's notes (a block from steer, or ""): a section's page as its
-// overview, a page under one as one of its parts. The model's text streams
+// write drafts page p, one of pages, from its sources: a section's page as
+// its overview, a page under one as one of its parts. The model's text streams
 // into the job's output as it is written. A page none of whose citations can
 // be checked is asked for once more, shown one; it stands if that fails.
 //
@@ -52,7 +51,7 @@ const drawnNote = "This page is the overview, and a diagram of the imports betwe
 // the model server's prompt cache reads the start once: the rules, the wiki's
 // own lines, the sources its section's pages share, then this page's request
 // and its own sources.
-func (g *Generator) write(ctx context.Context, snap int64, repo string, src source, p page, pages []page, notes string, progress jobs.Progress) (string, []evidence.Citation, error) {
+func (g *Generator) write(ctx context.Context, snap int64, repo string, src source, p page, pages []page, progress jobs.Progress) (string, []evidence.Citation, error) {
 	head, inSection := section(p, pages)
 	shared, own, err := g.sources(ctx, snap, p, head, inSection)
 	if err != nil {
@@ -96,8 +95,8 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 		place = fmt.Sprintf("This page is part of the section %q: keep to its own subject, which the section's other pages do not cover.\n\n", section)
 	}
 	write, flush := progress.Lines()
-	ask := ai.Prompt{Static: writePrompt, Dynamic: fmt.Sprintf("Repository: %s at commit %s. Write in %s.\nPages of this wiki: %s\n\n%s%s%s%sWrite the page %q. Focus: %s\n\nSources:\n\n%s",
-		repo, src.sha[:min(7, len(src.sha))], g.Language, strings.Join(titles, " | "), notes, common, overview, place, p.Title, p.Query, sources)}
+	ask := ai.Prompt{Static: writePrompt, Dynamic: fmt.Sprintf("Repository: %s at commit %s. Write in %s.\nPages of this wiki: %s\n\n%s%s%sWrite the page %q. Focus: %s\n\nSources:\n\n%s",
+		repo, src.sha[:min(7, len(src.sha))], g.Language, strings.Join(titles, " | "), common, overview, place, p.Title, p.Query, sources)}
 	out, err := g.Chat.Stream(ctx, ask, write)
 	flush()
 	if err != nil {
@@ -134,7 +133,7 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 // once: its hits are both.
 func (g *Generator) sources(ctx context.Context, snap int64, p, head page, inSection bool) (shared, own []retrieval.Hit, err error) {
 	if inSection {
-		res, err := g.Retriever.Search(ctx, snap, head.Title+"\n"+head.Query, pageHits)
+		res, err := g.Retriever.Search(ctx, snap, search(head), pageHits)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -143,7 +142,7 @@ func (g *Generator) sources(ctx context.Context, snap int64, p, head page, inSec
 	if inSection && head.Position == p.Position {
 		own = slices.Clone(shared)
 	} else {
-		res, err := g.Retriever.Search(ctx, snap, p.Title+"\n"+p.Query, pageHits)
+		res, err := g.Retriever.Search(ctx, snap, search(p), pageHits)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -157,6 +156,22 @@ func (g *Generator) sources(ctx context.Context, snap int64, p, head page, inSec
 		return nil, nil, err
 	}
 	return shared, dedupe(append(readme, own...)), nil
+}
+
+// maxNamed is the most file names a search reads whole (retrieval.FileNames).
+const maxNamed = 16
+
+// search is what page p's search looks for: its title, its terms, and its
+// files, the chosen first, which the search reads by name. ponytail: the
+// page search reads its files by name from the query; SearchPage (3d's
+// writing) reads Files and anchors directly.
+func search(p page) string {
+	s := p.Title + "\n" + p.Query
+	if p.Files != nil {
+		files := append(slices.Clone(p.Files.Chosen), p.Files.Placed...)
+		s += "\n" + strings.Join(files[:min(len(files), maxNamed)], " ")
+	}
+	return s
 }
 
 // section is the section page p is in: p itself when pages sit under it, or

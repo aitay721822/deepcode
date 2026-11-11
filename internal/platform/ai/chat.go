@@ -4,15 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
-	checker "github.com/google/jsonschema-go/jsonschema"
-	"github.com/invopop/jsonschema"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
@@ -28,51 +25,6 @@ const maxAnswer = 1 << 20
 
 // StripThinking drops <think> blocks that some servers leave in the content.
 func StripThinking(s string) string { return strings.TrimSpace(thinkRe.ReplaceAllString(s, "")) }
-
-// ErrSchema: an answer asked for in a JSON schema (structured outputs) that is
-// not that JSON. A server that refuses the request fails with its own words,
-// as for any other request.
-var ErrSchema = errors.New("the chat endpoint must support structured outputs (json_schema)")
-
-// Format is a structured output: answers asked for in the JSON schema of a T
-// and read into a T.
-type Format[T any] struct{ schema }
-
-// schema is a JSON schema, under the name a request gives it, and resolved
-// to check answers by.
-type schema struct {
-	Name  string
-	JSON  map[string]any
-	check *checker.Resolved
-}
-
-// Schema is the Format of T, its schema made as the SDK's README makes one
-// (GenerateSchema): every field required, no other, no $ref.
-func Schema[T any](name string) Format[T] {
-	r := jsonschema.Reflector{AllowAdditionalProperties: false, DoNotReference: true}
-	var v T
-	data, err := json.Marshal(r.Reflect(v))
-	if err != nil {
-		panic(err) // a Go type no schema describes: a mistake in the code
-	}
-	// Kept as raw JSON, so no number is rounded through float64.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		panic(err)
-	}
-	var c checker.Schema
-	if err := json.Unmarshal(data, &c); err != nil {
-		panic(err)
-	}
-	s := schema{Name: name, JSON: make(map[string]any, len(raw))}
-	if s.check, err = c.Resolve(nil); err != nil {
-		panic(err)
-	}
-	for k, v := range raw {
-		s.JSON[k] = v
-	}
-	return Format[T]{s}
-}
 
 // Tool is a function the model may call (Exchange), with its arguments in a
 // Format's JSON: the function bears the Format's name.
@@ -90,40 +42,6 @@ func (f Format[T]) Tool(description string) Tool { return Tool{description, f.sc
 type ToolCall struct {
 	ID, Name, Arguments string
 	Key                 int
-}
-
-// Decode reads text, f's JSON, into a T, its schema checked, so {} is not a T
-// with nothing in it.
-func Decode[T any](f Format[T], text string) (v T, err error) {
-	var doc any
-	if err = json.Unmarshal([]byte(text), &doc); err == nil {
-		err = f.check.Validate(doc)
-	}
-	if err == nil {
-		err = json.Unmarshal([]byte(text), &v)
-	}
-	if err != nil {
-		return v, fmt.Errorf("not the JSON of %s (%w)", f.Name, err)
-	}
-	return v, nil
-}
-
-// StreamJSON streams c's answer to p in f's JSON, relaying its text as it
-// comes, and reads it into a T (Decode); reply is the answer as written. An
-// answer that is not f's JSON is an error wrapping ErrSchema; one cut at the
-// output budget says so instead.
-func StreamJSON[T any](ctx context.Context, c *OpenAI, p Prompt, f Format[T], onDelta func(string)) (v T, reply string, err error) {
-	reply, spent, err := c.stream(ctx, p.messages(), &f.schema, onDelta)
-	if err != nil {
-		return v, reply, err
-	}
-	if spent && !json.Valid([]byte(reply)) {
-		return v, reply, fmt.Errorf("%s: the answer reached the output budget before its JSON ended: raise DEEPCODE_MAX_OUTPUT_TOKENS", c.ModelName)
-	}
-	if v, err = Decode(f, reply); err != nil {
-		return v, reply, fmt.Errorf("%s: the answer is %w: %w", c.ModelName, err, ErrSchema)
-	}
-	return v, reply, nil
 }
 
 // Generate returns the model's whole answer to p.

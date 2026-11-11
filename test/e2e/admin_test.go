@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"deepcode/internal/knowledge/wiki"
+	"deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/platform/jobs"
 )
 
@@ -40,7 +40,7 @@ func checkJobConsole(t *testing.T, admin *client, repoID string) {
 	for _, l := range detail.Logs {
 		text.WriteString(l.Line + "\n")
 	}
-	for _, want := range []string{"planned 2 pages: Overview | Web App", "[Overview] == page 1 of 2", "It is defined in [", "succeeded"} {
+	for _, want := range []string{"planned 4 pages: Overview | Server | Web App | Build and tooling", "[Overview] == page 1 of 4", "It is defined in [", "succeeded"} {
 		if !strings.Contains(text.String(), want) {
 			t.Fatalf("wiki job log lacks %q:\n%s", want, text.String())
 		}
@@ -110,7 +110,7 @@ func checkGitLab(t *testing.T, admin *client, api *fakeAPI, apiURL, sha string) 
 		failIfJobFailed(t, repo.Job)
 		return repo.Snapshot != nil && repo.Snapshot.WikiStatus == "ready" && repo.Job.Finished()
 	})
-	var wk wiki.Wiki
+	var wk view.Wiki
 	admin.get(path+"/wiki", &wk)
 	if link := "https://gitlab.example.test/group/sub/app/-/blob/" + sha + "/"; !strings.Contains(wk.Pages[0].Content, link) {
 		t.Fatalf("GitLab wiki links: %s", wk.Pages[0].Content)

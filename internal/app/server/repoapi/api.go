@@ -14,7 +14,7 @@ import (
 	"deepcode/internal/app/server/httpx"
 	"deepcode/internal/knowledge/chat"
 	"deepcode/internal/knowledge/retrieval"
-	"deepcode/internal/knowledge/wiki"
+	wikiview "deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/catalog"
 	"deepcode/internal/repo/gitserver"
@@ -31,7 +31,7 @@ type API struct {
 	Queue     *jobs.Queue
 	Retriever *retrieval.Retriever
 	Chat      *chat.Service
-	Wiki      wiki.Reader
+	Wiki      wikiview.Reader
 }
 
 // Mount adds the routes to r, whose requests are signed in.

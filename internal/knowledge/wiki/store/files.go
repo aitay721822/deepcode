@@ -5,13 +5,6 @@ import (
 	"encoding/json"
 )
 
-// FileCount counts the snapshot's indexed files, generated ones aside.
-func (s *Store) FileCount(ctx context.Context, snap int64) (int, error) {
-	var n int
-	err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM source_files WHERE snapshot_id = ? AND NOT generated`, snap).Scan(&n)
-	return n, err
-}
-
 // Paths returns the paths of the snapshot's files, generated ones aside, in
 // order.
 func (s *Store) Paths(ctx context.Context, snap int64) ([]string, error) {
@@ -94,6 +87,30 @@ func (s *Store) Symbols(ctx context.Context, snap int64, paths []string) (map[st
 			out[p] = map[string]bool{}
 		}
 		out[p][symbol] = true
+	}
+	return out, rows.Err()
+}
+
+// Hashes returns the content hash of each of paths the snapshot holds:
+// a path gone from one snapshot and a new one with its hash is a rename.
+func (s *Store) Hashes(ctx context.Context, snap int64, paths []string) (map[string]string, error) {
+	list, err := json.Marshal(paths)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT path, content_hash FROM source_files
+		WHERE snapshot_id = ? AND path IN (SELECT value FROM json_each(?))`, snap, string(list))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var p, hash string
+		if err := rows.Scan(&p, &hash); err != nil {
+			return nil, err
+		}
+		out[p] = hash
 	}
 	return out, rows.Err()
 }

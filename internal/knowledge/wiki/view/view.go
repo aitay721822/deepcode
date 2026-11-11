@@ -1,4 +1,7 @@
-package wiki
+// Package view reads the wikis that wiki.Generator writes, as they are
+// shown: the snapshot to show, its pages with their citations, each under its
+// section, and the overview's diagram.
+package view
 
 import (
 	"context"
@@ -31,7 +34,7 @@ type Wiki struct {
 	Pages      []Page `json:"pages"`
 }
 
-// Reader reads the wikis that Generator writes.
+// Reader reads the wikis that wiki.Generator writes.
 type Reader struct {
 	Store *store.Store
 	Graph *graph.Graph // the imports, drawn on the overview
