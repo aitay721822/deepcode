@@ -230,6 +230,25 @@ func TestFlat(t *testing.T) {
 	if Flat(units, append(asides, Unit{Key: analyzer.Docs, Kind: analyzer.Docs, Files: []string{"g.md"}, Cap: 1}), nil) {
 		t.Error("9 pages is flat")
 	}
+	// A flat plan keeps every page at the top: an aside of two pages gets no
+	// head, so its caps alone count.
+	if !Flat(units, []Unit{{Key: analyzer.Docs, Kind: analyzer.Docs, Cap: 2}}, nil) {
+		t.Error("a two-page aside's head is no page of a flat plan")
+	}
+}
+
+// TestWantedHeads (G7d): an aside of two pages or more counts its head, as
+// the plan gives a part of two pages or more one, and one of one page none.
+func TestWantedHeads(t *testing.T) {
+	units := []Unit{unit("a/", 2, 200)} // one section of two, with its head
+	docs := []Unit{{Key: analyzer.Docs, Kind: analyzer.Docs, Cap: 2, Weight: 200}}
+	if got := Wanted(units, [][]int{{0}}, docs, nil); got != 7 { // 1 overview + 2 + head + 2 + head
+		t.Errorf("two-page aside: %d pages wanted, want 7", got)
+	}
+	docs[0].Cap = 1
+	if got := Wanted(units, [][]int{{0}}, docs, nil); got != 5 { // 1 + 2 + head + 1
+		t.Errorf("one-page aside: %d pages wanted, want 5", got)
+	}
 }
 
 // TestCeiling (G6): the most pages per weight lose one first, docs at a third
@@ -251,7 +270,7 @@ func TestCeiling(t *testing.T) {
 	}
 	docs := []Unit{{Key: analyzer.Docs, Kind: analyzer.Docs, Files: []string{"a.md", "b.md", "c.md", "d.md"}, Cap: 4, Weight: 600}} // 4 pages for 200 weighed: more per weight than x
 	units, _, _ = Ceiling(two(), docs, nil, nil, 17)
-	if docs[0].Cap != 3 || units[0].Cap != 5 {
+	if docs[0].Cap != 2 || units[0].Cap != 5 { // 19 wanted: docs' head takes one too, so docs trims to 2
 		t.Errorf("docs first: docs %d, x %d", docs[0].Cap, units[0].Cap)
 	}
 	four := []Unit{unit("a/", 1, 40, "a/a.go"), unit("b/", 1, 30, "b/b.go"), unit("c/", 1, 20, "c/c.go"), unit("d/", 1, 10, "d/d.go")}

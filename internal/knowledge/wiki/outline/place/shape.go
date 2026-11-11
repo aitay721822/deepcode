@@ -118,8 +118,9 @@ func Share(a Unit, lines map[string]int, p int) int {
 // Tied reports whether aside kind k's share follows the code pages.
 func Tied(k string) bool { return k == analyzer.Tests || k == analyzer.Tooling }
 
-// asideCaps is the asides' pages: docs and examples at their caps, tests and
-// tooling at their shares of p code pages.
+// asideCaps is the asides' pages planned flat, a whole kind at a time: docs
+// and examples at their caps, tests and tooling at their shares of p code
+// pages.
 func asideCaps(asides []Unit, lines map[string]int, p int) int {
 	n := 0
 	for _, a := range asides {
@@ -132,9 +133,25 @@ func asideCaps(asides []Unit, lines map[string]int, p int) int {
 	return n
 }
 
-// Wanted is the pages a plan of sections over units and asides may take:
-// the overview, each section's caps and a head when they sum to 2 or more,
-// and the asides' (asideCaps at p = the code caps).
+// asideHeads is the head pages the sectioned plan gives the asides of two
+// pages or more, one each.
+func asideHeads(asides []Unit, lines map[string]int, p int) int {
+	n := 0
+	for _, a := range asides {
+		k := a.Cap
+		if Tied(a.Kind) {
+			k = Share(a, lines, p)
+		}
+		if k >= 2 {
+			n++
+		}
+	}
+	return n
+}
+
+// Wanted is the pages a sectioned plan of sections over units and asides may
+// take: the overview, each section's caps and a head when they sum to 2 or
+// more, and the asides' (asideCaps at p = the code caps) and their heads.
 func Wanted(units []Unit, sections [][]int, asides []Unit, lines map[string]int) int {
 	n, p := 1, 0
 	for _, s := range sections {
@@ -146,7 +163,7 @@ func Wanted(units []Unit, sections [][]int, asides []Unit, lines map[string]int)
 			n++
 		}
 	}
-	return n + asideCaps(asides, lines, p)
+	return n + asideCaps(asides, lines, p) + asideHeads(asides, lines, p)
 }
 
 // Flat reports whether a wiki of units and asides is planned flat: 1 + the

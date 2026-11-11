@@ -295,7 +295,7 @@ func TestRunPlansSections(t *testing.T) {
 	}
 	var trimmed Planning
 	g = runWiki(t, testDB(t, stmts...), &fakeModel{}, "abc", func(g *Generator) { g.MaxPages, g.Planned = 8, func(p Planning) { trimmed = p } })
-	if pages, _ := g.Store.Pages(context.Background(), 1); trimmed.Ceiling == nil || *trimmed.Ceiling != (Ceiling{Limit: 8, Wanted: 12, Planned: len(pages)}) || len(pages) > 8 {
+	if pages, _ := g.Store.Pages(context.Background(), 1); trimmed.Ceiling == nil || *trimmed.Ceiling != (Ceiling{Limit: 8, Wanted: 13, Planned: len(pages)}) || len(pages) > 8 {
 		t.Fatalf("under a ceiling of 8: %+v, %d pages", trimmed.Ceiling, len(pages))
 	}
 }

@@ -241,3 +241,44 @@ func TestRunFollowsImports(t *testing.T) {
 		})
 	}
 }
+
+// TestRunCeilingCountsAsideHead: a multi-page aside stores a head over its
+// pages, and the ceiling counts it, so the plan keeps to DEEPCODE_WIKI_MAX_PAGES
+// rather than storing one page past it.
+func TestRunCeilingCountsAsideHead(t *testing.T) {
+	stmts := []string{`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`, `INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`,
+		`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'api/a1.go', 'store/s1.go'), (1, 'api/a2.go', 'store/s2.go'), (1, 'web/w1.go', 'api/a1.go'), (1, 'docs/d1.md', 'ex/x.go')`}
+	files := []string{"main.go", "go.mod", "docs/d1.md", "docs/d2.md", "api/a1.go", "api/a2.go", "api/a3.go", "api/a4.go", "store/s1.go", "store/s2.go",
+		"store/s3.go", "store/s4.go", "web/w1.go", "web/w2.go", "web/w3.go", "web/w4.go", "api/a1_test.go", "store/s1_test.go", ".github/ci.yml", "ex/x.go"}
+	for _, f := range files {
+		lines := map[bool]int{false: 100, true: 600}[strings.HasPrefix(f, "docs/")]
+		stmts = append(stmts, fmt.Sprintf(`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, '%s', 'go', 'h', 1, %d)`, f, lines))
+		if strings.HasPrefix(f, "api/") {
+			stmts = append(stmts, fmt.Sprintf(`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, '%[1]s', '%[1]sA', 'A', 'function', 1, 1), (1, '%[1]s', '%[1]sB', 'B', 'function', 2, 2)`, f))
+		}
+	}
+	db := testDB(t, append(stmts, `INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'api/a1.go', 1, 1, 'core entry tests', 'c')`)...)
+	model := &fakeModel{asked: map[string]int{}, alter: func(name string, n int, reply map[string]any) {
+		if name != "wiki_aside" || n > 0 { // the docs aside: two pages
+			return
+		}
+		pages := reply["pages"].([]any)
+		second := map[string]any{}
+		for k, v := range pages[0].(map[string]any) {
+			second[k] = v
+		}
+		second["title"] = "Docs 2"
+		reply["pages"] = append(pages, second)
+		assign := reply["assign"].(map[string]any)
+		assign["docs/d1.md"], assign["docs/d2.md"] = 0, 1
+	}}
+	var planned Planning
+	g := runWiki(t, db, model, "abc", func(g *Generator) { g.MaxPages, g.Planned = 10, func(p Planning) { planned = p } })
+	pages, err := g.Store.Pages(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) > 10 || planned.Ceiling == nil || planned.Ceiling.Wanted != 13 {
+		t.Fatalf("under a ceiling of 10: %+v, %d pages", planned.Ceiling, len(pages))
+	}
+}
