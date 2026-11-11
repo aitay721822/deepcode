@@ -299,8 +299,8 @@ func apart(key string, n, k int) place.Unit {
 	return u
 }
 
-// TestGroups (5.1, level 1): a group (aside.Group) is one unit: assigned one
-// page under "assign", it puts the units it joins there and counts as one; a
+// TestGroups (5.1, level 1): a group (aside.Group) is one unit to assign, its
+// page holding the units it joins; it counts those units to the crowd, so a
 // crowd the caller fixes holds however many pages the reply gives. Its line
 // names how many units it joins and an even sample of them, never their
 // headings, over a budget of names: one group of 1000 names all, 100 of 20
@@ -327,13 +327,37 @@ func TestGroups(t *testing.T) {
 	if p := AsidePages(r, units); len(p) != 2 || !slices.Equal(p[1].Units, []string{"d/1.md", "d/2.md", "d/3.md"}) || !slices.Equal(p[0].Units, []string{"g1"}) {
 		t.Errorf("a group's page: %+v", p)
 	}
-	// A group of 20 and a unit on one page are two units, not 21: within the crowd of 2 on one page (6).
+	// A group of 20 and a unit on one of four pages are 21 units, over the
+	// seat of 20 (the crowd of 12, but one unit joins 20), and fixed to a page
+	// each: code may not split a group.
 	two := []place.Unit{group("d/", 20), unit("g1", 1)}
-	if vs := checkAside(AsideReply{Pages: []Head{{"P", none}}, Assign: map[string]*int{"g1": new(int), "d/": new(int)}}, two, 1, func(n int) int { return Crowd(2, n) }); len(vs) != 0 {
-		t.Errorf("a group counted as its units: %v", rules(vs))
+	turn := Aside(nil, two, 4, "docs")
+	spread := AsideReply{Pages: []Head{{"P", none}, {"Q", none}, {"R", none}, {"S", none}}, Assign: map[string]*int{"g1": new(int), "d/": new(int)}}
+	if got := rules(turn.Check(spread)); !slices.Contains(got, "aside.crowded") {
+		t.Errorf("a group counted as its units: %v", got)
+	}
+	turn.Fix(&spread)
+	grouped := 0
+	for _, p := range AsidePages(spread, two) {
+		if slices.Contains(p.Units, "d/1.md") {
+			grouped = len(p.Units)
+		}
+	}
+	if len(spread.Pages) != 2 || len(turn.Check(spread)) != 0 || grouped != 20 {
+		t.Errorf("a crowded group's fix: %+v", spread.Pages)
+	}
+	// A group left loose with every page used takes the least full page's
+	// room: its smaller units go first, and every unit still finds a page.
+	full := []place.Unit{group("d/", 10), unit("a", 1), unit("b", 1), unit("c", 1), unit("d", 1), unit("e", 1)}
+	ptr := func(i int) *int { return &i }
+	packed := AsideReply{Pages: []Head{{"P", none}, {"Q", none}, {"R", none}}, Assign: map[string]*int{"a": ptr(0), "b": ptr(0), "c": ptr(1), "d": ptr(2), "e": ptr(2)}}
+	fix := Aside(nil, full, 3, "docs")
+	fix.Fix(&packed)
+	if len(fix.Check(packed)) != 0 || len(packed.Pages) > 3 || len(AsidePages(packed, full)[0].Units)+len(AsidePages(packed, full)[1].Units)+len(AsidePages(packed, full)[2].Units) != 15 {
+		t.Errorf("a loose group at the page bound: %+v", rules(fix.Check(packed)))
 	}
 	// A batch planned apart in at most 10 pages crowds past 6 (20 units over 10), however few pages its reply gives: two
-	// of ten are crowded, and fixed by new pages, four of 6, 6, 6 and 2; an aside's crowd is over the reply's pages, 20 over two.
+	// of ten are crowded, and fixed by new pages, four of 6, 6, 6 and 2; a level 1 aside crowds over its most too.
 	var twenty []place.Unit
 	for i := range 20 {
 		twenty = append(twenty, unit(fmt.Sprint("u", i), 1))
@@ -343,7 +367,7 @@ func TestGroups(t *testing.T) {
 		halves.Assign[u.Key] = &[]int{0, 1}[i%2]
 	}
 	batch := AsideBatch(nil, twenty, 10, "docs")
-	if got := rules(batch.Check(halves)); !slices.Equal(got, []string{"aside.crowded", "aside.crowded"}) || len(Aside(nil, twenty, 10, "docs").Check(halves)) != 0 {
+	if got := rules(batch.Check(halves)); !slices.Equal(got, []string{"aside.crowded", "aside.crowded"}) || !slices.Equal(rules(Aside(nil, twenty, 10, "docs").Check(halves)), got) {
 		t.Errorf("a batch's crowd: %v", got)
 	}
 	if batch.Fix(&halves); len(halves.Pages) != 4 || len(batch.Check(halves)) != 0 || len(AsidePages(halves, twenty)[3].Units) != 2 {
