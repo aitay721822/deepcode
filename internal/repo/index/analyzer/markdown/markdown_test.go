@@ -54,3 +54,19 @@ func TestSections(t *testing.T) {
 		t.Error("sections of an empty file")
 	}
 }
+
+// TestIncludes: mdBook's include, rustdoc_include and playground name a file
+// up to a space, colon or the braces, in code blocks too and each once; an
+// escaped one, another directive, or a link is none.
+func TestIncludes(t *testing.T) {
+	src := "{{#include ../listings/a/src/main.rs:here}}\n```rust\n{{ #rustdoc_include ./b.rs:2:10 }}\n```\n" +
+		"\\{{#include c.rs}}\n{{#playground d.rs editable}}\n{{#include ../listings/a/src/main.rs}}\n" +
+		"{{#title x}}\n[e](e.rs)\n{{#include f/output.txt}}"
+	want := []string{"../listings/a/src/main.rs", "./b.rs", "d.rs", "f/output.txt"}
+	if got := Includes([]byte(src)); strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if Includes([]byte("# Title\n")) != nil {
+		t.Error("includes of a file with none")
+	}
+}

@@ -1,6 +1,7 @@
 // Package markdown reads the sections of a Markdown file as symbols, so that
 // a guide is chunked, searched and planned by its headings as code is by its
-// declarations: a README's recipes each a subject of their own.
+// declarations: a README's recipes each a subject of their own; and the files
+// its mdBook directives include, as its imports.
 package markdown
 
 import (
@@ -16,7 +17,25 @@ var (
 	headingRe = regexp.MustCompile(`^ {0,3}(#{1,6})(?:[ \t]+(.*?))??(?:[ \t]+#+)?[ \t]*$`)
 	// fenceRe matches a code block's fence: its mark, and what follows it.
 	fenceRe = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
+	// includeRe matches an mdBook directive that includes a file (include,
+	// rustdoc_include, playground): a backslash before it, and the file's path,
+	// which ends at a space, a colon (the lines or anchor) or the braces.
+	includeRe = regexp.MustCompile(`(\\?)\{\{\s*#(?:include|rustdoc_include|playground)\s+([^\s:}]+)`)
 )
+
+// Includes are the files src's mdBook directives include, as written
+// (relative to its folder), each once, in order, within syntax.Clean's bounds:
+// in code blocks too, which is where mdBook expands most; one escaped with a
+// backslash is text.
+func Includes(src []byte) []string {
+	var out []string
+	for _, m := range includeRe.FindAllSubmatch(src, -1) {
+		if len(m[1]) == 0 {
+			out = append(out, string(m[2]))
+		}
+	}
+	return syntax.Clean(out)
+}
 
 // maxTitle is the most characters of a heading a section's name keeps.
 const maxTitle = 120

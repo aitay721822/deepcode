@@ -15,7 +15,8 @@ import (
 
 // TestResolve: Go imports name every non-test file of a package through the
 // longest matching go.mod; relative JavaScript and TypeScript specifiers name
-// a file as Node and TypeScript look one up; the rest name nothing.
+// a file as Node and TypeScript look one up; a Markdown include names an
+// indexed file of any language relative to the guide; the rest name nothing.
 func TestResolve(t *testing.T) {
 	files := []file{
 		{path: "main.go", lang: "go", imports: []string{"fmt", "example.com/m/pkg", "example.com/other/y", "example.com/m", "example.com/m/tools/v2/x"}},
@@ -33,13 +34,17 @@ func TestResolve(t *testing.T) {
 		{path: "web/src/plain.js", lang: "javascript"},
 		{path: "web/lib/index.tsx", lang: "tsx", imports: []string{"."}},
 		{path: "index.js", lang: "javascript", imports: []string{"./web/src/util?url"}},
+		{path: "src/ch01.md", lang: "markdown", imports: []string{
+			"../listings/a/src/main.rs", "../listings/a/output.txt", "../missing.rs", "../../outside.rs", "ch01.md", "../web/src/util"}},
+		{path: "web/src/doc.ts", lang: "typescript", imports: []string{"../../src/ch01.md", "../../src/ch01"}}, // a guide is no module
 	}
+	indexed := map[string]bool{"src/ch01.md": true, "listings/a/src/main.rs": true, "listings/a/output.txt": true, "web/src/util.ts": true}
 	// tools holds a module of its own, which wins over the root's for its paths.
 	configs := map[string]string{"go.mod": "module example.com/m\n", "lib/go.mod": "module example.com/other\n",
 		"tools/go.mod": "// tools\nmodule \"example.com/m/tools/v2\"\n\ngo 1.22\n"}
 	var got []string
 	// Each main is its nearest go.mod's entry; a test's main is none.
-	for _, e := range resolve(files, configs, []string{"main.go", "tools/x/x.go", "pkg/a_test.go"}) {
+	for _, e := range resolve(files, configs, []string{"main.go", "tools/x/x.go", "pkg/a_test.go"}, indexed) {
 		got = append(got, e.Src+" > "+e.Dst)
 	}
 	want := []string{
@@ -47,6 +52,7 @@ func TestResolve(t *testing.T) {
 		"index.js > web/src/util.ts",
 		"main.go > lib/y/y.go", "main.go > pkg/a.go", "main.go > pkg/b.go", "main.go > tools/x/x.go", "main.go > util.go",
 		"pkg/a_test.go > pkg/a.go", "pkg/a_test.go > pkg/b.go",
+		"src/ch01.md > listings/a/output.txt", "src/ch01.md > listings/a/src/main.rs", // no extension guessed, nor itself
 		"tools/go.mod > tools/x/x.go",
 		"web/src/app.ts > web/lib/index.tsx", "web/src/app.ts > web/src/esm.ts", "web/src/app.ts > web/src/plain.js", "web/src/app.ts > web/src/util.ts",
 	}
@@ -102,7 +108,11 @@ func TestLinkStale(t *testing.T) {
 		addFile(t, db, snap, "web/app.ts", "typescript", "import { u } from './util'\n")
 		addFile(t, db, snap, "web/util.ts", "typescript", "export const u = 1\n")
 		addFile(t, db, snap, "README.md", "markdown", "import x from './x'\n")
+		addFile(t, db, snap, "docs/guide.md", "markdown", "{{#include ../web/util.ts}}\n{{#include ../data/out.txt:2}}\n{{#include ../gone.rs}}\n{{#include ../gen/x.md}}\n")
+		addFile(t, db, snap, "data/out.txt", "text", "out\n")
+		addFile(t, db, snap, "gen/x.md", "markdown", "<!-- generated, do not edit -->\n")
 	}
+	run(t, db, `UPDATE source_files SET generated = 1 WHERE path = 'gen/x.md'`) // a generated file is no include's
 	n, err := g.LinkStale(ctx)
 	if err != nil || n != 1 {
 		t.Fatalf("linked %d snapshots (%v), want 1", n, err)
@@ -112,13 +122,13 @@ func TestLinkStale(t *testing.T) {
 		db.QueryRow(`SELECT group_concat(src || '>' || dst, ' ') FROM (SELECT src, dst FROM file_edges WHERE snapshot_id = ? ORDER BY src, dst)`, snap).Scan(&s)
 		return s.String
 	}
-	if got := edges(1); got != "main.go>pkg/a.go web/app.ts>web/util.ts" {
+	if got := edges(1); got != "docs/guide.md>data/out.txt docs/guide.md>web/util.ts main.go>pkg/a.go web/app.ts>web/util.ts" {
 		t.Fatalf("edges %q", got)
 	}
 	var unread int
 	db.QueryRow(`SELECT count(*) FROM file_contents WHERE imports IS NULL`).Scan(&unread)
-	if unread != 2 { // go.mod and README.md: no grammar reads them
-		t.Fatalf("%d contents unread, want 2", unread)
+	if unread != 3 { // go.mod, out.txt and the generated gen/x.md: nothing reads their imports
+		t.Fatalf("%d contents unread, want 3", unread)
 	}
 	if n, err := g.LinkStale(ctx); err != nil || n != 0 {
 		t.Fatalf("linked again: %d (%v)", n, err)

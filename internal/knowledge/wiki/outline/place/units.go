@@ -36,6 +36,9 @@ type Unit struct {
 	Cap    int      // the most pages it may take
 	Weight float64  // its weighed lines (Weigh); an aside's as its share counts it
 	Raw    []string // the keys of the units merged into it, sorted: its identity across snapshots
+	// Home is the docs aside's: each file of the code its guides show
+	// (Illustrations) to the guide whose unit it joins.
+	Home map[string]string
 }
 
 // LinesPerPage is the weighed lines under which a page, or a unit, is thin.
@@ -87,12 +90,14 @@ func manifest(f string) bool {
 }
 
 // Units are the code units of the hand-written files paths, each with its
-// cap, and the aside kinds present, each with its files: Raw's, a thin unit
-// (under LinesPerPage weighed) merged into the unit it shares the most
-// imports with, then the most kin, then the smaller, until none has a
-// partner it shares either with.
+// cap, and the aside kinds present, each with its files: Raw's, those the
+// guides show joining the docs (Illustrations), a thin unit (under
+// LinesPerPage weighed) merged into the unit it shares the most imports with,
+// then the most kin, then the smaller, until none has a partner it shares
+// either with.
 func Units(paths []string, lines map[string]int, declared map[string][]string, edges []graphstore.Edge) (code []Unit, asides []Unit) {
 	code, asides = Raw(paths, lines, declared)
+	code, asides = Illustrations(code, asides, edges, lines)
 	code = mergeThin(code, edges)
 	for i := range code {
 		code[i].Cap = capOf(code[i], declared)
@@ -154,6 +159,86 @@ func Raw(paths []string, lines map[string]int, declared map[string][]string) (co
 		}
 	}
 	return code, asides
+}
+
+// Illustrations moves the code units that the guides show into the docs
+// aside: one a guide (a Markdown file of the docs: code under docs/ imports,
+// it shows nothing) includes a file of (an mdBook directive's edge), thin or
+// with half its code's weight in the files included (a program whose guide
+// quotes a few lines stays code: nothing imports a program), and that
+// nothing outside it imports but guides and other such units, those an
+// importer leaves out dropped until none is. Each file of one goes with the
+// guide including the most of its files, the first by path of a tie (Home).
+// ponytail: a file counts as included whole, its anchor or lines aside, so a
+// one-file program a guide quotes is shown; weigh the lines an include names
+// if that misplaces one.
+func Illustrations(code, asides []Unit, edges []graphstore.Edge, lines map[string]int) ([]Unit, []Unit) {
+	d := slices.IndexFunc(asides, func(a Unit) bool { return a.Kind == analyzer.Docs })
+	if d < 0 {
+		return code, asides
+	}
+	guide := map[string]bool{}
+	for _, f := range asides[d].Files {
+		lang, _ := analyzer.Detect(f)
+		guide[f] = lang == "markdown"
+	}
+	owner := map[string]int{}
+	for i, u := range code {
+		for _, f := range u.Files {
+			owner[f] = i
+		}
+	}
+	by := make([]map[string]int, len(code)) // each unit's files each guide includes
+	in := map[string]bool{}                 // the files included
+	for _, e := range edges {
+		if i, ok := owner[e.Dst]; ok && guide[e.Src] {
+			if by[i] == nil {
+				by[i] = map[string]int{}
+			}
+			by[i][e.Src]++
+			in[e.Dst] = true
+		}
+	}
+	shown := make([]bool, len(code))
+	for i, u := range code {
+		included := slices.DeleteFunc(slices.Clone(u.Code), func(f string) bool { return !in[f] })
+		shown[i] = by[i] != nil && (u.Weight < LinesPerPage || 2*Weigh(included, lines, true) >= Weigh(u.Code, lines, true))
+	}
+	for dropped := true; dropped; {
+		dropped = false
+		for _, e := range edges {
+			b, ok := owner[e.Dst]
+			if !ok || !shown[b] {
+				continue
+			}
+			if a, ok := owner[e.Src]; ok && (a == b || shown[a]) || !ok && guide[e.Src] {
+				continue
+			}
+			shown[b], dropped = false, true
+		}
+	}
+	if !slices.Contains(shown, true) {
+		return code, asides
+	}
+	asides = slices.Clone(asides)
+	docs := asides[d]
+	docs.Files, docs.Home = slices.Clone(docs.Files), map[string]string{}
+	var kept []Unit
+	for i, u := range code {
+		if !shown[i] {
+			kept = append(kept, u)
+			continue
+		}
+		home := slices.MaxFunc(slices.Sorted(maps.Keys(by[i])), func(a, b string) int { return cmp.Compare(by[i][a], by[i][b]) })
+		for _, f := range u.Files {
+			docs.Home[f] = home
+		}
+		docs.Files = append(docs.Files, u.Files...)
+	}
+	slices.Sort(docs.Files)
+	docs.Code, docs.Weight = docs.Files, Weigh(docs.Files, lines, false)
+	asides[d] = docs
+	return kept, asides
 }
 
 // choices are the files of files the model picks from: the code, else all.

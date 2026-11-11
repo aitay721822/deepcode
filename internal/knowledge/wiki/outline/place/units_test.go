@@ -2,6 +2,7 @@ package place
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -72,6 +73,70 @@ func TestUnits(t *testing.T) {
 	if got, want := keys(code), []string{"src/main/java/app/owner/", "src/main/java/app/system/", "src/main/java/app/model/, src/main/java/app/vet/",
 		"src/main/resources/db/h2/, src/main/resources/db/mysql/"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("merged %v, want %v", got, want)
+	}
+}
+
+// TestIllustrations: a code unit a guide includes a file of joins the docs,
+// with the guide including the most of its files (the first by path of a
+// tie), when it is thin or half its code's weight is included, and nothing
+// but guides and other such units imports it, dropped until none does.
+func TestIllustrations(t *testing.T) {
+	paths := []string{"src/ch01.md", "src/ch02.md", "src/ch03.md", "README.md",
+		"listings/a/Cargo.toml", "listings/a/output.txt", "listings/a/src/main.rs", "listings/b/Cargo.toml", "listings/b/src/lib.rs", "listings/b/src/main.rs",
+		"app/Cargo.toml", "app/src/config.rs", "app/src/main.rs", "lib/Cargo.toml", "lib/src/lib.rs", "lib/tests/it.rs",
+		"c/lib.rs", "d/main.rs", "e/main.rs", "f/lib.rs", "g/lib.rs", "h/main.rs", "half/lib.rs", "half/main.rs", "edge/main.rs", "edge/x.rs", "thin/main.rs", "thin/out.txt",
+		"docs/gen/main.go", "k/lib.rs", "m/lib.rs"}
+	lines := map[string]int{"listings/a/src/main.rs": 20, "listings/b/src/lib.rs": 300, "listings/b/src/main.rs": 100,
+		"app/src/main.rs": 60, "app/src/config.rs": 1940, "lib/src/lib.rs": 50, "c/lib.rs": 30, "d/main.rs": 30, "e/main.rs": 300,
+		"f/lib.rs": 30, "g/lib.rs": 30, "h/main.rs": 30, "half/lib.rs": 100, "half/main.rs": 100, "edge/main.rs": 60, "edge/x.rs": 40,
+		"thin/main.rs": 30, "src/ch01.md": 2000, "src/ch02.md": 2000, "src/ch03.md": 2000}
+	edges := []graphstore.Edge{
+		{Src: "src/ch02.md", Dst: "listings/a/src/main.rs"}, {Src: "src/ch01.md", Dst: "listings/a/output.txt"}, // a tie: ch01
+		{Src: "src/ch02.md", Dst: "listings/b/src/lib.rs"}, {Src: "src/ch03.md", Dst: "listings/b/src/lib.rs"}, {Src: "src/ch03.md", Dst: "listings/b/src/main.rs"},
+		{Src: "listings/b/src/main.rs", Dst: "listings/b/src/lib.rs"},
+		{Src: "src/ch01.md", Dst: "app/src/main.rs"},                                                 // a program quoted: 60 of 2000 lines
+		{Src: "src/ch02.md", Dst: "lib/src/lib.rs"}, {Src: "lib/tests/it.rs", Dst: "lib/src/lib.rs"}, // a library its tests use
+		{Src: "src/ch03.md", Dst: "c/lib.rs"}, {Src: "src/ch03.md", Dst: "d/main.rs"}, {Src: "d/main.rs", Dst: "c/lib.rs"}, // shown by another shown
+		{Src: "f/lib.rs", Dst: "g/lib.rs"}, {Src: "src/ch01.md", Dst: "f/lib.rs"}, {Src: "src/ch01.md", Dst: "g/lib.rs"},
+		{Src: "e/main.rs", Dst: "f/lib.rs"},  // e is code: f stays, then g, which f imports
+		{Src: "README.md", Dst: "h/main.rs"}, // a README is no guide
+		{Src: "src/ch02.md", Dst: "half/lib.rs"}, {Src: "src/ch02.md", Dst: "edge/x.rs"},
+		{Src: "src/ch02.md", Dst: "thin/out.txt"},                                         // thin: shown, though none of its code is included
+		{Src: "docs/gen/main.go", Dst: "k/lib.rs"},                                        // code under docs/ is no guide: it shows nothing,
+		{Src: "src/ch01.md", Dst: "m/lib.rs"}, {Src: "docs/gen/main.go", Dst: "m/lib.rs"}, // and it guards what it imports
+	}
+	raw, rawAsides := Raw(paths, lines, nil)
+	code, asides := Illustrations(raw, rawAsides, edges, lines)
+	if got, want := keys(code), []string{"app/", "e/", "edge/", "f/", "g/", "h/", "k/", "lib/", "m/"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("code %v, want %v", got, want)
+	}
+	docs := asides[slices.IndexFunc(asides, func(a Unit) bool { return a.Kind == analyzer.Docs })]
+	want := map[string]string{"listings/a/Cargo.toml": "src/ch01.md", "listings/a/output.txt": "src/ch01.md", "listings/a/src/main.rs": "src/ch01.md",
+		"listings/b/Cargo.toml": "src/ch03.md", "listings/b/src/lib.rs": "src/ch03.md", "listings/b/src/main.rs": "src/ch03.md",
+		"c/lib.rs": "src/ch03.md", "d/main.rs": "src/ch03.md", "half/lib.rs": "src/ch02.md", "half/main.rs": "src/ch02.md",
+		"thin/main.rs": "src/ch02.md", "thin/out.txt": "src/ch02.md"}
+	if !reflect.DeepEqual(docs.Home, want) || len(docs.Files) != 4+len(want) || !slices.IsSorted(docs.Files) || docs.Weight != Weigh(docs.Files, lines, false) {
+		t.Errorf("docs %+v", docs)
+	}
+	got := map[string][]string{}
+	for _, u := range AsideUnits(docs.Kind, docs.Files, lines, docs.Home) {
+		got[u.Key] = u.Files
+	}
+	if len(got) != 4 || len(got["src/ch01.md"]) != 4 || len(got["src/ch02.md"]) != 5 || len(got["src/ch03.md"]) != 6 {
+		t.Errorf("guides %v", got)
+	}
+	// Its share counts guides, and Carry finds the shown code's guide.
+	if n := Share(docs, lines, 0); n != 4 {
+		t.Errorf("the docs' share %d, want 4 (one a guide)", n)
+	}
+	if o := Owners(raw, asides, lines)["listings/a/src/main.rs"]; o != (Owner{Key: "src/ch01.md", Kind: analyzer.Docs}) {
+		t.Errorf("owner %+v", o)
+	}
+	if c, _ := Illustrations(raw, rawAsides[1:], edges, lines); len(c) != len(raw) {
+		t.Error("no docs aside, yet code moved")
+	}
+	if rawAsides[0].Home != nil || len(rawAsides[0].Files) != 4 {
+		t.Errorf("the docs aside passed in changed: %+v", rawAsides[0])
 	}
 }
 

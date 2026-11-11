@@ -30,7 +30,7 @@ func raw(t *testing.T, units []place.Unit) map[string][]string {
 // of one unit lifts it up, and merging ends at the root; a flat folder of 150
 // guides is one unit of them all.
 func TestGroup(t *testing.T) {
-	docs := func(files ...string) []place.Unit { return place.AsideUnits(analyzer.Docs, files, nil) }
+	docs := func(files ...string) []place.Unit { return place.AsideUnits(analyzer.Docs, files, nil, nil) }
 	nested := docs("docs/a/1.md", "docs/a/2.md", "docs/a/3.md", "docs/b/1.md", "docs/b/2.md", "README.md")
 	if got := Group(nested, 6); !reflect.DeepEqual(got, nested) {
 		t.Errorf("at most: %+v", got)
@@ -43,9 +43,9 @@ func TestGroup(t *testing.T) {
 		{nested, 4, map[string][]string{"docs/a/": {"docs/a/1.md", "docs/a/2.md", "docs/a/3.md"}, "docs/b/1.md": {"docs/b/1.md"}, "docs/b/2.md": {"docs/b/2.md"}, "README.md": {"README.md"}}},
 		{nested, 2, map[string][]string{"docs/": {"docs/a/1.md", "docs/a/2.md", "docs/a/3.md", "docs/b/1.md", "docs/b/2.md"}, "README.md": {"README.md"}}},
 		{docs("a/1.md", "a/2.md", "b/1.md", "b/2.md"), 3, map[string][]string{"a/": {"a/1.md", "a/2.md"}, "b/1.md": {"b/1.md"}, "b/2.md": {"b/2.md"}}},
-		{place.AsideUnits(analyzer.Tests, []string{"pkg/a_test.go", "pkg/sub/x_test.go", "pkg/sub2/y_test.go", "other/z_test.go"}, nil), 2,
+		{place.AsideUnits(analyzer.Tests, []string{"pkg/a_test.go", "pkg/sub/x_test.go", "pkg/sub2/y_test.go", "other/z_test.go"}, nil, nil), 2,
 			map[string][]string{"pkg/ (tests)": {"pkg/ (tests)", "pkg/sub/ (tests)", "pkg/sub2/ (tests)"}, "other/ (tests)": {"other/ (tests)"}}},
-		{place.AsideUnits(analyzer.Examples, []string{"examples/a/main.go", "examples/b/main.go", "examples/c/main.go", "x/examples/d/main.go"}, nil), 2,
+		{place.AsideUnits(analyzer.Examples, []string{"examples/a/main.go", "examples/b/main.go", "examples/c/main.go", "x/examples/d/main.go"}, nil, nil), 2,
 			map[string][]string{"examples/": {"examples/a/", "examples/b/", "examples/c/"}, "x/examples/d/": {"x/examples/d/"}}},
 		{docs("x/y/1.md", "z/2.md"), 1, map[string][]string{"./": {"x/y/1.md", "z/2.md"}}},
 	} {
@@ -55,7 +55,7 @@ func TestGroup(t *testing.T) {
 	}
 	// The heaviest first, a merged unit's keys and files in path order, though its parts came by weight.
 	lines := map[string]int{"README.md": 50, "docs/b/2.md": 30, "docs/b/1.md": 10, "docs/a/2.md": 7, "docs/a/3.md": 6, "docs/a/1.md": 5}
-	weighed := Group(place.AsideUnits(analyzer.Docs, []string{"docs/a/1.md", "docs/a/2.md", "docs/a/3.md", "docs/b/1.md", "docs/b/2.md", "README.md"}, lines), 4)
+	weighed := Group(place.AsideUnits(analyzer.Docs, []string{"docs/a/1.md", "docs/a/2.md", "docs/a/3.md", "docs/b/1.md", "docs/b/2.md", "README.md"}, lines, nil), 4)
 	var order []string
 	for _, u := range weighed {
 		order = append(order, u.Key)

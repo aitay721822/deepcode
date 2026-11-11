@@ -94,8 +94,14 @@ func TestBuild(t *testing.T) {
 	paths := []string{"src/a.go", "src/b.go", "docs/guide.md", "README.md", "examples/rest/main.go", "internal/pkg/a_test.go", "x_test.go", "docs/other.md", "src/b.go",
 		"internal/pkg/c.go", "main.go"} // code beside the tests, not theirs
 	units := []string{"src/", "docs/guide.md", "docs/other.md", "docs/more.md", "examples/cli/", "examples/one.go", "e2e/ (tests)", "README.md#Install", "README.md#Gone", "tooling"}
-	if got := Others(heads, paths, units); !slices.Equal(got, []string{"src/b.go", "docs/other.md", "internal/pkg/c.go", "main.go", "docs/more.md", "examples/cli/", "examples/one.go", "e2e/"}) {
+	if got := Others(heads, paths, units, nil); !slices.Equal(got, []string{"src/b.go", "docs/other.md", "internal/pkg/c.go", "main.go", "docs/more.md", "examples/cli/", "examples/one.go", "e2e/"}) {
 		t.Errorf("Others = %q", got)
+	}
+	// The code a guide shows goes under the guide's heading; under no heading
+	// when its guide has none here, and a file home leaves out stays listed.
+	home := map[string]string{"listings/a/main.rs": "docs/guide.md", "listings/a/Cargo.toml": "docs/guide.md", "listings/b/main.rs": "docs/other.md"}
+	if got := Others(heads, []string{"listings/a/main.rs", "listings/a/Cargo.toml", "listings/b/main.rs", "lone.rs"}, nil, home); !slices.Equal(got, []string{"listings/b/main.rs", "lone.rs"}) {
+		t.Errorf("Others with home = %q", got)
 	}
 	if !strings.Contains(Listed(Build([]string{"docs/guide.md"}, nil, nil, src, 12), []string{"a.go", "b.go"}), "## Flux guide\n### Setup\n") {
 		t.Error("Listed does not list the headings at their levels")

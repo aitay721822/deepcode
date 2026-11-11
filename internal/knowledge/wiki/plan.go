@@ -159,6 +159,11 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo string, r *planRu
 	if err != nil {
 		return nil, contract.Labels{}, err
 	}
+	for _, a := range s.asides {
+		if guides := slices.Compact(slices.Sorted(maps.Values(a.Home))); len(guides) > 0 {
+			progress.Logf("%d files of code go with the %d guides that include them: %s", len(a.Home), len(guides), strings.Join(guides[:min(len(guides), 10)], ", "))
+		}
+	}
 	most := cmp.Or(g.MaxPages, defaultMaxPages)
 	code, sections, wanted := place.Ceiling(s.code, s.asides, s.edges, s.lines, most)
 	if wanted > most {
@@ -183,6 +188,9 @@ func (g *Generator) plan(ctx context.Context, snap int64, repo string, r *planRu
 	var files []string
 	for _, u := range code {
 		files = append(files, u.Files...)
+	}
+	for _, a := range s.asides { // and the code the guides show
+		files = append(files, slices.Sorted(maps.Keys(a.Home))...)
 	}
 	if left := place.Unnamed(plan, files); len(left) > 0 {
 		r.counts.Residual("place.unplaced", len(left))
@@ -307,7 +315,7 @@ func (g *Generator) sectioned(ctx context.Context, about, layout string, code []
 // assigning their units to pages (the aside request).
 func (g *Generator) part(ctx context.Context, p contract.Part, head outline.Page, about string, titles []string, s structure, r *planRun) ([]outline.Page, error) {
 	u := p.Units[0]
-	asides := place.AsideUnits(p.Kind, u.Files, s.lines)
+	asides := place.AsideUnits(p.Kind, u.Files, s.lines, u.Home)
 	switch {
 	case len(p.Units) == 1 && u.Cap == 1:
 		head.Placed = u.Files

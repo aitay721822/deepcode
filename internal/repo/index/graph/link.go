@@ -1,6 +1,7 @@
 // Package graph links a snapshot's files by their imports, Go's through
-// go.mod and JavaScript's and TypeScript's through relative paths, and
-// answers what retrieval and the wiki ask of those links.
+// go.mod, JavaScript's and TypeScript's through relative paths, Markdown's by
+// the files its mdBook directives include, and answers what retrieval and the
+// wiki ask of those links.
 package graph
 
 import (
@@ -39,13 +40,24 @@ func (g *Graph) Link(ctx context.Context, snap int64) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return g.save(ctx, snap, resolve(files, configs, mains))
+	// ponytail: every path, though most repositories' guides include none;
+	// read them only when a guide has includes if a monorepo's memory bites.
+	paths, err := g.Store.Paths(ctx, snap)
+	if err != nil {
+		return 0, err
+	}
+	indexed := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		indexed[p] = true
+	}
+	return g.save(ctx, snap, resolve(files, configs, mains, indexed))
 }
 
 // LinkStale links the ready snapshots that have files with a grammar but no
 // edges: those published before this version, or by an older one run since.
 // One whose files import none of each other is linked again at every start,
-// which costs a read of its imports. It returns how many it linked.
+// which costs a read of its imports; Markdown alone does not count, as most
+// repositories' guides include nothing. It returns how many it linked.
 func (g *Graph) LinkStale(ctx context.Context) (int, error) {
 	ids, err := g.Store.Stale(ctx, analyzer.Grammars())
 	if err != nil {
@@ -64,7 +76,7 @@ func (g *Graph) LinkStale(ctx context.Context) (int, error) {
 func (g *Graph) readImports(ctx context.Context, snap int64) error {
 	p := analyzer.NewParser()
 	defer p.Close()
-	langs := analyzer.Grammars()
+	langs := analyzer.Imported()
 	for last := ""; ; {
 		var batch []store.Imports
 		err := g.Store.Unread(ctx, snap, langs, last, readBatch, func(hash, lang, content string) {
@@ -80,12 +92,12 @@ func (g *Graph) readImports(ctx context.Context, snap int64) error {
 	}
 }
 
-// load reads the snapshot's files with a grammar, generated ones aside, with
-// their imports, and the content of its configs by path: go.mod, .NET
-// project files, Cargo.toml, package.json and Maven's and Gradle's builds.
+// load reads the snapshot's files whose imports Parse reads, generated ones
+// aside, with their imports, and the content of its configs by path: go.mod,
+// .NET project files, Cargo.toml, package.json and Maven's and Gradle's builds.
 func (g *Graph) load(ctx context.Context, snap int64) ([]file, map[string]string, error) {
 	var files []file
-	err := g.Store.Files(ctx, snap, analyzer.Grammars(), func(path, lang, imports string) {
+	err := g.Store.Files(ctx, snap, analyzer.Imported(), func(path, lang, imports string) {
 		f := file{path: path, lang: lang}
 		if imports != "" {
 			f.imports = strings.Split(imports, "\n")

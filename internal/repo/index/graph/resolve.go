@@ -42,12 +42,14 @@ var jsExts = []string{".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs", ".m
 // Go import path names a directory through a go.mod's module path, and every
 // Go file of that package, tests aside; a JavaScript or TypeScript specifier
 // starting with . names a file relative to the importer, as Node and
-// TypeScript look it up. Each project file also uses the files its build
-// starts from (entry.Edges): of mains, those declaring a main.
+// TypeScript look it up; a Markdown include names the file at its path
+// relative to the guide, of indexed, the hand-written files in any language.
+// Each project file also uses the files its build starts from (entry.Edges):
+// of mains, those declaring a main.
 // ponytail: package names (react, @/components via tsconfig paths, Go
 // modules of a go.work) stay unresolved; read tsconfig.json's paths if
 // repositories that rely on them lose their graph.
-func resolve(files []file, configs map[string]string, mains []string) []edge {
+func resolve(files []file, configs map[string]string, mains []string, indexed map[string]bool) []edge {
 	modules := map[string]string{} // each go.mod's directory → its module path
 	for p, content := range configs {
 		if path.Base(p) == "go.mod" {
@@ -56,11 +58,14 @@ func resolve(files []file, configs map[string]string, mains []string) []edge {
 			}
 		}
 	}
-	code := map[string]bool{}
-	pkgs := map[string][]string{} // directory → its Go files, tests aside
+	code, langs := map[string]bool{}, map[string]string{} // the files with a grammar: Markdown is no module
+	pkgs := map[string][]string{}                         // directory → its Go files, tests aside
 	groups := map[string]map[string][]string{}
 	for _, f := range files {
-		code[f.path] = true
+		if f.lang == "markdown" {
+			continue
+		}
+		code[f.path], langs[f.path] = true, f.lang
 		if f.lang == "go" && !strings.HasSuffix(f.path, "_test.go") {
 			pkgs[dir(f.path)] = append(pkgs[dir(f.path)], f.path)
 		}
@@ -84,6 +89,10 @@ func resolve(files []file, configs map[string]string, mains []string) []edge {
 				if t := jsTarget(f.path, spec, code); t != "" {
 					dsts = []string{t}
 				}
+			case "markdown":
+				if t := path.Join(dir(f.path), spec); indexed[t] { // above the root it starts with "..", which no file does
+					dsts = []string{t}
+				}
 			}
 			for _, d := range dsts {
 				if d != f.path {
@@ -98,10 +107,6 @@ func resolve(files []file, configs map[string]string, mains []string) []edge {
 				out = append(out, edge{Src: e[0], Dst: e[1]})
 			}
 		}
-	}
-	langs := map[string]string{}
-	for _, f := range files {
-		langs[f.path] = f.lang
 	}
 	for _, e := range entry.Edges(langs, configs, mains, func(src, spec string) string { return jsTarget(src, spec, code) }) {
 		out = append(out, edge{Src: e[0], Dst: e[1]})

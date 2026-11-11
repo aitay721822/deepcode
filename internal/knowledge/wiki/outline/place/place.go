@@ -17,16 +17,17 @@ import (
 const TestsMark = " (tests)"
 
 // AsideUnits are aside kind k's units among files, the heaviest first, ties
-// in path order: each guide, each example (its folder under examples/ or
-// _examples/), each folder of tests (TestsMark); tooling is one unit.
-func AsideUnits(k string, files []string, lines map[string]int) []Unit {
+// in path order: each guide, with the code it shows (home, the docs aside's
+// Home), each example (its folder under examples/ or _examples/), each folder
+// of tests (TestsMark); tooling is one unit.
+func AsideUnits(k string, files []string, lines map[string]int, home map[string]string) []Unit {
 	at := map[string]int{}
 	var out []Unit
 	for _, f := range files {
 		key := k
 		switch k {
 		case analyzer.Docs:
-			key = f
+			key = cmp.Or(home[f], f)
 		case analyzer.Examples:
 			key = example(f)
 		case analyzer.Tests:
@@ -208,7 +209,9 @@ func Replan(base, head []Unit, edges []graphstore.Edge) string {
 // key's parts, or an aside file's unit (AsideUnits) and kind.
 type Owner struct{ Key, Kind string }
 
-// Owners maps each file of the raw code units and of the asides to its Owner.
+// Owners maps each file of the raw code units and of the asides to its Owner,
+// the asides' last: code a guide shows (Illustrations) is in both, and goes
+// with its guide.
 func Owners(raw, asides []Unit, lines map[string]int) map[string]Owner {
 	out := map[string]Owner{}
 	for _, u := range raw {
@@ -217,7 +220,7 @@ func Owners(raw, asides []Unit, lines map[string]int) map[string]Owner {
 		}
 	}
 	for _, a := range asides {
-		for _, u := range AsideUnits(a.Kind, a.Files, lines) {
+		for _, u := range AsideUnits(a.Kind, a.Files, lines, a.Home) {
 			for _, f := range u.Files {
 				out[f] = Owner{Key: u.Key, Kind: a.Kind}
 			}

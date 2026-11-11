@@ -20,7 +20,7 @@ func Extract(g *Grammar, root *sitter.Node, src []byte) ([]Symbol, []string) {
 	x := &Extractor{Src: src, g: g}
 	var facts []string
 	if g.Facts != nil {
-		facts = clean(g.Facts(x, root))
+		facts = Clean(g.Facts(x, root))
 	}
 	return x.Block(root), facts
 }
@@ -41,10 +41,10 @@ func Parse(g *Grammar, src []byte) ([]Symbol, []string) {
 	return Extract(g, tree.RootNode(), src)
 }
 
-// clean keeps each fact once, in order, up to maxFacts, leaving out those too
+// Clean keeps each fact once, in order, up to maxFacts, leaving out those too
 // long or holding a control character: a line break above all would break the
 // list the index keeps.
-func clean(facts []string) []string {
+func Clean(facts []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, f := range facts {

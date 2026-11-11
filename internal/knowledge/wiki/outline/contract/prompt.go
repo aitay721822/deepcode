@@ -128,8 +128,8 @@ func AsideMessage(about string, titles []string, title, kind string, units []pla
 			continue
 		}
 		held := outline.Pick(u.Files, lines, 6)
-		if kind == analyzer.Docs && len(u.Files) == 1 {
-			held = first(declared[u.Files[0]], u.Files[0])
+		if kind == analyzer.Docs && slices.Contains(u.Files, u.Key) && (len(u.Files) == 1 || len(declared[u.Key]) > 0) { // a guide by its headings, not the code it shows
+			held = first(declared[u.Key], u.Key)
 		}
 		fmt.Fprintf(&b, "- %q (%d files, %d lines): %s\n", u.Key, len(u.Files), total(u.Files, lines), strings.Join(held, ", "))
 	}

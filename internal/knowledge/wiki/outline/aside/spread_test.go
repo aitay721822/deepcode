@@ -21,7 +21,7 @@ import (
 // goes to the page with the fewest. The message holds the aside's lines for
 // the members, the section's pages, and the group's by index.
 func TestTurn(t *testing.T) {
-	members := place.AsideUnits(analyzer.Docs, []string{"m1", "m2"}, nil)
+	members := place.AsideUnits(analyzer.Docs, []string{"m1", "m2"}, nil, nil)
 	format, err := Format(members, 2)
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +39,7 @@ func TestTurn(t *testing.T) {
 			t.Errorf("%s: schema error %v, check %v; want %s", text, schemaErr, named, rule)
 		}
 	}
-	four := place.AsideUnits(analyzer.Docs, []string{"m1", "m2", "m3", "m4"}, nil)
+	four := place.AsideUnits(analyzer.Docs, []string{"m1", "m2", "m3", "m4"}, nil, nil)
 	zero, five, below := 0, 5, -1
 	r := Reply{Assign: map[string]*int{"m1": &zero, "m2": nil, "m3": &five, "m4": &below}}
 	Turn(nil, four, 2).Fix(&r)
@@ -47,7 +47,7 @@ func TestTurn(t *testing.T) {
 		t.Errorf("fixed %v", got)
 	}
 	pages := []outline.Page{{Title: "Install", Terms: []string{"setup"}}, {Title: "Usage", Terms: []string{"api", "run"}}, {Title: "FAQ"}}
-	m := Message("", []string{"S"}, "Docs", analyzer.Docs, pages, []int{2, 1}, place.AsideUnits(analyzer.Docs, []string{"docs/q.md"}, nil), map[string][]string{"docs/q.md": {"Questions"}}, nil)
+	m := Message("", []string{"S"}, "Docs", analyzer.Docs, pages, []int{2, 1}, place.AsideUnits(analyzer.Docs, []string{"docs/q.md"}, nil, nil), map[string][]string{"docs/q.md": {"Questions"}}, nil)
 	for _, want := range []string{"The section's pages: Install | Usage | FAQ\n", "\n0. FAQ: \n1. Usage: api, run\n", `- "docs/q.md" (1 files, 0 lines): Questions`} {
 		if !strings.Contains(m, want) || strings.Contains(m, "spans") {
 			t.Errorf("message lacks %q, or speaks of spans:\n%s", want, m)
@@ -70,7 +70,7 @@ func TestSpread(t *testing.T) {
 		return out
 	}
 	files := append(append(append([]string{"x.md"}, names("a/", 10)...), names("b/", 2)...), names("c/", 250)...)
-	units := place.AsideUnits(analyzer.Docs, files, nil)
+	units := place.AsideUnits(analyzer.Docs, files, nil, nil)
 	groups := []place.Unit{{Key: "a/", Raw: names("a/", 10)}, {Key: "b/", Raw: names("b/", 2)}, {Key: "c/", Raw: names("c/", 250)}}
 	idx := func(is ...int) []*int {
 		var out []*int
@@ -103,7 +103,7 @@ func TestSpread(t *testing.T) {
 	}
 	// At the limit is not past it, the limit counting the pages kept: 8 of 12 units on one of 3 (at most 8, not 6 of 4).
 	counts = aicontract.Counts{}
-	twelve := place.AsideUnits(analyzer.Docs, names("g/", 12), nil)
+	twelve := place.AsideUnits(analyzer.Docs, names("g/", 12), nil, nil)
 	got, err = Spread([]outline.Page{{Title: "Q0"}, {Title: "Q1"}, {Title: "Q2"}, {Title: "Q3"}}, contract.AsideReply{Spans: map[string][]*int{"g/": idx(0, 1, 2)}},
 		[]place.Unit{{Key: "g/", Raw: names("g/", 12)}}, twelve, 100, func(batch []place.Unit, span []int) (Reply, error) {
 			r.Assign = map[string]*int{}

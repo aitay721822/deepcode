@@ -221,9 +221,9 @@ func draft(request string) string {
 // what the structure wanted.
 func TestRunPlansSections(t *testing.T) {
 	stmts := []string{`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`, `INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`,
-		`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'api/a1.go', 'store/s1.go'), (1, 'api/a2.go', 'store/s2.go'), (1, 'web/w1.go', 'api/a1.go')`}
+		`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'api/a1.go', 'store/s1.go'), (1, 'api/a2.go', 'store/s2.go'), (1, 'web/w1.go', 'api/a1.go'), (1, 'docs/d1.md', 'ex/x.go')`}
 	files := []string{"main.go", "go.mod", "docs/d1.md", "docs/d2.md", "api/a1.go", "api/a2.go", "api/a3.go", "api/a4.go", "store/s1.go", "store/s2.go",
-		"store/s3.go", "store/s4.go", "web/w1.go", "web/w2.go", "web/w3.go", "web/w4.go", "api/a1_test.go", "store/s1_test.go", ".github/ci.yml"}
+		"store/s3.go", "store/s4.go", "web/w1.go", "web/w2.go", "web/w3.go", "web/w4.go", "api/a1_test.go", "store/s1_test.go", ".github/ci.yml", "ex/x.go"} // ex/: d1.md's
 	for _, f := range files {
 		lines := map[bool]int{false: 100, true: 600}[strings.HasPrefix(f, "docs/")]
 		stmts = append(stmts, fmt.Sprintf(`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, '%s', 'go', 'h', 1, %d)`, f, lines))
@@ -252,8 +252,9 @@ func TestRunPlansSections(t *testing.T) {
 	if strings.Join(got, " ") != want || len(model.writes) != len(pages) || planned.Requests != 4 || !reflect.DeepEqual(planned.Contracts, counts) || planned.Seconds <= 0 {
 		t.Fatalf("pages %q, %d written; planned %+v", got, len(model.writes), planned)
 	}
-	if left := place.Unnamed(plan, files); len(left) > 0 || !slices.Equal(pages[5].Files.Placed, []string{"go.mod", "main.go"}) || !slices.Equal(pages[4].Files.Chosen, []string{"web/w1.go"}) {
-		t.Fatalf("unplaced %v; top-level %+v; web %+v", left, pages[5].Files, pages[4].Files)
+	if left := place.Unnamed(plan, files); len(left) > 0 || !slices.Equal(pages[5].Files.Placed, []string{"go.mod", "main.go"}) || !slices.Equal(pages[4].Files.Chosen, []string{"web/w1.go"}) ||
+		!slices.Equal(pages[6].Files.Units, []string{"docs/d1.md", "docs/d2.md"}) || !slices.Equal(pages[6].Files.Placed, []string{"docs/d1.md", "ex/x.go", "docs/d2.md"}) {
+		t.Fatalf("unplaced %v; top-level %+v; web %+v; docs %+v", left, pages[5].Files, pages[4].Files, pages[6].Files)
 	}
 	tests, tooling := [][]string{{"api/a1_test.go", "store/s1_test.go"}, {"api/" + place.TestsMark, "store/" + place.TestsMark}}, [][]string{{".github/ci.yml"}, {"tooling"}}
 	if f, g := pages[7].Files, pages[8].Files; !reflect.DeepEqual([][]string{f.Placed, f.Units}, tests) || !reflect.DeepEqual([][]string{g.Placed, g.Units}, tooling) {
@@ -447,6 +448,20 @@ func TestRunHeadListsNone(t *testing.T) {
 			(1, '3-guide', 'Guide', 'guides', 2, 1, '', '{"chosen":[],"placed":["docs/a.md"],"units":[]}')`)
 	pages, err := runWiki(t, db, &fakeModel{}, "abc").Store.Pages(context.Background(), 1)
 	if err != nil || len(pages) != 3 || strings.Contains(pages[1].Content, "## Other files") || !strings.HasSuffix(pages[2].Content, "## Other files\n\n- [docs/a.md](https://example.com/o/r/blob/abc/docs/a.md)") {
+		t.Fatalf("%+v %v", pages, err)
+	}
+}
+
+// TestRunCoversShownCode: code a guide includes joins its unit (place.Illustrations),
+// so the guide's heading covers it: the page lists none of it under Other files.
+func TestRunCoversShownCode(t *testing.T) {
+	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status, wiki_status, wiki_language) VALUES (1, 1, 'abc', 'ready', 'failed', 'English')`,
+		`INSERT INTO file_contents(hash, content) VALUES ('g', '# Chapter One' || char(10) || 'Text.'), ('h', 'x')`,
+		`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, 'src/ch01.md', 'markdown', 'g', 1, 2), (1, 'listings/a/Cargo.toml', 'toml', 'h', 1, 1), (1, 'listings/a/src/main.rs', 'rust', 'h', 1, 1)`,
+		`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'src/ch01.md', 'listings/a/src/main.rs')`, `INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'src/ch01.md', 1, 2, 'Chapter One text', 'c')`,
+		`INSERT INTO wiki_pages(snapshot_id, slug, title, query, position, parent, content, files) VALUES (1, '1-overview', 'Overview', '', 0, NULL, 'Written before.', NULL), (1, '2-one', 'Chapter One', 'chapter', 1, NULL, '', '{"chosen":[],"placed":["listings/a/Cargo.toml","listings/a/src/main.rs","src/ch01.md"],"units":["src/ch01.md"]}')`)
+	pages, err := runWiki(t, db, &fakeModel{}, "abc").Store.Pages(context.Background(), 1)
+	if err != nil || len(pages) != 2 || !strings.Contains(pages[1].Content, "## Chapter One") || strings.Contains(pages[1].Content, "Other files") {
 		t.Fatalf("%+v %v", pages, err)
 	}
 }

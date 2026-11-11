@@ -48,7 +48,7 @@ type Writing struct {
 // the model server's prompt cache reads the start once: the rules, the wiki's
 // own lines, the sources its section's pages share, then this page's request
 // and its own sources.
-func (g *Generator) write(ctx context.Context, snap int64, repo string, src source, p page, pages []page, progress jobs.Progress) (string, []evidence.Citation, error) {
+func (g *Generator) write(ctx context.Context, snap int64, repo string, src source, p page, pages []page, home map[string]string, progress jobs.Progress) (string, []evidence.Citation, error) {
 	start := time.Now()
 	head, inSection := section(p, pages)
 	sk, err := g.skeleton(ctx, snap, p, inSection && head.Position == p.Position)
@@ -125,7 +125,7 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 	}
 	content, cites, _ := evidence.LinkCitations(skeleton.Render(d), used, link)
 	if p.Files != nil && !(inSection && head.Position == p.Position) {
-		more, err := g.otherFiles(ctx, snap, src, p, sk)
+		more, err := g.otherFiles(ctx, snap, src, p, sk, home)
 		if err != nil {
 			return "", nil, err
 		}
@@ -146,10 +146,11 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 
 // otherFiles is what code adds last to page p, written to sk, under the
 // wiki's label: each file and aside unit of p no heading covers
-// (skeleton.Others), a file linked with the first declarations it holds, a
-// folder by its path; "" when every one has a heading. No model writes it.
-func (g *Generator) otherFiles(ctx context.Context, snap int64, src source, p page, sk skeleton.Skeleton) (string, error) {
-	others := skeleton.Others(sk, append(slices.Clone(p.Files.Chosen), p.Files.Placed...), p.Files.Units)
+// (skeleton.Others, home the code each guide shows), a file linked with the
+// first declarations it holds, a folder by its path; "" when every one has a
+// heading. No model writes it.
+func (g *Generator) otherFiles(ctx context.Context, snap int64, src source, p page, sk skeleton.Skeleton, home map[string]string) (string, error) {
+	others := skeleton.Others(sk, append(slices.Clone(p.Files.Chosen), p.Files.Placed...), p.Files.Units, home)
 	if len(others) == 0 {
 		return "", nil
 	}

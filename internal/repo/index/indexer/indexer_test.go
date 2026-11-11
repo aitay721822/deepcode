@@ -432,9 +432,9 @@ func TestTerms(t *testing.T) {
 	}
 }
 
-// TestImports: a parsed file's imports are stored with its content, NULL in
-// a language no grammar reads, and fill in those of a content an older
-// version stored; pruning a snapshot drops its edges.
+// TestImports: a parsed file's imports (a guide's includes too) are stored
+// with its content, NULL where Parse reads none, and fill in those of a
+// content an older version stored; pruning a snapshot drops its edges.
 func TestImports(t *testing.T) {
 	ctx := context.Background()
 	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "deepcode.db"))
@@ -450,15 +450,15 @@ func TestImports(t *testing.T) {
 	ix := indexerOn(db)
 	files := []parsedFile{
 		{file: file{path: "a.ts", sha: "old", lang: "typescript"}, content: `import "./b"`, imports: []string{"./b"}},
-		{file: file{path: "b.ts", sha: "b", lang: "typescript"}, content: "export {}"},
-		{file: file{path: "c.md", sha: "c", lang: "markdown"}, content: "# c"},
+		{file: file{path: "b.ts", sha: "b", lang: "typescript"}, content: "export {}"}, {file: file{path: "c.txt", sha: "c", lang: "text"}, content: "c"},
+		{file: file{path: "d.md", sha: "d", lang: "markdown"}, content: "{{#include c.txt}}", imports: []string{"c.txt"}},
 	}
 	if err := ix.write(ctx, 1, 0, files, nil); err != nil {
 		t.Fatal(err)
 	}
 	var got string
 	db.QueryRow(`SELECT group_concat(hash || '=' || coalesce(imports, 'NULL'), ' ') FROM (SELECT * FROM file_contents ORDER BY hash)`).Scan(&got)
-	if got != "b= c=NULL old=./b" {
+	if got != "b= c=NULL d=c.txt old=./b" {
 		t.Fatalf("stored imports: %q", got)
 	}
 	if _, err := db.Exec(`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'a.ts', 'b.ts')`); err != nil {

@@ -15,14 +15,14 @@ import (
 // first.
 func TestAsideUnits(t *testing.T) {
 	lines := map[string]int{"examples/hello/main.go": 10, "examples/hello/go.mod": 5, "examples/big/main.go": 90, "examples/x.go": 1}
-	got := keys(AsideUnits(analyzer.Examples, []string{"examples/big/main.go", "examples/hello/go.mod", "examples/hello/main.go", "examples/x.go"}, lines))
+	got := keys(AsideUnits(analyzer.Examples, []string{"examples/big/main.go", "examples/hello/go.mod", "examples/hello/main.go", "examples/x.go"}, lines, nil))
 	if want := []string{"examples/big/", "examples/hello/", "examples/x.go"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("examples %v, want %v", got, want)
 	}
-	if got := keys(AsideUnits(analyzer.Tests, []string{"a/x_test.go", "a/y_test.go", "b/z_test.go"}, nil)); !reflect.DeepEqual(got, []string{"a/ (tests)", "b/ (tests)"}) {
+	if got := keys(AsideUnits(analyzer.Tests, []string{"a/x_test.go", "a/y_test.go", "b/z_test.go"}, nil, nil)); !reflect.DeepEqual(got, []string{"a/ (tests)", "b/ (tests)"}) {
 		t.Errorf("tests %v", got)
 	}
-	if got := AsideUnits(analyzer.Tooling, []string{"Makefile", ".github/ci.yml"}, nil); len(got) != 1 || len(got[0].Files) != 2 {
+	if got := AsideUnits(analyzer.Tooling, []string{"Makefile", ".github/ci.yml"}, nil, nil); len(got) != 1 || len(got[0].Files) != 2 {
 		t.Errorf("tooling %+v", got)
 	}
 }

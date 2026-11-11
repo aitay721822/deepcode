@@ -122,6 +122,20 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 			under = append(under, p)
 		}
 	}
+	// The code each guide shows (place.Illustrations), which its heading
+	// covers in the files a page lists.
+	var home map[string]string
+	if slices.ContainsFunc(append(slices.Clone(top), under...), func(p page) bool { return p.Files != nil }) {
+		s, err := g.structure(ctx, snap)
+		if err != nil {
+			return err
+		}
+		for _, a := range s.asides {
+			if a.Home != nil {
+				home = a.Home
+			}
+		}
+	}
 	var mu sync.Mutex
 	done := len(pages) - len(top) - len(under)
 	progress.Stage("write", done, len(pages))
@@ -130,7 +144,7 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 			p := todo[i]
 			log := progress.With("[" + p.Title + "] ") // pages written at a time interleave their lines
 			log.Logf("== page %d of %d", p.Position+1, len(pages))
-			content, cites, err := g.write(ctx, snap, repo, src, p, pages, log)
+			content, cites, err := g.write(ctx, snap, repo, src, p, pages, home, log)
 			if err != nil {
 				return err
 			}
@@ -213,8 +227,13 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, src source, p
 	if err != nil {
 		return false, err
 	}
-	wasRaw, _ := place.Raw(was.paths, was.lines, was.declared)
-	isRaw, _ := place.Raw(is.paths, is.lines, is.declared)
+	// The code units as planned, but before the thin merge: what the guides
+	// show is the docs'. A wiki planned before the guides showed code keeps
+	// its pages of it; a plan anew moves them.
+	wasRaw, wasAsides := place.Raw(was.paths, was.lines, was.declared)
+	wasRaw, _ = place.Illustrations(wasRaw, wasAsides, was.edges, was.lines)
+	isRaw, isAsides := place.Raw(is.paths, is.lines, is.declared)
+	isRaw, _ = place.Illustrations(isRaw, isAsides, is.edges, is.lines)
 	if why := place.Replan(wasRaw, isRaw, is.edges); why != "" {
 		progress.Logf("since %.7s %s: planning anew", baseSHA, why)
 		return false, nil

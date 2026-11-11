@@ -21,8 +21,8 @@ const termsBatch = 500
 func (ix *Indexer) write(ctx context.Context, snap, prev int64, parsed []parsedFile, copies []string) error {
 	files := make([]store.File, len(parsed))
 	for i, p := range parsed {
-		var imports *string                              // NULL: no grammar reads the language, or the file is generated
-		if analyzer.HasGrammar(p.lang) && !p.generated { // a hand-written copy fills them in
+		var imports *string                                // NULL: Parse reads no imports of the language, or the file is generated
+		if analyzer.ReadsImports(p.lang) && !p.generated { // a hand-written copy fills them in
 			s := graph.Imports(p.imports)
 			imports = &s
 		}

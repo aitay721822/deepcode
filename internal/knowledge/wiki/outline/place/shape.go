@@ -105,7 +105,7 @@ func Shares(asides []Unit, lines map[string]int, p int) {
 
 // Share is aside kind a's cap by Shares' rules.
 func Share(a Unit, lines map[string]int, p int) int {
-	units, byWeight := len(AsideUnits(a.Kind, a.Files, lines)), 1+int(a.Weight)/capLines
+	units, byWeight := len(AsideUnits(a.Kind, a.Files, lines, a.Home)), 1+int(a.Weight)/capLines
 	switch a.Kind {
 	case analyzer.Docs, analyzer.Examples:
 		return max(1, min(units, 1+int(a.Weight/3)/capLines))

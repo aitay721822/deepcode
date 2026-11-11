@@ -362,6 +362,11 @@ func TestSpans(t *testing.T) {
 	if !strings.Contains(m, `"docs/" (a group of 1000 units,`) || !strings.Contains(m, big.Raw[999]+"\n") || strings.Contains(m, "Heading") || !strings.Contains(m, "Install") || !strings.Contains(m, `"spans"`) {
 		t.Errorf("one group's line:\n%.600s", m)
 	}
+	// A guide with the code it shows is listed by its headings.
+	declared["src/ch02.md"], declared["listings/a/src/main.rs"] = []string{"Guessing Game"}, []string{"main"}
+	if m := AsideMessage("", nil, "Docs", analyzer.Docs, []place.Unit{unit("src/ch02.md", 1, "listings/a/src/main.rs", "src/ch02.md"), unit("src/ch03.md", 1, "c/x.rs", "src/ch03.md")}, declared, nil); !strings.Contains(m, "(2 files, 0 lines): Guessing Game\n") || !strings.Contains(m, "(2 files, 0 lines): c/x.rs, src/ch03.md\n") {
+		t.Errorf("a guide showing code, by its headings, else its files:\n%s", m)
+	}
 	var many []place.Unit
 	for i := range 100 {
 		many = append(many, group(fmt.Sprintf("g%02d/", i), 20))

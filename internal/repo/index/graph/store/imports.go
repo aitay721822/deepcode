@@ -104,6 +104,17 @@ func (s *Store) Mains(ctx context.Context, snap int64) ([]string, error) {
 	return scanPaths(rows)
 }
 
+// Paths returns the paths of the snapshot's hand-written files, in any
+// language: what a Markdown file may include.
+func (s *Store) Paths(ctx context.Context, snap int64) ([]string, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT path FROM source_files WHERE snapshot_id = ? AND NOT generated ORDER BY path`, snap)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanPaths(rows)
+}
+
 // Files passes file the path, language and stored imports of each of the
 // snapshot's hand-written files in langs.
 func (s *Store) Files(ctx context.Context, snap int64, langs []string, file func(path, lang, imports string)) error {

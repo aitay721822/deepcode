@@ -163,18 +163,18 @@ func Build(units, chosen, files []string, src Source, most int) Skeleton {
 }
 
 // Others are the paths no heading of s covers, files first, each once: of
-// files, one no heading is of, nor of its guide or README, nor of an example
-// folder holding it, nor, for a test, of a tests folder holding it (code
-// beside the tests is not theirs); of units, the file or folder of one whose
-// kind has a heading (a guide, recipe, example or tests unit) when s gives
-// none.
-func Others(s Skeleton, files, units []string) []string {
+// files, one no heading is of, nor of its guide or README, nor of the guide
+// that shows it (home, the docs aside's Home), nor of an example folder
+// holding it, nor, for a test, of a tests folder holding it (code beside the
+// tests is not theirs); of units, the file or folder of one whose kind has a
+// heading (a guide, recipe, example or tests unit) when s gives none.
+func Others(s Skeleton, files, units []string, home map[string]string) []string {
 	covered := func(p string) bool {
 		return slices.ContainsFunc(s, func(h Heading) bool {
 			_, file := kind(h.Unit)
 			dir, tests := strings.CutSuffix(h.Unit, place.TestsMark)
 			in := strings.HasSuffix(dir, "/") && strings.HasPrefix(p, dir) || dir == "./" && !strings.Contains(p, "/")
-			return h.Unit != "" && (h.Unit == p || file == p || in && (!tests || analyzer.Aside(p) == analyzer.Tests))
+			return h.Unit != "" && (h.Unit == p || file == p || file != "" && home[p] == file || in && (!tests || analyzer.Aside(p) == analyzer.Tests))
 		})
 	}
 	var out []string

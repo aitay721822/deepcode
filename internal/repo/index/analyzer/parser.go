@@ -61,12 +61,24 @@ type File struct {
 // files' rows, so each is read again. 1 added C#, Java and Rust; 2, JMeter
 // test plans; 3, C#'s top-level statements as Main and Markdown's sections;
 // 4, JavaScript's functions assigned to members (res.send = function send),
-// and a JSDoc a blank line above its declaration.
-const Version = 4
+// and a JSDoc a blank line above its declaration; 5, Markdown's generated
+// mark and its mdBook includes as imports.
+const Version = 5
 
 // HasGrammar reports whether Parse reads lang's declarations and imports with
-// a grammar; Markdown's sections it reads without (markdown.Sections).
+// a grammar; Markdown's sections and includes it reads without (markdown).
 func HasGrammar(lang string) bool { return languages[lang] != nil }
+
+// ReadsImports reports whether Parse reads lang's imports: with a grammar, or
+// Markdown's, the files its mdBook directives include.
+func ReadsImports(lang string) bool { return HasGrammar(lang) || lang == "markdown" }
+
+// Imported lists the languages ReadsImports reports, sorted.
+func Imported() []string {
+	out := append(Grammars(), "markdown")
+	sort.Strings(out)
+	return out
+}
 
 // Grammars lists the languages Parse reads, sorted.
 func Grammars() []string {
@@ -79,10 +91,10 @@ func Grammars() []string {
 }
 
 // Parse reads src as lang, in one pass for its symbols and its imports; a
-// Markdown file has its sections and no imports.
+// Markdown file has its sections, and the files it includes for imports.
 func (p *Parser) Parse(lang string, src []byte) File {
 	if lang == "markdown" {
-		return File{Symbols: markdown.Sections(src)}
+		return File{Symbols: markdown.Sections(src), Imports: markdown.Includes(src)}
 	}
 	g := languages[lang]
 	if g == nil {
