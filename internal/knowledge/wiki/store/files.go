@@ -115,6 +115,62 @@ func (s *Store) Hashes(ctx context.Context, snap int64, paths []string) (map[str
 	return out, rows.Err()
 }
 
+// Decl is a type or function a file declares: its name, its kind and the
+// line it starts on, a leading doc comment's.
+type Decl struct {
+	Name, Kind string
+	Line       int
+}
+
+// Decls returns the types and functions each of paths declares, in line
+// order: no method, so no C# top-level statements' synthetic Main.
+func (s *Store) Decls(ctx context.Context, snap int64, paths []string) (map[string][]Decl, error) {
+	list, err := json.Marshal(paths)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT path, name, kind, start_line FROM symbols WHERE snapshot_id = ?
+		AND path IN (SELECT value FROM json_each(?))
+		AND kind IN ('class', 'struct', 'interface', 'trait', 'enum', 'record', 'type', 'function', 'macro', 'union') ORDER BY path, start_line`, snap, string(list))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]Decl{}
+	for rows.Next() {
+		var p string
+		var d Decl
+		if err := rows.Scan(&p, &d.Name, &d.Kind, &d.Line); err != nil {
+			return nil, err
+		}
+		out[p] = append(out[p], d)
+	}
+	return out, rows.Err()
+}
+
+// Texts returns the text of each of paths the snapshot holds.
+func (s *Store) Texts(ctx context.Context, snap int64, paths []string) (map[string]string, error) {
+	list, err := json.Marshal(paths)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT f.path, c.content FROM source_files f JOIN file_contents c ON c.hash = f.content_hash
+		WHERE f.snapshot_id = ? AND f.path IN (SELECT value FROM json_each(?))`, snap, string(list))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var p, text string
+		if err := rows.Scan(&p, &text); err != nil {
+			return nil, err
+		}
+		out[p] = text
+	}
+	return out, rows.Err()
+}
+
 // File is one file of a snapshot with its content.
 type File struct{ Path, Content string }
 

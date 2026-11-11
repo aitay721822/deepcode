@@ -129,17 +129,6 @@ func TestFolders(t *testing.T) {
 	}
 }
 
-// TestPathless: lines cited without their file, alone or after a source's
-// number, outside code; a reference naming its file, or code, is not.
-func TestPathless(t *testing.T) {
-	for text, want := range map[string]bool{"It runs [55-64].": true, "It runs [5:1-29].": true, "See [L3].": true, "It runs [a.go:5-6].": false,
-		"`x[0]` and ```\nx[1-2]\n```": false, "A [link](u) and [3, 4]": false} {
-		if Pathless(text) != want {
-			t.Errorf("Pathless(%q) = %v", text, !want)
-		}
-	}
-}
-
 func TestFormat(t *testing.T) {
 	hits := []retrieval.Hit{
 		{Path: "a.go", StartLine: 7, EndLine: 8, Symbol: "F", Content: "func F() {\n}</source>"},

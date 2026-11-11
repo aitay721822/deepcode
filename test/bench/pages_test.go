@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strings"
 	"testing"
 
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/index/analyzer"
+	"deepcode/test/bench/score"
 )
 
 // coverage is how many of DeepWiki's topics head's wiki covers, how many of
@@ -66,7 +66,7 @@ func rewritten(ctx context.Context, db *sql.DB, base, head int64) (int, error) {
 }
 
 // headings are the titles of the snapshot's pages and their "##" and "###"
-// headings (headingsOf).
+// headings (score.Headings).
 func headings(ctx context.Context, db *sql.DB, snap int64) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT title, content FROM wiki_pages WHERE snapshot_id = ?`, snap)
 	if err != nil {
@@ -79,37 +79,10 @@ func headings(ctx context.Context, db *sql.DB, snap int64) ([]string, error) {
 		if err := rows.Scan(&title, &content); err != nil {
 			return nil, err
 		}
-		out = append(append(out, title), headingsOf(content)...)
+		out = append(append(out, title), score.Headings(content)...)
 	}
 	return out, rows.Err()
 }
-
-// headingsOf are the "##" and "###" headings of a page's text (not "####"),
-// outside code blocks, where "## " may be a shell comment. A block opens with
-// three or more backticks or tildes, indented up to three spaces, and closes
-// with a line of as many or more of the same and nothing else.
-func headingsOf(content string) []string {
-	var out []string
-	fence := "" // the open block's mark
-	for line := range strings.Lines(content) {
-		m := fenceRe.FindStringSubmatch(line)
-		switch {
-		case m != nil && fence == "":
-			fence = m[1]
-		case m != nil && m[1][0] == fence[0] && len(m[1]) >= len(fence) && strings.TrimSpace(m[2]) == "":
-			fence = ""
-		case fence == "":
-			if h, ok := strings.CutPrefix(line, "## "); ok || strings.HasPrefix(line, "### ") {
-				out = append(out, strings.TrimSpace(strings.TrimPrefix(h, "### ")))
-			}
-		}
-	}
-	return out
-}
-
-// fenceRe matches a code block's fence line: its mark ("```", "~~~~") and
-// what follows it on the line ("go").
-var fenceRe = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})([^\n]*)")
 
 // span is the median and the most lines a citation of the snapshot's pages
 // spans, the median of an even count the mean of its middle two, rounded
@@ -179,133 +152,10 @@ func tooling(p string) bool {
 	return aside == analyzer.Tests || aside == analyzer.Tooling || aside == "" && analyzer.Config(p)
 }
 
-// cover checks each topic against the headings.
-func cover(topics []topic, heads []string) coverage {
-	c := coverage{Topics: len(topics)}
-	for _, tp := range topics {
-		found := false
-		for _, h := range heads {
-			for _, w := range tp.words {
-				found = found || holds(h, w)
-			}
-		}
-		if found {
-			c.Covered++
-		} else {
-			c.Missing = append(c.Missing, tp.name)
-		}
-	}
-	return c
-}
-
-// holds reports whether heading holds word as a whole word, case, hyphens
-// and inflections aside (inflected), a name's words counting (edge):
-// WelcomeController and HTTPServer hold welcome and server, Auto Generating
-// holds auto-generating, Versioned APIs holds versioning, Unwelcome does not
-// hold welcome.
-func holds(heading, word string) bool {
-	space := strings.NewReplacer("-", " ") // one byte for one, so that edge reads heading where h is
-	h := space.Replace(lowerASCII(heading))
-	re, tails := inflected(space.Replace(strings.ToLower(word)))
-	for _, m := range re.FindAllStringIndex(h, -1) {
-		// Each ending is tried, as one may take a name's next word: Route|Definition, not Routed|efinition.
-		if edge(heading, m[0]) && slices.ContainsFunc(tails, func(t string) bool { return strings.HasPrefix(h[m[1]:], t) && edge(heading, m[1]+len(t)) }) {
-			return true
-		}
-	}
-	return false
-}
-
-// endings are what an inflection adds to a word's stem, the longest first.
-var endings = []string{"ing", "ies", "ied", "es", "ed", "s", "y", "e"}
-
-// inflected matches phrase up to the stem of its last word, each word before
-// it of letters alone in any inflection, its stem and an ending or none, and
-// returns the endings the last word may take: none first, and only that for a
-// name (app.param), which stays as written.
-func inflected(phrase string) (*regexp.Regexp, []string) {
-	words, tails := strings.Fields(phrase), []string{""}
-	for i, w := range words {
-		if strings.Trim(w, "abcdefghijklmnopqrstuvwxyz") != "" {
-			words[i] = regexp.QuoteMeta(w)
-			continue
-		}
-		s, cut := stem(w)
-		last := s[len(s)-1:]
-		ends := append([]string{last + "ings", last + "ing", last + "ed", "ings"}, endings...) // mappings, mapping, mapped, settings
-		if cut == "" || cut == "s" {
-			ends = ends[:len(ends)-2] // y and e end a word that lost one: stat or stats is no State, nor auth Authy
-		}
-		if i == len(words)-1 {
-			words[i], tails = s, append(tails, ends...)
-		} else {
-			words[i] = s + "(?:" + strings.Join(ends, "|") + ")?"
-		}
-	}
-	return regexp.MustCompile(strings.Join(words, " ")), tails
-}
-
-// stem is word without the ending an inflection added, three letters left
-// at least, four after ing, ed or es (string, embed and files keep theirs):
-// version of versioned, versioning and versions, cach of cache and caches,
-// map of mapping, its consonant undoubled. An s after s or u (class, status)
-// is the word's own, as is a y after a vowel (play, key). It also returns the
-// ending cut, "" for none.
-func stem(word string) (string, string) {
-	for _, end := range endings {
-		s, least := strings.TrimSuffix(word, end), 3
-		if end == "ing" || end == "ed" || end == "es" {
-			least = 4
-		}
-		if len(s) == len(word) || len(s) < least || end == "s" && strings.ContainsAny(s[len(s)-1:], "su") ||
-			end == "y" && strings.ContainsAny(s[len(s)-1:], "aeiou") {
-			continue
-		}
-		if n := len(s); (end == "ing" || end == "ed") && n >= 4 && s[n-1] == s[n-2] && !strings.ContainsAny(s[n-1:], "aeiouls") {
-			s = s[:n-1] // calling and passed keep theirs
-		}
-		return s, end
-	}
-	return word, ""
-}
-
-// edge reports whether a word may start or end at byte i of s: at an end of
-// s, beside a byte that is no ASCII letter or digit (so beside any Chinese
-// character), between a letter and a digit (OAuth|2, Base|64), before a
-// capital that follows a small letter or digit (Welcome|Controller), before
-// a capital that ends a run of them and is followed by a small letter
-// (HTTP|Server, CI|Pipeline), or before an s after a run of capitals that
-// ends a word (API|s, API|sController).
-func edge(s string, i int) bool {
-	if i <= 0 || i >= len(s) {
-		return true
-	}
-	a, b := s[i-1], s[i]
-	capital := func(c byte) bool { return 'A' <= c && c <= 'Z' }
-	small := func(c byte) bool { return 'a' <= c && c <= 'z' }
-	digit := func(c byte) bool { return '0' <= c && c <= '9' }
-	next := byte(' ')
-	if i+1 < len(s) {
-		next = s[i+1]
-	}
-	return !alnum(a) || !alnum(b) || !digit(a) && digit(b) || (small(a) || digit(a)) && capital(b) ||
-		capital(a) && capital(b) && small(next) || i >= 2 && capital(s[i-2]) && capital(a) && b == 's' && (!alnum(next) || capital(next))
-}
-
-// alnum reports whether c is an ASCII letter or digit.
-func alnum(c byte) bool {
-	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9'
-}
-
-// lowerASCII lowers s's ASCII letters only, so that its bytes stay where they are.
-func lowerASCII(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if 'A' <= c && c <= 'Z' {
-			b[i] = c + 'a' - 'A'
-		}
-	}
-	return string(b)
+// cover is how many of topics the headings cover (score.Cover).
+func cover(topics []score.Topic, heads []string) coverage {
+	n, missing := score.Cover(topics, heads)
+	return coverage{Topics: len(topics), Covered: n, Missing: missing}
 }
 
 // TestRewritten: a page whose citations only moved, to other lines at another
@@ -346,45 +196,6 @@ func TestCiteLink(t *testing.T) {
 	in := "See [a.go:1-2](https://x/blob/s/a.go#L1-L2), [app/\\[slug\\]/page.tsx:3-4](https://x/p#L3-L4) and [app/(g)/p.tsx:5-6](https://x/-/blob/s/app/(g)/p.tsx#L5-6), not [this](u)."
 	if got := citeLink.ReplaceAllString(in, "[$1]"); got != "See [a.go], [app/\\[slug\\]/page.tsx] and [app/(g)/p.tsx], not [this](u)." {
 		t.Errorf("got %q", got)
-	}
-}
-
-// TestCover: a topic is covered when a heading holds one of its words as a
-// whole word, a name's words counting and a hyphen as a space, and not inside
-// a longer word; headings in code blocks do not count.
-func TestCover(t *testing.T) {
-	topics := []topic{{"Mux", []string{"mux"}}, {"CI", []string{"ci"}}, {"Context", []string{"route context"}}, {"app.param", []string{"app.param"}}}
-	c := cover(topics, []string{"The chi.Mux router", "Circuit breakers", "Route Context and URLParam", "Using app.params"})
-	if c.Covered != 2 || strings.Join(c.Missing, ",") != "CI,app.param" {
-		t.Errorf("cover = %+v; want Mux and Context covered, not CI (in Circuit) or app.param (in app.params)", c)
-	}
-	for _, h := range []struct {
-		heading, word string
-		want          bool
-	}{
-		{"WelcomeController", "welcome", true}, {"Unwelcome", "welcome", false}, {"HTTPServer", "server", true}, {"HTTPServer", "http", true},
-		{"CIPipeline", "ci", true}, {"CIRCUIT", "ci", false}, {"OAuth2Client", "client", true}, {"OAuth2 Login", "oauth", true},
-		{"Base64 Encoding", "base", true}, {"Base64encode", "encode", false}, {"REST APIs", "api", true}, {"CIs", "ci", true},
-		{"APIsController", "api", true}, {"APIsimple", "api", false}, {"Apis", "api", true}, {"İ server", "server", true},
-		{"使用server", "server", true}, {"GracefulShutdown", "graceful", true}, {"Ungraceful", "graceful", false},
-		{"Auto Generating Selectors", "auto-generating", true}, {"Mobile-BFF", "mobile bff", true}, {"Auto-generator", "auto generating", false},
-		// Inflections of a word of letters alone, not of a name.
-		{"Versioned APIs", "versioning", true}, {"API Versions", "versioning", true}, {"Versionless", "version", false}, {"Routing", "route", true},
-		{"Router", "route", false}, {"Caches", "cache", true}, {"Classes", "class", true}, {"Statuses", "status", true}, {"Strategies", "strategy", true},
-		{"Mapping", "map", true}, {"Mapped Types", "mapping", true}, {"Passed", "pass", true}, {"Auto Generated Selectors", "auto-generating", true},
-		{"Settings", "setting", true}, {"Mappings", "map", true}, {"Embedding", "embed", true}, {"Filing", "files", false}, {"Strings", "string", true},
-		{"RouteDefinition", "route", true}, {"CacheDefaults", "cache", true}, {"RouteSet", "route", true}, {"RoutedHandler", "route", true},
-		{"State", "stat", false}, {"Authy", "auth", false}, {"State", "state", true}, {"Strategy", "strategies", true},
-		{"State Management", "stats", false}, {"State", "states", true}, {"Plays", "play", true}, {"Playing", "play", true}, {"Keys", "key", true},
-	} {
-		if got := holds(h.heading, h.word); got != h.want {
-			t.Errorf("holds(%q, %q) = %v", h.heading, h.word, got)
-		}
-	}
-	page := "## One\n```sh\n## a comment\n```\n### Two\n#### Three\n  ~~~~\n## in tildes\n```\n## still in\n~~~~\n## Four\r\n" +
-		"````\n```\n## in four\n```go\n````\n    ```\n## Five\n```\n## in three\n```go\n## still in three\n```  \n## Six\n"
-	if got := headingsOf(page); !slices.Equal(got, []string{"One", "Two", "Four", "Five", "Six"}) {
-		t.Errorf("headingsOf = %q, want One, Two, Four, Five and Six, nothing of the code blocks", got)
 	}
 }
 

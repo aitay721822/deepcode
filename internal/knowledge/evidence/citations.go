@@ -35,9 +35,6 @@ var (
 	// tagRe matches a source block's opening (Format) copied as a citation,
 	// [source path="a.go" lines="3-9"], its symbol too.
 	tagRe = regexp.MustCompile(`^\s*source path="([^"]+)" lines="(\d+(?:-\d+)?)"(?: symbol="[^"]*")?\s*$`)
-	// pathlessRe matches lines cited without their file, [55-64], or after a
-	// source's number, [5:1-29].
-	pathlessRe = regexp.MustCompile(`\[(?:\d+:)?L?\d+(?:-L?\d+)?\]`)
 	// fenceRe matches a fenced code block, or one left open at the end.
 	fenceRe = regexp.MustCompile("(?s)```.*?(?:```|$)")
 	// linkText escapes what would end a link's text early: a path may hold
@@ -132,12 +129,6 @@ func LinkCitations(text string, used []retrieval.Hit, link func(Citation) string
 		b.WriteString("\n\n來源：" + strings.Join(links, " "))
 	}
 	return b.String(), cites, resolved
-}
-
-// Pathless reports whether text, outside code, cites lines without naming
-// their file, [55-64] or [5:1-29], which LinkCitations leaves as written.
-func Pathless(text string) bool {
-	return pathlessRe.MatchString(inlineRe.ReplaceAllString(fenceRe.ReplaceAllString(text, ""), ""))
 }
 
 // Link is the Markdown link LinkCitations writes for citation c, to url.

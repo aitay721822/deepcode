@@ -103,6 +103,12 @@ func TestPathsAndLinks(t *testing.T) {
 	if got := SourceURL(GitHub, "https://github.com/o/r", "abc", "main.go", 3, 9); got != "https://github.com/o/r/blob/abc/main.go#L3-L9" {
 		t.Fatalf("GitHub link: %s", got)
 	}
+	if got := FileURL(GitHub, "https://github.com/o/r", "abc", "src/a b.go"); got != "https://github.com/o/r/blob/abc/src/a%20b.go" {
+		t.Fatalf("GitHub file link: %s", got)
+	}
+	if got := FileURL(GitLab, "https://code.example.com/g/app", "abc", "a.go"); got != "https://code.example.com/g/app/-/blob/abc/a.go" {
+		t.Fatalf("GitLab file link: %s", got)
+	}
 }
 
 func TestRemoteCredentials(t *testing.T) {

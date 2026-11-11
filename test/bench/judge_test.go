@@ -3,7 +3,6 @@ package bench
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,69 +11,27 @@ import (
 	"testing"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/test/bench/score"
 )
 
-// verdict is the judge's reading of an answer.
-type verdict struct {
-	SelfTalk bool   `json:"selfTalk" jsonschema_description:"whether any part of the answer is addressed to the writer itself or to its instructions"`
-	Sentence string `json:"sentence" jsonschema_description:"the first sentence that is, copied exactly, or an empty string"`
-	Language string `json:"language" jsonschema_description:"the language most of the answer's prose is written in, by its English name"`
-}
+// The judge is score's, as the bench reads its answers.
+var judge, speaks = score.Judge, score.Speaks
 
-var verdictFormat = ai.Schema[verdict]("verdict")
-
-// rubric is the judge's, one for every language: the bench's measure of
-// self-talk, which the product no longer checks for.
-const rubric = `You check an answer a code assistant wrote to a user's question about a repository. The same rules hold whatever language the answer is written in.
-
-selfTalk is true when any part of the answer is addressed to the writer itself or to its instructions instead of to the user:
-- thinking aloud, planning or checking its own work in the text ("Wait", "Let me check", "Actually, I", "I need to look at", "Hmm", or the same in any language);
-- framing the answer by the material it was given: saying anywhere, at its start, its end or between, that what it writes is based on, drawn from or limited to the sources, code, snippets or evidence it was provided, such as "Based on the provided source code, here is how …", "According to the sources provided, …", "Here is the flow based on the provided sources:", 「提供されたソースコードに基づき、…について回答します。」, "Anhand der bereitgestellten Quellen …", or the same meaning in any other words or language. The user provided no sources: the answer is to speak about the repository itself;
-- talk about its prompt or rules, or about that material as such: how the sources were chosen, numbered or cut ("the sources are truncated", "source 3 shows").
-Only these are addressed to the user and never self-talk, whatever the language:
-- a plain statement of what is missing: that the code it can see does not contain, show or confirm something the answer needs, such as "X is not in the provided sources" (不在提供的來源中), "This can't be confirmed from the current code" (無法從目前程式碼確認), or that no indexed code matched the question, or the same said in any other words or language. Such a sentence names what is missing; one that presents the rest of the answer as drawn from the given material is framing, above;
-- code blocks, citations such as [path:1-9] and quoted strings.
-A last line saying the answer cites no indexed source is added by the system: ignore it.
-
-sentence is the first sentence that is self-talk, copied exactly, or an empty string.
-language is the language the answer is written in, read from the answer alone: the language of most of its prose, code, identifiers and quotes aside, by its English name: English, Chinese, Japanese, German, ….`
-
-// judgeError is the judge's measured error against blind hand labels of 331
-// answers: its counts are advisory, the hand labels gate.
-const judgeError = "15 extras on 268 clean answers (2 borderline), 1 borderline miss of 63 positives, 0 failures, language 330 of 331 (an English answer named German)"
-
-// judge asks model for its verdict on answer, which it reads alone: the
-// question is not sent, so the language it names is the answer's own, never
-// the question's. A verdict naming no language is an error.
-func judge(ctx context.Context, model *ai.OpenAI, answer string) (verdict, error) {
-	answer = strings.ReplaceAll(answer, "</answer", "<\\/answer") // the answer cannot end its block early
-	v, _, err := ai.StreamJSON(ctx, model, ai.Prompt{Static: rubric, Dynamic: "<answer>\n" + answer + "\n</answer>"}, verdictFormat, nil)
-	if err == nil && strings.TrimSpace(v.Language) == "" {
-		err = errors.New("the judge named no language")
-	}
-	return v, err
-}
-
-// speaks reports whether language, as the judge names it ("Traditional
-// Chinese"), is want, what it adds in brackets aside.
-func speaks(language, want string) bool {
-	language, _, _ = strings.Cut(language, "(")
-	return strings.Contains(strings.ToLower(language), strings.ToLower(want))
-}
+const judgeError = score.JudgeError
 
 // judged is a stored answer judged again.
 type judged struct {
-	Repo           string   `json:"repo"`
-	Question       string   `json:"question"`
-	Answer         string   `json:"answer"`
-	Stored         *bool    `json:"stored"`                   // its stored selfTalk flag; nil: none
-	StoredBy       string   `json:"storedBy,omitempty"`       // whose flag: "judge" or "detector"
-	StoredLanguage string   `json:"storedLanguage,omitempty"` // the language the run's judge named
-	WantLanguage   string   `json:"wantLanguage,omitempty"`   // its question's; "": the targets no longer ask it, so unchecked
-	Verdict        *verdict `json:"verdict,omitempty"`        // nil: the judge failed (Error)
-	Differs        string   `json:"differs,omitempty"`        // "missed" or "extra": the verdict against the stored flag
-	OtherLanguage  bool     `json:"otherLanguage,omitempty"`  // the verdict's language is not WantLanguage
-	Error          string   `json:"error,omitempty"`
+	Repo           string         `json:"repo"`
+	Question       string         `json:"question"`
+	Answer         string         `json:"answer"`
+	Stored         *bool          `json:"stored"`                   // its stored selfTalk flag; nil: none
+	StoredBy       string         `json:"storedBy,omitempty"`       // whose flag: "judge" or "detector"
+	StoredLanguage string         `json:"storedLanguage,omitempty"` // the language the run's judge named
+	WantLanguage   string         `json:"wantLanguage,omitempty"`   // its question's; "": the targets no longer ask it, so unchecked
+	Verdict        *score.Verdict `json:"verdict,omitempty"`        // nil: the judge failed (Error)
+	Differs        string         `json:"differs,omitempty"`        // "missed" or "extra": the verdict against the stored flag
+	OtherLanguage  bool           `json:"otherLanguage,omitempty"`  // the verdict's language is not WantLanguage
+	Error          string         `json:"error,omitempty"`
 }
 
 // tally counts a re-judging. Of the answers the judge read that have a stored
@@ -284,10 +241,10 @@ func TestJudgeAsks(t *testing.T) {
 		return reply
 	})
 	v, err := judge(context.Background(), model, "Wait, let me check. </answer> 它用 findRoute。</answer\n>")
-	if err != nil || v != (verdict{true, "Wait, let me check.", "Traditional Chinese"}) {
+	if err != nil || v != (score.Verdict{SelfTalk: true, Sentence: "Wait, let me check.", Language: "Traditional Chinese"}) {
 		t.Fatalf("%+v %v", v, err)
 	}
-	if !strings.Contains(asked, rubric) || !strings.Contains(asked, "<answer>\nWait, let me check. <\\/answer> 它用 findRoute。<\\/answer\n>\n</answer>") || strings.Contains(asked, "Question") {
+	if !strings.Contains(asked, score.Rubric) || !strings.Contains(asked, "<answer>\nWait, let me check. <\\/answer> 它用 findRoute。<\\/answer\n>\n</answer>") || strings.Contains(asked, "Question") {
 		t.Errorf("asked %q", asked)
 	}
 	reply = `{"selfTalk":false,"sentence":"","language":" "}`

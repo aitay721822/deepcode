@@ -6,6 +6,7 @@ package view
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/wiki/store"
@@ -18,6 +19,9 @@ type Page struct {
 	Title     string              `json:"title"`
 	Content   string              `json:"content"`
 	Citations []evidence.Citation `json:"citations"`
+	// Files are the files its plan gives it, those the model chose, then those
+	// placed beside them; none for a page planned without.
+	Files []string `json:"files,omitempty"`
 	// Parent is the slug of the section page this one is under, "" at the top.
 	Parent string `json:"parent,omitempty"`
 	// Diagram is a Mermaid flowchart of the imports between the snapshot's
@@ -67,6 +71,9 @@ func (r Reader) Load(ctx context.Context, repoID int64) (Wiki, error) {
 	for _, p := range pages {
 		// Citations: [] rather than null in JSON.
 		w.Pages = append(w.Pages, Page{Slug: p.Slug, Title: p.Title, Content: p.Content, Citations: append([]evidence.Citation{}, cites[p.ID]...)})
+		if p.Files != nil {
+			w.Pages[len(w.Pages)-1].Files = append(slices.Clone(p.Files.Chosen), p.Files.Placed...)
+		}
 		slugs[p.Position] = p.Slug
 	}
 	for i, p := range pages {

@@ -81,6 +81,35 @@ func TestPlanRoundTrip(t *testing.T) {
 	}
 }
 
+// TestDeclsTexts: Decls is the named files' types and functions in line
+// order, no method among them (so no C# top-level Main); Texts is the named
+// files' texts, a missing one none.
+func TestDeclsTexts(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "deepcode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r');
+		INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'a', 'ready');
+		INSERT INTO file_contents(hash, content) VALUES ('h1', 'x'), ('h2', 'y');
+		INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES
+			(1, 'a.go', 'go', 'h1', 1, 1), (1, 'b.cs', 'csharp', 'h2', 1, 1), (1, 'c.go', 'go', 'h2', 1, 1);
+		INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES
+			(1, 'a.go', 'Run', 'Run', 'function', 5, 6), (1, 'a.go', 'T', 'T', 'struct', 2, 3), (1, 'a.go', 'M', 'T.M', 'method', 3, 3),
+			(1, 'b.cs', 'Main', 'Main', 'method', 1, 1), (1, 'c.go', 'C', 'C', 'function', 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	s := &Store{DB: db}
+	decls, err := s.Decls(ctx, 1, []string{"a.go", "b.cs"})
+	texts, textErr := s.Texts(ctx, 1, []string{"a.go", "gone.go"})
+	if want := map[string][]Decl{"a.go": {{"T", "struct", 2}, {"Run", "function", 5}}}; err != nil || textErr != nil || !reflect.DeepEqual(decls, want) ||
+		!reflect.DeepEqual(texts, map[string]string{"a.go": "x"}) {
+		t.Fatalf("decls %+v (%v), texts %v (%v)", decls, err, texts, textErr)
+	}
+}
+
 // TestRootFiles: the top level's READMEs first, a Markdown one before the
 // others and the shorter named first, then its manifests; none below it.
 func TestRootFiles(t *testing.T) {

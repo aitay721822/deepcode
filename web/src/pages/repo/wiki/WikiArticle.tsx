@@ -42,7 +42,8 @@ export function WikiArticle({
     })
     onToc(items)
   }, [page.content, onToc])
-  const files = [...new Set(page.citations.map((c) => c.path))]
+  // Its plan's files first, then any other file it cites (a section's shared sources).
+  const files = [...new Set([...(page.files ?? []), ...page.citations.map((c) => c.path)])]
   return (
     <article ref={ref} className="wiki">
       <h1 className="mb-7 font-serif text-[clamp(2rem,3.6vw,2.75rem)] leading-[1.08] font-medium tracking-[-0.02em] [overflow-wrap:anywhere]">

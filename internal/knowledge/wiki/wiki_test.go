@@ -20,6 +20,7 @@ import (
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/knowledge/wiki/outline"
 	"deepcode/internal/knowledge/wiki/outline/place"
+	"deepcode/internal/knowledge/wiki/outline/skeleton"
 	"deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/platform/ai"
@@ -111,7 +112,7 @@ func TestRunResumes(t *testing.T) {
 // (fill), passed through alter when set (by the schema's name and how many
 // of that name it was asked before, in asked), and a page's writer with
 // draft's page, keeping the user message of every request; when first is
-// set, a page's first draft is first and, asked again, cites the example shown.
+// set, a page's first draft is first, and its repair draft's page.
 type fakeModel struct {
 	mu            sync.Mutex
 	plans, writes []string
@@ -148,9 +149,7 @@ func (f *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply = string(b)
 	} else {
 		f.writes = append(f.writes, body.Messages[1].Content)
-		if _, example, again := strings.Cut(body.Messages[len(body.Messages)-1].Content, "as in "); f.first != "" && again && len(body.Messages) > 2 {
-			reply = "Written " + example
-		} else if f.first != "" {
+		if f.first != "" && len(body.Messages) == 2 {
 			reply = f.first
 		}
 	}
@@ -194,13 +193,22 @@ func fill(s map[string]any, at []string) any {
 	return "Planned"
 }
 
-// draft is a page citing the first <source> block request shows, as a writer is asked to.
+// draft is a page citing the first <source> block request shows, as a writer
+// is asked to, then each heading it lists, citing it too.
 func draft(request string) string {
+	out, cite := "Written.", ""
 	if _, block, ok := strings.Cut(request, `<source path="`); ok {
 		path, rest, _ := strings.Cut(block, `" lines="`)
-		return "Written. See [" + path + ":" + strings.SplitN(rest, `"`, 2)[0] + "]."
+		cite = " See [" + path + ":" + strings.SplitN(rest, `"`, 2)[0] + "]."
 	}
-	return "Written."
+	_, listed, _ := strings.Cut(request, "Its headings, in order:\n")
+	for _, line := range strings.Split(listed, "\n") {
+		if !strings.HasPrefix(line, "#") {
+			break
+		}
+		out += cite + "\n\n" + line + "\n\nAbout it."
+	}
+	return out + cite
 }
 
 // TestRunPlansSections: a repository too big to plan flat gets the overview,
@@ -269,6 +277,20 @@ func TestRunPlansSections(t *testing.T) {
 	w, err := (view.Reader{Store: g.Store, Graph: g.Graph}).Load(context.Background(), 1)
 	if err != nil || w.Pages[1].Parent != "" || w.Pages[2].Parent != w.Pages[1].Slug || !strings.Contains(w.Pages[0].Diagram, `["api"]`) {
 		t.Fatalf("the nav: %+v %v", w.Pages[:3], err)
+	}
+	stored, _ := g.Store.Pages(context.Background(), 1)
+	shown := 0
+	for i, p := range stored { // each shown with its files, the chosen first
+		var want []string
+		if p.Files != nil {
+			want = append(slices.Clone(p.Files.Chosen), p.Files.Placed...)
+		}
+		if shown += len(want); !slices.Equal(w.Pages[i].Files, want) {
+			t.Fatalf("page %d shows files %q, want %q", i, w.Pages[i].Files, want)
+		}
+	}
+	if shown == 0 {
+		t.Fatal("no page shows its files")
 	}
 	var trimmed Planning
 	g = runWiki(t, testDB(t, stmts...), &fakeModel{}, "abc", func(g *Generator) { g.MaxPages, g.Planned = 8, func(p Planning) { trimmed = p } })
@@ -381,6 +403,71 @@ func TestRunOutcomes(t *testing.T) {
 		t.Fatalf("a ready wiki: %v, wiki %q", err, status)
 	} else if pages, _ := g.Store.Pages(ctx, 1); len(pages) != 1 || pages[0].Content != "" {
 		t.Fatalf("a ready wiki was written again: %+v", pages)
+	}
+}
+
+// TestRunWritesSkeleton: a page is held to its skeleton, its chosen file's
+// type. A first draft, fenced and titled, lacking the heading is cleaned and
+// repaired, asked for that section alone, and the repair goes in after the
+// intro; the page renders with it, cited, and Written tells it. Its placed
+// file, with no heading, is listed last under the wiki's Other files label,
+// linked, by its first three declarations, and so is its folder of tests,
+// whose heading no source showed, by its path.
+func TestRunWritesSkeleton(t *testing.T) {
+	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status, wiki_status, wiki_language, wiki_labels) VALUES (1, 1, 'abc', 'ready', 'failed', 'English', '{"stack":"Stack","otherFiles":"More files"}')`,
+		`INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`,
+		`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, 'a.go', 'go', 'h', 1, 9), (1, 'b.go', 'go', 'h', 1, 4)`,
+		`INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash) VALUES (1, 'a.go', 'Router', 1, 9, 'func route()' || char(10) || 'type Router struct' || char(10, 51, 10, 52, 10, 53, 10, 54, 10, 55, 10, 56, 10, 57), 'c')`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'a.go', 'route', 'route', 'function', 1, 1), (1, 'a.go', 'Router', 'Router', 'struct', 2, 9),
+			(1, 'b.go', 'c', 'c', 'function', 2, 2), (1, 'b.go', 'B', 'B', 'struct', 1, 1), (1, 'b.go', 'e', 'e', 'function', 4, 4), (1, 'b.go', 'd', 'd', 'function', 3, 3)`,
+		`INSERT INTO wiki_pages(snapshot_id, slug, title, query, position, content, files) VALUES (1, '1-overview', 'Overview', '', 0, 'Written before.', NULL),
+			(1, '2-routing', 'Routing', 'router', 1, '', '{"chosen":["a.go"],"placed":["b.go"],"units":["./","e2e/ (tests)"]}')`)
+	model := &fakeModel{first: "```markdown\n# Routing\nIntro.\n```"}
+	var w Writing
+	g := runWiki(t, db, model, "abc", func(g *Generator) { g.Written = func(x Writing) { w = x } })
+	pages, err := g.Store.Pages(context.Background(), 1)
+	if err != nil || len(pages) != 2 || !strings.HasPrefix(pages[1].Content, "Intro.\n\n## Router\n\nAbout it. See [a.go:1-9](") ||
+		!strings.HasSuffix(pages[1].Content, "\n\n## More files\n\n- [b.go](https://example.com/o/r/blob/abc/b.go): `B`, `c`, `d`\n- `e2e/`") {
+		t.Fatalf("%+v %v", pages, err)
+	}
+	if len(model.writes) != 2 || len(model.plans) != 0 || !strings.Contains(model.writes[0], "Its headings, in order:\n## Router\nIts files: a.go, b.go\n") ||
+		!slices.Equal(w.Headings, []string{"Router"}) || len(w.Lacking) != 0 || !slices.Equal(w.Unsourced, []string{"e2e"}) || !w.Repaired ||
+		w.Contracts["write.heading"] != (aicontract.Count{First: 1}) {
+		t.Errorf("asked %q; written %+v", model.writes, w)
+	}
+}
+
+// TestRunHeadListsNone: a section's head, held to no headings, lists none of
+// its files under Other files, as its pages do theirs.
+func TestRunHeadListsNone(t *testing.T) {
+	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status, wiki_status, wiki_language) VALUES (1, 1, 'abc', 'ready', 'failed', 'English')`,
+		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'docs/a.md', 1, 9, 'guides text', 'c')`,
+		`INSERT INTO wiki_pages(snapshot_id, slug, title, query, position, parent, content, files) VALUES (1, '1-overview', 'Overview', '', 0, NULL, 'Written before.', NULL),
+			(1, '2-guides', 'Guides', 'guides', 1, NULL, '', '{"chosen":[],"placed":["docs/a.md"],"units":["docs/a.md"]}'),
+			(1, '3-guide', 'Guide', 'guides', 2, 1, '', '{"chosen":[],"placed":["docs/a.md"],"units":[]}')`)
+	pages, err := runWiki(t, db, &fakeModel{}, "abc").Store.Pages(context.Background(), 1)
+	if err != nil || len(pages) != 3 || strings.Contains(pages[1].Content, "## Other files") || !strings.HasSuffix(pages[2].Content, "## Other files\n\n- [docs/a.md](https://example.com/o/r/blob/abc/docs/a.md)") {
+		t.Fatalf("%+v %v", pages, err)
+	}
+}
+
+// TestSourced: a heading stays when a used hit of its file holds its line (any
+// hit, for line 0), as does a fixed one with no line; one whose line no hit
+// shows, or with a unit and no line, is left out, a level-2 one with those
+// under it.
+func TestSourced(t *testing.T) {
+	at := func(p string, line int) retrieval.Anchor { return retrieval.Anchor{Path: p, Line: line} }
+	used := []retrieval.Hit{{Path: "a.go", StartLine: 10, EndLine: 20}, {Path: "b.md", StartLine: 1, EndLine: 5}}
+	kept, out := sourced(skeleton.Skeleton{{Name: "Stack", Level: 2}, {Name: "A", Level: 2, Unit: "a.go", Anchor: at("a.go", 15)},
+		{Name: "A1", Level: 3, Unit: "a.go", Anchor: at("a.go", 0)}, {Name: "Gone", Level: 2, Unit: "a.go", Anchor: at("a.go", 30)},
+		{Name: "Under", Level: 3, Unit: "a.go", Anchor: at("b.md", 2)}, {Name: "Bare", Level: 2, Unit: "d.go"}, {Name: "Lone", Level: 2, Anchor: at("e.go", 3)},
+		{Name: "B", Level: 2, Unit: "b.md", Anchor: at("b.md", 5)}, {Name: "B1", Level: 3, Unit: "b.md", Anchor: at("b.md", 6)}}, used)
+	var names []string
+	for _, h := range kept {
+		names = append(names, h.Name)
+	}
+	if strings.Join(names, " ") != "Stack A A1 B" || strings.Join(out, " ") != "Gone Under Bare Lone B1" {
+		t.Errorf("kept %q, left out %q", names, out)
 	}
 }
 

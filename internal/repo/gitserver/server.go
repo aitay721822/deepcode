@@ -80,14 +80,23 @@ func (s Server) Remote(webURL string) git.Remote {
 // SourceURL links lines start to end of path at commit sha on webURL, the
 // page of a repository on a server of kind.
 func SourceURL(kind, webURL, sha, path string, start, end int) string {
+	if kind == GitLab {
+		return fmt.Sprintf("%s#L%d-%d", FileURL(kind, webURL, sha, path), start, end)
+	}
+	return fmt.Sprintf("%s#L%d-L%d", FileURL(kind, webURL, sha, path), start, end)
+}
+
+// FileURL links the whole of path at commit sha on webURL, the page of a
+// repository on a server of kind.
+func FileURL(kind, webURL, sha, path string) string {
 	parts := strings.Split(path, "/")
 	for i, p := range parts {
 		parts[i] = url.PathEscape(p)
 	}
 	if kind == GitLab {
-		return fmt.Sprintf("%s/-/blob/%s/%s#L%d-%d", webURL, sha, strings.Join(parts, "/"), start, end)
+		return fmt.Sprintf("%s/-/blob/%s/%s", webURL, sha, strings.Join(parts, "/"))
 	}
-	return fmt.Sprintf("%s/blob/%s/%s#L%d-L%d", webURL, sha, strings.Join(parts, "/"), start, end)
+	return fmt.Sprintf("%s/blob/%s/%s", webURL, sha, strings.Join(parts, "/"))
 }
 
 // defaultAPI is the REST API root of a server of kind at base.

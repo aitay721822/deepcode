@@ -86,6 +86,8 @@ type wikiRun struct {
 	CachedTokens int `json:"cachedTokens"`
 	// Planning is how the model's plan of the pages went, nil when they were carried over.
 	Planning *wiki.Planning `json:"planning,omitempty"`
+	// Touched counts the carried pages written again, by why (wiki.Generator.Touched).
+	Touched map[string]int `json:"touched,omitempty"`
 }
 
 type evalResult struct {
@@ -195,6 +197,9 @@ func (rep report) markdown() string {
 				rewritten = "–"
 			}
 			wiki, pages, calls = took(w), rewritten+" of "+count(r, "head pages", w.Pages), fmt.Sprint(w.Calls)
+			if n := w.Touched["skeleton"]; n > 0 { // carried pages written again only as their skeleton gained a heading
+				pages += fmt.Sprintf(" (%d by skeleton)", n)
+			}
 		}
 		changed, index := atHead(r, "changed files", r.Update.ChangedFiles), fmt.Sprintf("%.1f s", r.Update.IndexSeconds)
 		if r.Update.Failed {
@@ -445,7 +450,7 @@ func TestMarkdown(t *testing.T) {
 		Contracts: map[aicontract.Rule]aicontract.Count{"section.missing": {First: 2, Repaired: 1}, "flat.json": {First: 1}}, Ceiling: &wiki.Ceiling{Limit: 64, Wanted: 80, Planned: 64}}}}
 	broken := result{Repo: "broken", Wiki: &wikiRun{Failed: true, Seconds: 3, Planning: &wiki.Planning{Seconds: 1, Requests: 2}}}
 	ok.Plan, ok.DeepWiki, broken.Plan = &shape.Shape{Pages: 10, Thin: 1, Homeless: []string{"svc/"}}, 28, &shape.Shape{Pages: 3}
-	ok.Update.Wiki, ok.Update.PagesRewritten = &wikiRun{Seconds: 5, Pages: 6}, 1
+	ok.Update.Wiki, ok.Update.PagesRewritten = &wikiRun{Seconds: 5, Pages: 6, Touched: map[string]int{"skeleton": 1, "cites": 2}}, 1
 	broken.Update.Failed, broken.Errors = true, []string{"update index: boom"}
 	ok.Failed = []string{"symbols", "pages rewritten"} // a count whose query failed
 	broken.Answers = []answer{{Question: "q", Error: "timeout", Trace: &trace.Trace{Gathered: 1}}}
@@ -456,7 +461,7 @@ func TestMarkdown(t *testing.T) {
 	ok.Pages, ok.Topics, ok.CitationSpan, ok.PageCitations = 10, &coverage{Topics: 4, Covered: 3, Missing: []string{"SSE"}, ToolingPages: 2}, citationSpan{3, 40}, 7
 	uncited, uncounted := result{Repo: "uncited", Wiki: &wikiRun{}}, result{Repo: "uncounted", Wiki: &wikiRun{}, Failed: []string{"page citations"}}
 	md := report{Repos: []result{ok, broken, uncited, uncounted}}.markdown()
-	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
+	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 (1 by skeleton) |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
 		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 3.0 s | 9.5 s | 20.0 s | 2 | fail: no Mount | yes | other |", "| ok | u | 1.0 s | 1.0 s | 2.0 s | 1 | pass | not judged | not judged |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
 		"1 of 3 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language; 1 were not judged.",
 		"The judge is advisory, hand labels gate; its measured error: " + judgeError + ".",

@@ -26,6 +26,13 @@ type Retriever struct {
 
 type Hit = store.Hit // one chunk of code found
 
+// Anchor is a line of a file a search is sure to read: the chunk holding it,
+// or the file's first for Line 0.
+type Anchor struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+}
+
 type Result struct {
 	Hits   []Hit `json:"hits"`
 	FTS    int   `json:"fts"`
@@ -82,6 +89,72 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 	}
 	ids, res.Graph = supplement(ids, near, limit)
 	res.FTS, res.Vector, res.Symbol, res.Named = len(fts), len(vec), len(sym), len(named)
+	if res.Hits, err = r.Store.Chunks(ctx, ids); err != nil {
+		return res, err
+	}
+	res.Hits, err = r.declared(ctx, snapshotID, res.Hits)
+	return res, err
+}
+
+// SearchPage is a wiki page's evidence: first the chunk holding each of
+// anchors, in their order, sure of a place while limit allows; then FTS5 on
+// words within files and across the snapshot, symbols and vector search,
+// fused as Search fuses them, and the code the best hits import. It reads
+// files as given, never parsing names from words, so a path holding a space
+// is read whole. An anchor whose chunk is taken costs nothing more; one past
+// limit, or whose line no chunk holds, is left out, which the page's skeleton
+// sees in what its evidence shows.
+func (r *Retriever) SearchPage(ctx context.Context, snapshotID int64, words string, files []string, anchors []Anchor, limit int) (Result, error) {
+	var res Result
+	fts, err := r.fts(ctx, snapshotID, words, nil, ftsLimit)
+	if err != nil {
+		return res, err
+	}
+	sym, err := r.symbolChunks(ctx, snapshotID, words)
+	if err != nil {
+		return res, err
+	}
+	var own []int64
+	if len(files) > 0 {
+		if own, err = r.fts(ctx, snapshotID, words, files, ftsLimit); err != nil {
+			return res, err
+		}
+	}
+	var vec []int64
+	if r.Embed != nil {
+		if vec, err = r.vector(ctx, snapshotID, words); err != nil {
+			if ctx.Err() != nil {
+				return res, ctx.Err()
+			}
+			log.Printf("retrieval: vector search unavailable, using FTS5 and symbols only: %v", err)
+		}
+	}
+	paths, lines := make([]string, len(anchors)), make([]int, len(anchors))
+	for i, a := range anchors {
+		paths[i], lines[i] = a.Path, a.Line
+	}
+	sure, err := r.Store.Holding(ctx, snapshotID, paths, lines)
+	if err != nil {
+		return res, err
+	}
+	var first []int64
+	for _, id := range sure {
+		if !slices.Contains(first, id) && len(first) < limit {
+			first = append(first, id)
+		}
+	}
+	fused := slices.DeleteFunc(fusion.Fuse(fts, vec, sym, own), func(id int64) bool { return slices.Contains(first, id) })
+	ids := first
+	if room := limit - len(first); room > 0 && len(fused) > 0 {
+		near, err := r.near(ctx, snapshotID, words, fused)
+		if err != nil {
+			return res, err
+		}
+		var rest []int64
+		rest, res.Graph = supplement(fused, slices.DeleteFunc(near, func(id int64) bool { return slices.Contains(first, id) }), room)
+		ids = append(ids, rest...)
+	}
+	res.FTS, res.Vector, res.Symbol, res.Named = len(fts), len(vec), len(sym), len(own)
 	if res.Hits, err = r.Store.Chunks(ctx, ids); err != nil {
 		return res, err
 	}

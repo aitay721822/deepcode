@@ -23,6 +23,7 @@ import (
 	"deepcode/internal/knowledge/wiki/fanout"
 	"deepcode/internal/knowledge/wiki/outline"
 	"deepcode/internal/knowledge/wiki/outline/place"
+	"deepcode/internal/knowledge/wiki/outline/skeleton"
 	"deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/jobs"
@@ -40,9 +41,13 @@ type Generator struct {
 	Language  string
 	Parallel  int // pages planned or written at a time; 0 is one
 	MaxPages  int // the cost ceiling: the most pages a wiki gets, never a target; 0 is defaultMaxPages
-	// Planned, when set, is told how each plan the model makes went. The bench
-	// sets it.
+	// Planned, when set, is told how each plan the model makes went, Written
+	// how each page's writing went, and Touched each page an update carries
+	// that is written again, and why (touched's reason, or "moved"). The bench
+	// and the probes set them.
 	Planned func(Planning)
+	Written func(Writing)
+	Touched func(page, why string)
 }
 
 const (
@@ -247,12 +252,24 @@ func (g *Generator) carry(ctx context.Context, repoID, snap int64, src source, p
 	kept := 0
 	for i, q := range plan {
 		p := old[from[i]]
-		pages[i] = newPage{Title: p.Title, Query: p.Query, Parent: q.Parent, Files: store.PageFiles{Chosen: q.Chosen, Placed: q.Placed, Units: q.Units}}
-		p.Files = &pages[i].Files
-		touched, err := g.touched(ctx, snap, p, cites[p.ID], u)
+		was, err := g.skeleton(ctx, base, p, heads[p.Position]) // the headings its plan gave it at base
 		if err != nil {
 			return false, err
-		} else if touched || moved[i] {
+		}
+		pages[i] = newPage{Title: p.Title, Query: p.Query, Parent: q.Parent, Files: store.PageFiles{Chosen: q.Chosen, Placed: q.Placed, Units: q.Units}}
+		p.Files = &pages[i].Files
+		head := slices.ContainsFunc(plan, func(q outline.Page) bool { return q.Parent == i })
+		why, err := g.touched(ctx, snap, p, head, was, cites[p.ID], u)
+		if err != nil {
+			return false, err
+		}
+		if why == "" && moved[i] {
+			why = "moved"
+		}
+		if why != "" {
+			if g.Touched != nil {
+				g.Touched(p.Title, why)
+			}
 			continue
 		}
 		// The cited lines read as they did: the citations follow them, the links to the new commit.
@@ -372,26 +389,44 @@ func group(p page) int {
 	return p.Position
 }
 
-// touched reports whether the change may make page p read differently: a
-// line it cites is no longer there as it was (for a manifest, only where the
-// page says a word the change lost: a new dependency version leaves the pages
-// citing its scripts), a file it cites imports a declaration the change
-// altered, or its search now finds a declaration that is new: in a changed
-// file, or anywhere in a new file that belongs with p's group of pages
-// (change.Home), as a new file is for the pages nearest it. The same chunk
-// with other lines around it, a declaration now in another chunk
-// (change.Novel), or a manifest, it may find without harm.
-func (g *Generator) touched(ctx context.Context, snap int64, p page, cites []evidence.Citation, u update) (bool, error) {
+// touched is why the change may make page p, a section's head when head,
+// read differently, "" for no reason: "cites", a line it cites is no longer
+// there as it was (for a manifest, only where the page says a word the change
+// lost: a new dependency version leaves the pages citing its scripts), or a
+// file it cites imports a declaration the change altered; "search", its
+// search, its skeleton's anchors first, now finds a declaration that is new:
+// in a changed file, or anywhere in a new file that belongs with p's group of
+// pages (change.Home), as a new file is for the pages nearest it; or
+// "skeleton", its plan now gives it a heading that its plan at base (was) did
+// not, whose source its evidence shows and which its text lacks (a guide's
+// new section, a chosen file's renamed type). The same chunk with other lines
+// around it, a declaration now in another chunk (change.Novel), a manifest, a
+// heading the plan no longer gives, or one it gave before that the text lacks
+// (the writer left it out, or wrote the page, from the files it has, before
+// skeletons), it may find without harm.
+func (g *Generator) touched(ctx context.Context, snap int64, p page, head bool, was skeleton.Skeleton, cites []evidence.Citation, u update) (string, error) {
 	if slices.ContainsFunc(cites, func(c evidence.Citation) bool {
 		e, edited := u.edits[c.Path]
 		return u.ripple[c.Path] || edited && e.Touches(c.Path, c.StartLine, c.EndLine, p.Content)
 	}) {
-		return true, nil
+		return "cites", nil
 	}
-	// ponytail: the page's own search only; the sources its section shares count
-	// where it cites them, so one changed file does not rewrite a whole section.
-	_, hits, err := g.sources(ctx, snap, p, page{}, false)
-	return slices.ContainsFunc(hits, func(h retrieval.Hit) bool {
+	var sk skeleton.Skeleton
+	if p.Position != 0 { // the overview's one heading is fixed, in the wiki's language
+		var err error
+		if sk, err = g.skeleton(ctx, snap, p, head); err != nil {
+			return "", err
+		}
+	}
+	// ponytail: the page's own search only, a section's head's too; the sources its
+	// section shares count where it cites them, so one changed file does not
+	// rewrite a whole section. A gained heading this evidence shows but write's,
+	// the section's first, leaves out costs one rewrite: the next base gives it.
+	_, hits, err := g.sources(ctx, snap, p, page{}, false, nil, anchors(sk))
+	if err != nil {
+		return "", err
+	}
+	if slices.ContainsFunc(hits, func(h retrieval.Hit) bool {
 		if !u.changed[h.Path] || change.Is(h.Path) {
 			return false
 		}
@@ -399,7 +434,14 @@ func (g *Generator) touched(ctx context.Context, snap int64, p page, cites []evi
 			return change.Novel(h.Symbol, symbols)
 		}
 		return change.Home(h.Path, u.groups)[group(p)]
-	}), err
+	}) {
+		return "search", nil
+	}
+	_, used, _ := evidence.Format(hits, evidence.Limit{Chars: evidenceChars}) // as write holds them to the evidence
+	if sk, _ = sourced(sk, used); len(skeleton.Lacking(skeleton.Gained(was, sk), skeleton.Parse(p.Content, sk))) > 0 {
+		return "skeleton", nil
+	}
+	return "", nil
 }
 
 // content reads file p of the snapshot, and whether it holds one.

@@ -7,15 +7,13 @@ import (
 	"strings"
 	"unicode"
 
-	"deepcode/internal/repo/index/analyzer"
+	"deepcode/internal/knowledge/retrieval/names"
 	"deepcode/internal/repo/index/chunker"
 )
 
 var (
 	wordRe  = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 	identRe = regexp.MustCompile(`[A-Za-z_$][A-Za-z0-9_$]{2,}`)
-	// lineRe matches the line a word names after its file: a.go:42, a.go#L42-L50.
-	lineRe = regexp.MustCompile(`(?:(?::\d+)+(?:-\d+)?|#L\d+(?:-L?\d+)?)$`) // a.go:42:7 too
 )
 
 // The files a query names: at most maxFiles of them, those of a page's
@@ -96,18 +94,18 @@ func (r *Retriever) fts(ctx context.Context, snapshotID int64, query string, pat
 	return r.Store.FTS(ctx, snapshotID, m, paths, limit)
 }
 
-// named ranks the chunks of the files the query names (FileNames): the files
+// named ranks the chunks of the files the query names (names.FileNames): the files
 // named first (pick), each file's best chunk by the query's words first
 // (byFile), and returns how many lead it, one a file. A wiki page's focus
 // lists the files it is about, the main ones and the examples placed in it
 // first, and their words alone may rank them nowhere, as eShop's AppHost.cs
 // under every project's Extensions.cs.
 func (r *Retriever) named(ctx context.Context, snapshotID int64, query string) ([]int64, int, error) {
-	names := FileNames(query)
-	if len(names) == 0 {
+	listed := names.FileNames(query)
+	if len(listed) == 0 {
 		return nil, 0, nil
 	}
-	groups, err := r.Store.Files(ctx, snapshotID, names, maxFiles)
+	groups, err := r.Store.Files(ctx, snapshotID, listed, maxFiles)
 	files := slices.Concat(groups...)
 	if err != nil || len(files) == 0 {
 		return nil, 0, err
@@ -201,72 +199,6 @@ func byFile(files []string, hits []Hit) ([]int64, int) {
 		}
 	}
 	return ids, firsts
-}
-
-// FileNames are the first 16 words of query that may name files or folders,
-// each once: a path (src/app.ts, examples/, app/[slug]), a glob (tests/*.rs)
-// or the name of a file of an indexed language (App.java, go.mod; not
-// res.send or .NET), never a URL. Quotes, full-width punctuation and stops
-// around a word go, as do markdown's bold, brackets wrapping it or left
-// unpaired, the line after it (a.go:42, a.go#L42) and a leading ./ or /.
-// They are all of a query's names the search reads.
-func FileNames(query string) []string {
-	var out []string
-	for _, w := range strings.FieldsFunc(query, Separates) {
-		w = strings.ReplaceAll(w, `\`, "/")
-		for prev := ""; prev != w; { // **a.go**. as much as **a.go.**
-			prev, w = w, strings.TrimRight(strings.Trim(w, "*"), ".:!?")
-		}
-		w = unwrap(w)
-		w = strings.TrimLeft(strings.TrimPrefix(strings.TrimRight(lineRe.ReplaceAllString(w, ""), ".:!?"), "./"), "/")
-		_, indexed := analyzer.Detect(w)
-		if w != "" && (strings.Contains(w, "/") || indexed) && !strings.Contains(w, "://") && !slices.Contains(out, w) && len(out) < 16 {
-			out = append(out, w)
-		}
-	}
-	return out
-}
-
-// Separates reports whether r ends a word FileNames reads: a space, or
-// punctuation no path holds, full-width too.
-func Separates(r rune) bool {
-	return unicode.IsSpace(r) || strings.ContainsRune(",;`'\"|=<>，、；：。？！（）「」『』《》", r)
-}
-
-// unwrap drops the brackets around w, and one at an end that w leaves
-// unpaired: (src/a.ts) and src/a.ts) are src/a.ts, app/[slug],
-// (group)/page.tsx and (group)/(admin) stay.
-func unwrap(w string) string {
-	for _, p := range []string{"()", "[]"} {
-		open, close := p[:1], p[1:]
-		for len(w) >= 2 && strings.HasPrefix(w, open) && strings.HasSuffix(w, close) && balanced(w[1:len(w)-1], open[0], close[0]) {
-			w = w[1 : len(w)-1]
-		}
-		if strings.HasSuffix(w, close) && strings.Count(w, close) > strings.Count(w, open) {
-			w = w[:len(w)-1]
-		}
-		if strings.HasPrefix(w, open) && strings.Count(w, open) > strings.Count(w, close) {
-			w = w[1:]
-		}
-	}
-	return w
-}
-
-// balanced reports whether every close in s follows an open it closes, and
-// every open is closed.
-func balanced(s string, open, close byte) bool {
-	depth := 0
-	for i := range len(s) {
-		switch s[i] {
-		case open:
-			depth++
-		case close:
-			if depth--; depth < 0 {
-				return false
-			}
-		}
-	}
-	return depth == 0
 }
 
 // symbolChunks finds chunks holding the definition of any of the first 32

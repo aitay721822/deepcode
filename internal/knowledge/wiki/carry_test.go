@@ -15,9 +15,10 @@ var basePages = []struct{ title, query, file string }{
 	{"Alpha", "alpha", "a.go"}, {"Beta", "beta", "b.go"}, {"Delta", "delta", "d.go"}, {"Epsilon", "gizmo", "e.go"},
 }
 
-// aboutPage is a base page's text, linking its citation at commit sha.
+// aboutPage is a base page's text under its skeleton's heading, its chosen
+// file's bare name, linking its citation at commit sha.
 func aboutPage(title, file, sha string) string {
-	return fmt.Sprintf("About %s: [%s:1-1](https://example.com/o/r/blob/%s/%[2]s#L1-L1).", title, file, sha)
+	return fmt.Sprintf("About %s.\n\n## %s\n\n[%s:1-1](https://example.com/o/r/blob/%s/%[3]s#L1-L1).", title, strings.TrimSuffix(file, ".go"), file, sha)
 }
 
 // carryDB holds repository 1 with snapshot 2 at commit "base", whose
@@ -63,7 +64,11 @@ func carryDB(t *testing.T, language string, base, next map[string]string) *sql.D
 // or cited lines changed or whose search finds a new file near what they
 // cite; a page left with no file goes; kept citations follow their lines. It
 // plans anew for another language, pages without files, or most files changed.
+// Each page written again is told with why; a new file no heading covers is
+// listed under the English label when the wiki has none.
 func TestRunCarriesPages(t *testing.T) {
+	reasons := map[string]map[string]string{"carry": {"Alpha": "cites", "Beta": "moved", "Epsilon": "search"}, "far new file": {"Beta": "moved"},
+		"renamed": {"Alpha": "cites"}, "empty files": {"Beta": "moved"}}
 	common := map[string]string{"a.go": "alpha one", "b.go": "beta", "d.go": "delta", "e.go": "epsilon", "f.go": "filler", "h.go": "core helper"} // a planned overview searches "core"
 	files := func(changes map[string]string, drop ...string) map[string]string {
 		out := maps.Clone(common)
@@ -115,8 +120,11 @@ func TestRunCarriesPages(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			model := &fakeModel{}
-			g := runWiki(t, db, model, "next")
+			model, whys := &fakeModel{}, map[string]string{}
+			g := runWiki(t, db, model, "next", func(g *Generator) { g.Touched = func(page, why string) { whys[page] = why } })
+			if want := reasons[name]; want != nil && !maps.Equal(whys, want) {
+				t.Errorf("touched %v, want %v", whys, want)
+			}
 			pages, err := g.Store.Pages(ctx, 6)
 			if err != nil {
 				t.Fatal(err)
@@ -129,6 +137,9 @@ func TestRunCarriesPages(t *testing.T) {
 					t.Fatalf("page %s left empty or without files", p.Title)
 				}
 				if strings.HasPrefix(p.Content, "Written.") {
+					if name == "carry" && p.Title == "Beta" && !strings.HasSuffix(p.Content, "\n\n## Other files\n\n- [g.go](https://example.com/o/r/blob/next/g.go)") {
+						t.Errorf("Beta lists its new file under no English label: %q", p.Content)
+					}
 					written++
 					got = append(got, p.Title)
 					continue
@@ -146,6 +157,41 @@ func TestRunCarriesPages(t *testing.T) {
 				if i := slices.IndexFunc(pages, func(p page) bool { return p.Title == title }); pages[i].Files.Chosen[0] != f {
 					t.Errorf("%s chose %v, want %s", title, pages[i].Files.Chosen, f)
 				}
+			}
+		})
+	}
+}
+
+// TestRunTouchesSkeleton: a carried page whose guide gains a section that
+// shows code now lacks that heading, so it is written again, touched by its
+// skeleton; one whose guide did not change, only lost a section, or gained
+// one past the lines its evidence shows (an unsourced heading), is kept, and
+// so is one lacking a heading its plan gave it at base too (left out). The
+// overview, whose one heading is the wiki's label, never is.
+func TestRunTouchesSkeleton(t *testing.T) {
+	guide := "# G\n\n## Setup\n\n```go\nx\n```\n"
+	for name, c := range map[string]struct{ next, drop, why string }{
+		"section added":     {guide + "\n## Usage\n\n```go\ny\n```\n", "", "skeleton"},
+		"unchanged":         {guide, "", ""},
+		"left out":          {guide, "### Setup\n\nS.\n\n", ""},
+		"section removed":   {"# G\n\nNo code.\n", "", ""},
+		"section unsourced": {guide + strings.Repeat("\n", 20) + "## Late\n\n```go\nz\n```\n", "", ""}, // past the chunk's 20 lines
+	} {
+		t.Run(name, func(t *testing.T) {
+			base := map[string]string{"a.go": "alpha", "b.go": "beta", "d.go": "delta", "e.go": "epsilon", "f.go": "filler", "docs/g.md": guide}
+			next := maps.Clone(base)
+			next["docs/g.md"] = c.next
+			db := carryDB(t, "English", base, next)
+			text := strings.Replace("About Beta.\n\n## G\n\nG.\n\n### Setup\n\nS.\n\n## b\n\n[b.go:1-1](https://example.com/o/r/blob/base/b.go#L1-L1).", c.drop, "", 1)
+			if _, err := db.Exec(`UPDATE chunks SET end_line = 20 WHERE path = 'docs/g.md'; UPDATE snapshots SET wiki_labels = '{"stack":"Tech stack"}' WHERE id = 2;
+				UPDATE wiki_pages SET files = ?, content = ? WHERE snapshot_id = 2 AND title = 'Beta'`,
+				`{"chosen":["b.go"],"placed":["docs/g.md"],"units":["docs/g.md"]}`, text); err != nil {
+				t.Fatal(err)
+			}
+			model, whys := &fakeModel{}, map[string]string{}
+			runWiki(t, db, model, "next", func(g *Generator) { g.Touched = func(page, why string) { whys[page] = why } })
+			if want := map[string]string{"Beta": c.why}; c.why == "" && len(whys)+len(model.writes) != 0 || c.why != "" && (!maps.Equal(whys, want) || len(model.writes) != 1) {
+				t.Errorf("touched %v, %d written; want %q", whys, len(model.writes), c.why)
 			}
 		})
 	}

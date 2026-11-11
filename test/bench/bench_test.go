@@ -95,8 +95,8 @@ type rig struct {
 	wiki     *wiki.Generator // nil without a chat model
 	chat     *chat.Service
 	meter    *meter
-	parallel []int          // the first wiki's runs, by pages written at a time
-	planned  *wiki.Planning // the last wiki's plan, nil when no model planned it
+	parallel []int    // the first wiki's runs, by pages written at a time
+	last     *wikiRun // the wiki being written, which the generator's hooks tell of its plan and carried pages
 }
 
 func TestBench(t *testing.T) {
@@ -186,7 +186,7 @@ func setup(t *testing.T, work string) *rig {
 		}
 		if os.Getenv("DEEPCODE_BENCH_WIKI") != "0" {
 			r.wiki = &wiki.Generator{Store: &wikistore.Store{DB: db}, Graph: graphs, Catalog: r.cat, Retriever: r.ret, Chat: llm, Language: "English", MaxPages: pages,
-				Planned: func(p wiki.Planning) { r.planned = &p }}
+				Planned: func(p wiki.Planning) { r.last.Planning = &p }, Touched: func(_, why string) { r.last.Touched[why]++ }}
 		}
 		r.chat = &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: r.cat, Retriever: r.ret, Chat: llm, Tokens: counter}
 	}
@@ -328,7 +328,7 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 	} else if s, err := shape.Measure(ctx, r.db, snap); err != nil {
 		fail("topics", err)
 	} else if len(res.Tree) > 0 { // a wiki to measure
-		c := cover(tg.topics, heads)
+		c := cover(tg.topics(), heads)
 		c.ToolingPages, c.Unnamed = n, s.Unnamed
 		res.Topics, res.Plan = &c, &s
 	}
@@ -439,16 +439,16 @@ func pageTree(ctx context.Context, db *sql.DB, snap int64) ([]string, error) {
 // writeWiki writes the wiki of the snapshot at sha and measures it.
 func (r *rig) writeWiki(ctx context.Context, id int64, sha string, fail func(string, error)) *wikiRun {
 	r.meter.take()
-	r.planned = nil
+	r.last = &wikiRun{Touched: map[string]int{}}
 	start := time.Now()
 	err := r.wiki.Run(ctx, id, sha, jobs.Progress{})
-	w := &wikiRun{Seconds: since(start), Failed: err != nil, Planning: r.planned}
+	r.last.Seconds, r.last.Failed = since(start), err != nil
 	if err != nil {
 		fail("wiki "+sha[:7], err)
 	}
 	calls, u, _ := r.meter.take()
-	w.Calls, w.InTokens, w.OutTokens, w.InChars, w.OutChars, w.CachedTokens = calls, u.InTokens, u.OutTokens, u.InChars, u.OutChars, u.CachedTokens
-	return w
+	r.last.Calls, r.last.InTokens, r.last.OutTokens, r.last.InChars, r.last.OutChars, r.last.CachedTokens = calls, u.InTokens, u.OutTokens, u.InChars, u.OutChars, u.CachedTokens
+	return r.last
 }
 
 // ask asks q as a user would and times it (trace.Clock), keeping what its evidence

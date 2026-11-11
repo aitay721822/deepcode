@@ -32,6 +32,30 @@ func TestSearchKeepsNamed(t *testing.T) {
 	}
 }
 
+// TestSearchPage: anchors' chunks come first, in order, each once, a path with
+// a space read whole and a line no word finds found; the page's files rank by
+// its words; an anchor past the limit, or whose line no chunk holds, is left out.
+func TestSearchPage(t *testing.T) {
+	ins := `INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'a/b c.cs', 1, 9, 'class Order', 'o'),
+		(1, 'README.md', 1, 20, 'intro', 'r1'), (1, 'README.md', 21, 40, 'recipe', 'r2'), (1, 'README.md', 45, 60, 'more', 'r3'), (1, 'own.go', 1, 9, 'alpha', 'w'), (1, 'far.go', 1, 9, 'alpha alpha beta', 'f')`
+	var many []Anchor
+	for i := range 13 {
+		ins, many = ins+fmt.Sprintf(", (1, 'n%02d.go', 1, 9, 'x', 'n%d')", i, i), append(many, Anchor{Path: fmt.Sprintf("n%02d.go", i)})
+	}
+	r := retriever(seeded(t, ins))
+	search := func(files []string, anchors []Anchor, limit int) (out []string) {
+		res, err := r.SearchPage(context.Background(), 1, "alpha beta", files, anchors, limit)
+		for _, h := range res.Hits {
+			out = append(out, fmt.Sprintf("%s:%d", h.Path, h.StartLine))
+		}
+		return append(out, fmt.Sprint(err))
+	}
+	got, top := search([]string{"own.go"}, []Anchor{{"README.md", 25}, {"a/b c.cs", 0}, {"README.md", 30}, {"README.md", 42}, {"gone.go", 1}}, 4), search(nil, many, 12)
+	if !slices.Equal(got, []string{"README.md:21", "a/b c.cs:1", "own.go:1", "far.go:1", "<nil>"}) || len(top) != 13 || top[11] != "n11.go:1" || top[12] != "<nil>" {
+		t.Errorf("got %q; 13 anchors at 12: %q", got, top)
+	}
+}
+
 func TestFTSQuery(t *testing.T) {
 	if got, want := ftsQuery("How does the getUserName function work in auth_service?"), `"getusername"* OR "auth_service"* OR "user"* OR "name"*`; got != want {
 		t.Fatalf("got %s, want %s", got, want)
@@ -325,26 +349,9 @@ func TestUsers(t *testing.T) {
 }
 
 // TestSearchNamedFiles: a file the query names by path, file name, folder or
-// glob is ranked among the hits, though its words lose to every other file's;
-// a name for more files than maxFiles names none.
+// glob (names.FileNames) is ranked among the hits, though its words lose to
+// every other file's; a name for more files than maxFiles names none.
 func TestSearchNamedFiles(t *testing.T) {
-	for query, want := range map[string][]string{
-		"Focus: (src/app/Host.cs), ./README.md, tests/*.rs; examples/ App.java. Not .NET, 0.25, e.g. or res.send, see https://x.io/a.go, [app/[slug]/page.tsx] and app/(group) twice: src/app/Host.cs": {
-			"src/app/Host.cs", "README.md", "tests/*.rs", "examples/", "App.java", "app/[slug]/page.tsx", "app/(group)"},
-		"重點：src/a.cs、src/b.cs（見 lib/c.go:42）與「d/e.ts」":                          {"src/a.cs", "src/b.cs", "lib/c.go", "d/e.ts"},
-		`**src/a.ts** and src\b\c.go#L10-L20 or (group)/page.tsx. (See x/y.go)`: {"src/a.ts", "src/b/c.go", "(group)/page.tsx", "x/y.go"},
-		"(group)/(admin)/page.tsx, src/a.go:42:7, path=src/x.go|src/y.go 請看 App.java？ **src/b.go**. **c/d.go**:": {
-			"(group)/(admin)/page.tsx", "src/a.go", "src/x.go", "src/y.go", "App.java", "src/b.go", "c/d.go"},
-	} {
-		if got := FileNames(query); !slices.Equal(got, want) {
-			t.Errorf("FileNames(%q) = %q, want %q", query, got, want)
-		}
-	}
-	for in, want := range map[string]string{"(": "", "()": "", "[[]]": "", "(a]": "a", "(group)/(admin)": "(group)/(admin)", "((a/b))": "a/b", "a/b)": "a/b"} {
-		if got := unwrap(in); got != want {
-			t.Errorf("unwrap(%q) = %q, want %q", in, got, want)
-		}
-	}
 	inserts := []string{`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
 		(1, 'src/app/Host.cs', 1, 9, 'var b = Builder.Create()', 'h0'), (1, 'app/[slug]/page.tsx', 1, 9, 'page', 'hp'),
 		(1, 'lib/App.java', 1, 9, 'class App', 'ha'), (1, 'tests/x/a.rs', 1, 9, 'fn t()', 'ht'),
