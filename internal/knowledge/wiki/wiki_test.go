@@ -117,7 +117,8 @@ type fakeModel struct {
 	plans, writes []string
 	first         string
 	alter         func(name string, n int, reply map[string]any)
-	asked         map[string]int // set with alter
+	asked         map[string]int            // set with alter
+	schemas       map[string]map[string]any // when set, each name's last schema
 }
 
 func (f *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -135,6 +136,9 @@ func (f *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reply := draft(body.Messages[1].Content)
 	if s := body.Format; s != nil {
 		f.plans = append(f.plans, body.Messages[1].Content)
+		if f.schemas != nil {
+			f.schemas[s.Schema.Name] = s.Schema.Schema
+		}
 		v := fill(s.Schema.Schema, nil).(map[string]any)
 		if f.alter != nil {
 			f.alter(s.Schema.Name, f.asked[s.Schema.Name], v)
@@ -270,6 +274,60 @@ func TestRunPlansSections(t *testing.T) {
 	g = runWiki(t, testDB(t, stmts...), &fakeModel{}, "abc", func(g *Generator) { g.MaxPages, g.Planned = 8, func(p Planning) { trimmed = p } })
 	if pages, _ := g.Store.Pages(context.Background(), 1); trimmed.Ceiling == nil || *trimmed.Ceiling != (Ceiling{Limit: 8, Wanted: 12, Planned: len(pages)}) || len(pages) > 8 {
 		t.Fatalf("under a ceiling of 8: %+v, %d pages", trimmed.Ceiling, len(pages))
+	}
+}
+
+// TestRunGroupsAsides (follow-up 2): an aside of more units than a request
+// names (asideUnits), a flat folder of 150 guides of a cap of 150, is asked
+// in two levels: the section's request lists one group of them, which it
+// gives three pages under "spans" (at most as many as its units); then its
+// units are asked in two batches of 75 (aside.Spread), each putting its own
+// on a page: the third page, given none, goes; every guide is on a page, as a
+// unit and a file.
+func TestRunGroupsAsides(t *testing.T) {
+	stmts := []string{`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`, `INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`}
+	var docs []string
+	for i := range 150 {
+		docs = append(docs, fmt.Sprintf("docs/g%03d.md", i))
+	}
+	for _, f := range append([]string{"main.go", "go.mod", "api/a.go", "store/s.go"}, docs...) {
+		stmts = append(stmts, fmt.Sprintf(`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, '%s', 'go', 'h', 1, 600)`, f))
+	}
+	model := &fakeModel{schemas: map[string]map[string]any{}, asked: map[string]int{}, alter: func(name string, n int, reply map[string]any) {
+		switch name {
+		case "wiki_aside":
+			reply["pages"] = []any{map[string]any{"title": "A", "terms": []any{}}, map[string]any{"title": "B", "terms": []any{}}, map[string]any{"title": "C", "terms": []any{}}}
+			reply["spans"] = map[string]any{"docs/": []any{0, 1, 2}}
+		case "wiki_spread":
+			for k := range reply["assign"].(map[string]any) {
+				reply["assign"].(map[string]any)[k] = n
+			}
+		}
+	}}
+	g := runWiki(t, testDB(t, stmts...), model, "abc", func(g *Generator) { g.MaxPages = 1000 })
+	var listed, batches []int
+	for _, m := range model.plans {
+		if _, units, ok := strings.Cut(m, "documentation and guides. Its units:\n"); ok && strings.Contains(m, "The pages of these units' group") {
+			batches = append(batches, strings.Count(units, "- \"docs/g"))
+		} else if ok {
+			listed = append(listed, strings.Count(units, "- \""))
+		}
+	}
+	span := model.schemas["wiki_aside"]["properties"].(map[string]any)["spans"].(map[string]any)["properties"].(map[string]any)["docs/"].(map[string]any)
+	if !slices.Equal(listed, []int{1}) || !slices.Equal(batches, []int{75, 75}) || span["maxItems"] != float64(150) {
+		t.Fatalf("the docs requests: %v listed, batches %v, span %v", listed, batches, span)
+	}
+	stored, err := g.Store.Pages(context.Background(), 1)
+	var units, placed []string
+	var titles []string
+	for _, p := range stored {
+		if units, placed = append(units, p.Files.Units...), append(placed, p.Files.Placed...); slices.Contains(p.Files.Units, docs[0]) || slices.Contains(p.Files.Units, docs[149]) {
+			titles = append(titles, fmt.Sprintf("%s:%d", p.Title, len(p.Files.Units)))
+		}
+	}
+	if left := slices.DeleteFunc(slices.Clone(docs), func(f string) bool { return slices.Contains(units, f) && slices.Contains(placed, f) }); err != nil || len(left) > 0 ||
+		!slices.Equal(titles, []string{"A:75", "B:75"}) || slices.ContainsFunc(stored, func(p store.Page) bool { return p.Title == "C" }) {
+		t.Fatalf("guides on no page: %v; docs pages %v (%v)", left, titles, err)
 	}
 }
 

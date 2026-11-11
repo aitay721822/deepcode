@@ -104,19 +104,43 @@ func list(b *strings.Builder, section, asked []place.Unit, declared map[string][
 }
 
 // AsideMessage is an aside request's message: about and the sections'
-// titles first, then the section and each unit with what it holds.
+// titles first, then the section and each unit with what it holds; a group
+// (aside.Group) with how many units it joins and as many of their keys as
+// its share of a budget of names allows (groups at most 100, ten a group at
+// least), spread over them, never their headings, so a group's line stays
+// short however many it joins; then, with a group, how to give its pages.
 func AsideMessage(about string, titles []string, title, kind string, units []place.Unit, declared map[string][]string, lines map[string]int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%sThe wiki's sections: %s\n\nSection: %s, the repository's %s. Its units:\n", about, strings.Join(titles, " | "), title, what[kind])
+	groups := len(slices.DeleteFunc(slices.Clone(units), func(u place.Unit) bool { return !grouped(u) }))
 	for _, u := range units {
+		if grouped(u) {
+			most := names / groups
+			shown := u.Raw
+			if len(u.Raw) > most { // spread over them, not the first by name
+				shown = make([]string, most, most+1)
+				for i := range shown {
+					shown[i] = u.Raw[i*len(u.Raw)/most]
+				}
+				shown = append(shown, "…")
+			}
+			fmt.Fprintf(&b, "- %q (a group of %d units, %d files, %d lines): %s\n", u.Key, len(u.Raw), len(u.Files), total(u.Files, lines), strings.Join(shown, ", "))
+			continue
+		}
 		held := outline.Pick(u.Files, lines, 6)
 		if kind == analyzer.Docs && len(u.Files) == 1 {
 			held = first(declared[u.Files[0]], u.Files[0])
 		}
 		fmt.Fprintf(&b, "- %q (%d files, %d lines): %s\n", u.Key, len(u.Files), total(u.Files, lines), strings.Join(held, ", "))
 	}
+	if groups > 0 {
+		b.WriteString("\nA group stands for the units it joins: it goes under \"spans\", not \"assign\", with the indexes of the pages its units go to, as many as their subjects call for.\n")
+	}
 	return b.String()
 }
+
+// names is the most units the groups' lines of a message name.
+const names = 1000
 
 // FlatMessage is a flat wiki's message: about, the layout, then each unit
 // with its files and what they declare.

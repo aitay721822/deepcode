@@ -202,6 +202,28 @@ func TestSection(t *testing.T) {
 	if w, h := empty["src/WebApp/"], empty["src/HybridApp/"]; len(w) != 2 || w[0].Title != "B" || w[1].Title != "C" || len(h) != 1 || h[0].Title != "H" {
 		t.Errorf("empty pages: %+v", empty)
 	}
+	// A unit none of whose pages has a file of its own keeps its first pages up
+	// to its files the model picks from (Code), so placement gives each a file:
+	// code beside configuration counts its code, configuration alone (tooling)
+	// all its files, as place.Raw makes them, never none.
+	code, asides := place.Raw([]string{"a/x.go", "a/x.yaml", "a/y.yaml", "b/p.go", "b/q.go", "Makefile", ".github/ci.yml"}, nil, nil)
+	kept, made := map[string]int{"a/": 1, "b/": 2, analyzer.Tooling: 2}, append(code, asides...)
+	for _, u := range made {
+		u.Cap, empty = 3, SectionReply{u.Key: {{Title: "P"}, {Title: "Q"}, {Title: "R", Files: []string{"elsewhere.go"}}}}
+		fixUnits(&empty, []place.Unit{u})
+		pages := place.Place([]place.Unit{u}, Pages(empty, []place.Unit{u}), nil)
+		if len(pages) != kept[u.Key] || slices.ContainsFunc(pages, func(p outline.Page) bool { return len(p.Files()) == 0 }) {
+			t.Errorf("%s, its pages empty: %+v", u.Key, pages)
+		}
+	}
+	if len(made) != len(kept) {
+		t.Errorf("units %+v", made)
+	}
+	b := code[slices.IndexFunc(code, func(u place.Unit) bool { return u.Key == "b/" })] // fewer pages than files: all stay
+	b.Cap, empty = 3, SectionReply{"b/": {{Title: "P"}}}
+	if fixUnits(&empty, []place.Unit{b}); len(empty["b/"]) != 1 {
+		t.Errorf("one empty page of b/: %+v", empty)
+	}
 }
 
 // TestAside (G8): pages past the most go; a unit assigned past the pages (at
@@ -259,6 +281,99 @@ func TestAside(t *testing.T) {
 	}
 }
 
+// group is a group (aside.Group) keyed key of n guides, key + "1.md" and on.
+func group(key string, n int) place.Unit {
+	u := place.Unit{Key: key, Kind: analyzer.Docs, Cap: 1}
+	for i := range n {
+		u.Raw = append(u.Raw, fmt.Sprintf("%s%d.md", key, i+1))
+	}
+	u.Files, u.Code = u.Raw, u.Raw
+	return u
+}
+
+// TestSpans (follow-up 2, level 1): a group's pages are mirrored (spans:
+// given, no more than its units or most, each a page's index) and fixed: an
+// index past the pages or named twice goes, a group given none goes to the
+// page with the fewest units, one crowding a page takes the next with the
+// fewest; a group on one page puts its units there, one on more none
+// (aside.Spread does). Its line names how many units it joins and an even sample
+// of them, never their headings, over a budget of names: one group of 1000
+// names all, 100 of 20 ten each, spread over them; a message with no group
+// says nothing of spans, a request of groups only asks for no "assign".
+func TestSpans(t *testing.T) {
+	units := []place.Unit{group("d/", 3), unit("g1", 1)}
+	format, err := AsideFormat(units, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pq = `"pages":[{"title":"P","terms":[]},{"title":"Q","terms":[]}],"assign":{"g1":0}`
+	for text, rule := range map[string]string{`{` + pq + `,"spans":{"d/":[0,1]}}`: "", `{` + pq + `,"spans":{"d/":[]}}`: "aside.unassigned+aside.empty", `{` + pq + `}`: "aside.unassigned+aside.empty",
+		`{` + pq + `,"spans":{"d/":[0,1,0]}}`: "aside.span+aside.duplicate", `{` + pq + `,"spans":{"d/":[0,2]}}`: "aside.index+aside.empty", `{` + pq + `,"spans":{"d/":[null]}}`: "aside.index+aside.empty"} {
+		var v AsideReply
+		_, schemaErr := ai.Decode(format, text)
+		json.Unmarshal([]byte(text), &v)
+		if named := rules(checkAside(v, units, 2)); (schemaErr != nil) != (rule != "") || strings.Join(named, "+") != rule {
+			t.Errorf("%s: schema error %v, check %v; want %s", text, schemaErr, named, rule)
+		}
+	}
+	if only, err := AsideFormat([]place.Unit{group("d/", 3)}, 2); err != nil { // groups only: no "assign"
+		t.Errorf("groups only: %v", err)
+	} else if _, err := ai.Decode(only, `{"pages":[{"title":"P","terms":[]}],"spans":{"d/":[0]}}`); err != nil {
+		t.Errorf("groups only: %v", err)
+	}
+	none := []string{}
+	one, five := 1, 5
+	for _, c := range []struct {
+		units []place.Unit
+		r     AsideReply
+		check []string
+		want  [][]string // each page's title, then its units
+	}{
+		{units, AsideReply{Pages: []Head{{"A", none}, {"", none}, {"C", none}}, Assign: map[string]*int{"g1": new(int)}, Spans: map[string][]*int{"d/": {&one, &one, &five}}},
+			[]string{"aside.duplicate", "aside.index", "aside.title", "aside.empty"}, [][]string{{"A", "g1"}, {"d", "d/1.md", "d/2.md", "d/3.md"}}},
+		{[]place.Unit{group("d/", 20), unit("g1", 1), unit("g2", 1)}, AsideReply{Pages: []Head{{"A", none}, {"B", none}, {"C", none}}, Assign: map[string]*int{"g1": new(int), "g2": new(int)}},
+			[]string{"aside.unassigned", "aside.empty", "aside.empty"}, [][]string{{"A", "g1", "g2"}, {"B"}, {"C"}}},
+		{[]place.Unit{group("d/", 20), unit("g1", 1)}, AsideReply{Pages: []Head{{"A", none}, {"B", none}, {"C", none}}, Assign: map[string]*int{"g1": &one}, Spans: map[string][]*int{"d/": {new(int)}}},
+			[]string{"aside.crowded", "aside.empty"}, [][]string{{"A"}, {"B", "g1"}, {"C"}}},
+	} {
+		if got := rules(checkAside(c.r, c.units, 3)); !reflect.DeepEqual(got, c.check) {
+			t.Errorf("check %v, want %v", got, c.check)
+		}
+		fixAside(&c.r, c.units, 3, "docs")
+		var got [][]string
+		for _, p := range AsidePages(c.r, c.units) {
+			got = append(got, append([]string{p.Title}, p.Units...))
+		}
+		if !reflect.DeepEqual(got, c.want) || len(checkAside(c.r, c.units, 3)) != 0 {
+			t.Errorf("pages %v, want %v; left %v", got, c.want, rules(checkAside(c.r, c.units, 3)))
+		}
+	}
+	// A page holds ⌈units/pages⌉ of a group: 17 on one of 5 pages (at most 8) take three, not two.
+	r := AsideReply{Pages: []Head{{"A", none}, {"B", none}, {"C", none}, {"D", none}, {"E", none}}, Spans: map[string][]*int{"d/": {new(int)}}}
+	if fixAside(&r, []place.Unit{group("d/", 17)}, 5, "docs"); len(r.Spans["d/"]) != 3 || len(r.Pages) != 3 {
+		t.Errorf("17 units widened to %d pages of %d", len(r.Spans["d/"]), len(r.Pages))
+	}
+	declared := map[string][]string{"docs/one.md": {"Install"}}
+	big := group("docs/", 1000)
+	for _, f := range big.Raw {
+		declared[f] = []string{"Heading"}
+	}
+	m := AsideMessage("", nil, "Docs", analyzer.Docs, []place.Unit{big, unit("docs/one.md", 1, "docs/one.md")}, declared, nil)
+	if !strings.Contains(m, `"docs/" (a group of 1000 units,`) || !strings.Contains(m, big.Raw[999]+"\n") || strings.Contains(m, "Heading") || !strings.Contains(m, "Install") || !strings.Contains(m, `"spans"`) {
+		t.Errorf("one group's line:\n%.600s", m)
+	}
+	var many []place.Unit
+	for i := range 100 {
+		many = append(many, group(fmt.Sprintf("g%02d/", i), 20))
+	}
+	if m := AsideMessage("", nil, "Docs", analyzer.Docs, many, nil, nil); strings.Count(m, ".md") != 1000 || strings.Count(m, "/19.md, …\n") != 100 || strings.Contains(m, "/2.md") {
+		t.Errorf("100 groups name %d units:\n%.600s", strings.Count(m, ".md"), m)
+	}
+	if m := AsideMessage("", nil, "Docs", analyzer.Docs, []place.Unit{unit("a.md", 1, "a.md")}, nil, nil); strings.Contains(m, "spans") {
+		t.Errorf("no group, yet:\n%s", m)
+	}
+}
+
 // TestTitles: a unit's empty title is its name; titles a reply repeats are
 // numbered, within a reply (fixUnits) and across a section's requests
 // (Distinct), clipped to keep the number; a merged unit's name names each.
@@ -307,7 +422,7 @@ func TestNote(t *testing.T) {
 	units := []place.Unit{unit("src/WebApp/", 2, "src/WebApp/a.cs")}
 	r := SectionReply{"src/WebApp/": {{Title: "A", Files: []string{"src/HybridApp/MauiProgram.cs"}}, {Title: "B", Files: []string{"src/WebApp/a.cs"}}, {Title: "C", Files: []string{"src/WebApp/a.cs"}},
 		{Title: "D", Terms: []string{}}, {Title: "E", Terms: []string{}, Files: slices.Repeat([]string{"src/WebApp/a.cs"}, maxFiles+1)}}}
-	n := note(checkUnits("section", r, units))
+	n := Note(checkUnits("section", r, units))
 	for _, want := range []string{`"src/WebApp/": 5 pages, at most 2`, `page "A": src/HybridApp/MauiProgram.cs is not a file of "src/WebApp/"`, `page "D": 0 files`} {
 		if !strings.Contains(n, want) {
 			t.Errorf("note lacks %q:\n%s", want, n)

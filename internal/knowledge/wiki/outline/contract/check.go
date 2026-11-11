@@ -61,8 +61,8 @@ func (h Head) Page() outline.Page {
 // Clean is l, each label on one line and clipped.
 func (l Labels) Clean() Labels { return Labels{Stack: title(l.Stack), OtherFiles: title(l.OtherFiles)} }
 
-// note asks for the repair, naming each violation code does not fix alone.
-func note(vs []Violation) string {
+// Note asks for the repair, naming each violation code does not fix alone.
+func Note(vs []Violation) string {
 	var b strings.Builder
 	b.WriteString("Your reply breaks these rules of the request. Reply again with the whole JSON, these fixed and the rest as it was:\n")
 	for _, v := range vs {
@@ -117,7 +117,7 @@ func Distinct(pages []outline.Page) int {
 // keys, titled; the labels. A key left out, or untitled, is titled
 // names[key]; an empty label is English's.
 func Outline(ask Ask[OutlineReply], keys []string, names map[string]string) aicontract.Turn[OutlineReply] {
-	return aicontract.Turn[OutlineReply]{Kind: "outline", Ask: ask, Note: note,
+	return aicontract.Turn[OutlineReply]{Kind: "outline", Ask: ask, Note: Note,
 		Check: func(r OutlineReply) []Violation { return checkOutline(r.Overview, r.Labels, r.Pages, keys) },
 		Fix: func(r *OutlineReply) {
 			r.Overview, r.Labels = fixHeads(r.Overview, r.Labels, &r.Pages, keys, names)
@@ -174,7 +174,7 @@ func fixHeads(overview Head, l Labels, pages *map[string]Head, keys []string, na
 // unit 1 to its cap pages, titled, of 1 to maxFiles of its files, no two
 // titled alike.
 func Section(ask Ask[SectionReply], units []place.Unit) aicontract.Turn[SectionReply] {
-	return aicontract.Turn[SectionReply]{Kind: "section", Ask: ask, Note: note,
+	return aicontract.Turn[SectionReply]{Kind: "section", Ask: ask, Note: Note,
 		Check: func(r SectionReply) []Violation { return checkUnits("section", r, units) },
 		Fix:   func(r *SectionReply) { fixUnits(r, units) }}
 }
@@ -217,9 +217,10 @@ func checkUnits(prefix string, r SectionReply, units []place.Unit) []Violation {
 // fixUnits is code's fix for what checkUnits finds: a unit with no page gets
 // one titled by its name (placement gives it the unit's files); a file not of
 // the unit goes; a page keeps its first maxFiles, and one left with none goes,
-// unless no page of its unit has any (placement fills them); then pages past
-// the cap go (their files back to placement); an empty title is the unit's
-// name, and a title taken already is numbered (unique).
+// unless no page of its unit has any: then its first pages up to its files
+// (Code, never none) stay, which placement fills, a file a page at least;
+// then pages past the cap go (their files back to placement); an empty title
+// is the unit's name, and a title taken already is numbered (unique).
 func fixUnits(r *SectionReply, units []place.Unit) {
 	if *r == nil {
 		*r = SectionReply{}
@@ -242,6 +243,8 @@ func fixUnits(r *SectionReply, units []place.Unit) {
 		}
 		if slices.ContainsFunc(pages, func(p Planned) bool { return !empty(p) }) {
 			pages = slices.DeleteFunc(pages, empty) // before the cap, so an empty page takes no place of one with files
+		} else {
+			pages = pages[:max(1, min(len(pages), len(u.Code)))]
 		}
 		pages = pages[:min(len(pages), u.Cap)]
 		for i, p := range pages {
@@ -259,7 +262,7 @@ func fixUnits(r *SectionReply, units []place.Unit) {
 // overview and labels, a section's (as flat.*) for every unit, code and
 // aside kinds alike.
 func Flat(ask Ask[FlatReply], units []place.Unit) aicontract.Turn[FlatReply] {
-	return aicontract.Turn[FlatReply]{Kind: "flat", Ask: ask, Note: note,
+	return aicontract.Turn[FlatReply]{Kind: "flat", Ask: ask, Note: Note,
 		Check: func(r FlatReply) []Violation {
 			return append(checkOutline(r.Overview, r.Labels, nil, nil), checkUnits("flat", r.Units, units)...)
 		},

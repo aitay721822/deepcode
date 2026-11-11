@@ -57,8 +57,9 @@ type (
 	}
 	SectionReply map[string][]Planned
 	AsideReply   struct {
-		Pages  []Head          `json:"pages"`
-		Assign map[string]*int `json:"assign"` // nil for a null index, which no page has
+		Pages  []Head            `json:"pages"`
+		Assign map[string]*int   `json:"assign"`          // nil for a null index, which no page has
+		Spans  map[string][]*int `json:"spans,omitempty"` // a group's pages (aside.Group), asked only with one
 	}
 	FlatReply struct {
 		Overview Head         `json:"overview"`
@@ -67,8 +68,8 @@ type (
 	}
 )
 
-// object is a strict object schema of props, every one required.
-func object(props map[string]any) map[string]any {
+// Object is a strict object schema of props, every one required.
+func Object(props map[string]any) map[string]any {
 	required := make([]string, 0, len(props))
 	for k := range props {
 		required = append(required, k)
@@ -93,7 +94,7 @@ var str = map[string]any{"type": "string"}
 
 // head is a Head's schema.
 func head(b Bounds) map[string]any {
-	return object(map[string]any{"title": str, "terms": array(str, 0, outline.MaxTerms, b)})
+	return Object(map[string]any{"title": str, "terms": array(str, 0, outline.MaxTerms, b)})
 }
 
 // planned is a Planned page's schema, its files from choices when b.
@@ -102,10 +103,10 @@ func planned(choices []string, b Bounds) map[string]any {
 	if b {
 		file["enum"] = choices
 	}
-	return object(map[string]any{"title": str, "terms": array(str, 0, outline.MaxTerms, b), "files": array(file, 1, maxFiles, b)})
+	return Object(map[string]any{"title": str, "terms": array(str, 0, outline.MaxTerms, b), "files": array(file, 1, maxFiles, b)})
 }
 
-var labels = object(map[string]any{"stack": str, "otherFiles": str})
+var labels = Object(map[string]any{"stack": str, "otherFiles": str})
 
 // OutlineFormat asks for the overview, the labels and a head per key. Its
 // bounds hold no enum, so it is past the limits with or without them.
@@ -114,7 +115,7 @@ func OutlineFormat(keys []string) (ai.Format[OutlineReply], error) {
 	for _, k := range keys {
 		pages[k] = head(true)
 	}
-	return ai.Dynamic[OutlineReply]("wiki_outline", object(map[string]any{"overview": head(true), "labels": labels, "pages": object(pages)}))
+	return ai.Dynamic[OutlineReply]("wiki_outline", Object(map[string]any{"overview": head(true), "labels": labels, "pages": Object(pages)}))
 }
 
 // units is the schema of each unit's pages: 1 to its cap.
@@ -123,7 +124,7 @@ func units(us []place.Unit, b Bounds) map[string]any {
 	for _, u := range us {
 		props[u.Key] = array(planned(u.Code, b), 1, u.Cap, b)
 	}
-	return object(props)
+	return Object(props)
 }
 
 // SectionFormat asks for each of a section's units' pages.
@@ -131,19 +132,33 @@ func SectionFormat(us []place.Unit, b Bounds) (ai.Format[SectionReply], error) {
 	return ai.Dynamic[SectionReply]("wiki_section", units(us, b))
 }
 
-// AsideFormat asks for an aside's pages, 1 to most, and each unit's page. Its
-// bounds hold no enum, so it is past the limits with or without them.
+// AsideFormat asks for an aside's pages, 1 to most, each unit's page (none
+// with groups only), and, with a group among us, each group's pages under
+// "spans", 1 to as many as it has units, no more than most. Its bounds hold
+// no enum, so it is past the limits with or without them.
 func AsideFormat(us []place.Unit, most int) (ai.Format[AsideReply], error) {
-	assign := map[string]any{}
+	index := func() map[string]any { return map[string]any{"type": "integer", "minimum": 0, "maximum": most - 1} }
+	assign, spans := map[string]any{}, map[string]any{}
 	for _, u := range us {
-		assign[u.Key] = map[string]any{"type": "integer", "minimum": 0, "maximum": most - 1}
+		if grouped(u) {
+			spans[u.Key] = array(index(), 1, min(most, len(u.Raw)), true)
+		} else {
+			assign[u.Key] = index()
+		}
 	}
-	return ai.Dynamic[AsideReply]("wiki_aside", object(map[string]any{"pages": array(head(true), 1, most, true), "assign": object(assign)}))
+	props := map[string]any{"pages": array(head(true), 1, most, true), "assign": Object(assign)}
+	if len(spans) > 0 {
+		props["spans"] = Object(spans)
+	}
+	if len(assign) == 0 { // groups only: nothing to assign
+		delete(props, "assign")
+	}
+	return ai.Dynamic[AsideReply]("wiki_aside", Object(props))
 }
 
 // FlatFormat asks for the overview, the labels and each unit's pages.
 func FlatFormat(us []place.Unit, b Bounds) (ai.Format[FlatReply], error) {
-	return ai.Dynamic[FlatReply]("wiki_flat", object(map[string]any{"overview": head(b), "labels": labels, "units": units(us, b)}))
+	return ai.Dynamic[FlatReply]("wiki_flat", Object(map[string]any{"overview": head(b), "labels": labels, "units": units(us, b)}))
 }
 
 // Split is a section's requests within the structured-output limits: all

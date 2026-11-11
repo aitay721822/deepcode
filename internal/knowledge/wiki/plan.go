@@ -14,6 +14,7 @@ import (
 
 	"deepcode/internal/knowledge/wiki/fanout"
 	"deepcode/internal/knowledge/wiki/outline"
+	"deepcode/internal/knowledge/wiki/outline/aside"
 	"deepcode/internal/knowledge/wiki/outline/contract"
 	"deepcode/internal/knowledge/wiki/outline/place"
 	"deepcode/internal/knowledge/wiki/store"
@@ -334,17 +335,34 @@ func (g *Generator) part(ctx context.Context, p contract.Part, head outline.Page
 		r.counts.Residual("section.duplicate", contract.Distinct(pages)) // across split requests, each checked alone
 		return place.Place(p.Units, pages, s.edges), nil
 	}
-	f, err := contract.AsideFormat(asides, u.Cap)
+	groups := aside.Group(asides, asideUnits)
+	f, err := contract.AsideFormat(groups, u.Cap)
 	if err != nil {
 		return nil, err
 	}
-	reply, err := aicontract.Run(ctx, ai.Prompt{Static: contract.AsidePrompt, Dynamic: contract.AsideMessage(about, titles, head.Title, p.Kind, asides, s.declared, s.lines)},
-		contract.Aside(ask(g, r, f), asides, u.Cap, p.Kind), &r.counts)
+	reply, err := aicontract.Run(ctx, ai.Prompt{Static: contract.AsidePrompt, Dynamic: contract.AsideMessage(about, titles, head.Title, p.Kind, groups, s.declared, s.lines)},
+		contract.Aside(ask(g, r, f), groups, u.Cap, p.Kind), &r.counts)
 	if err != nil {
 		return nil, err
 	}
-	return place.Place(asides, contract.AsidePages(reply, asides), nil), nil
+	pages := contract.AsidePages(reply, groups)
+	pages, err = aside.Spread(pages, reply, groups, asides, asideUnits, func(batch []place.Unit, span []int) (aside.Reply, error) {
+		f, err := aside.Format(batch, len(span))
+		if err != nil {
+			return aside.Reply{}, err
+		}
+		return aicontract.Run(ctx, ai.Prompt{Static: aside.Prompt, Dynamic: aside.Message(about, titles, head.Title, p.Kind, pages, span, batch, s.declared, s.lines)},
+			aside.Turn(ask(g, r, f), batch, len(span)), &r.counts)
+	}, &r.counts)
+	if err != nil {
+		return nil, err
+	}
+	return place.Place(asides, pages, nil), nil
 }
+
+// asideUnits is the most units an aside request names (aside.Group, and
+// each batch of aside.Spread): its message, schema and reply grow with them.
+const asideUnits = 100
 
 // recipes places the recipes of the snapshot's README (outline.Recipes) on
 // pages (place.Recipes): the plan follows the code, and the README, a
