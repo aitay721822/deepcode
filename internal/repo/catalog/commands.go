@@ -99,7 +99,11 @@ func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	head, err := c.Git.LsRemote(ctx, remote)
+	branch, err := c.Tracked(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	head, err := c.head(ctx, remote, branch)
 	if err != nil {
 		return nil, lsRemoteFailed(err)
 	}
@@ -131,7 +135,11 @@ func (c *Catalog) Poll(ctx context.Context, id int64) (*jobs.Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	head, err := c.Git.LsRemote(ctx, remote)
+	branch, err := c.Tracked(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	head, err := c.head(ctx, remote, branch)
 	if err != nil {
 		return nil, err
 	}
@@ -158,12 +166,23 @@ func (c *Catalog) Poll(ctx context.Context, id int64) (*jobs.Job, error) {
 	return &job, nil
 }
 
+// head is the commit the remote's branch points at; "" is its HEAD.
+func (c *Catalog) head(ctx context.Context, remote git.Remote, branch string) (string, error) {
+	if branch == "" {
+		return c.Git.LsRemote(ctx, remote)
+	}
+	return c.Git.LsRemoteRef(ctx, remote, branch)
+}
+
 // lsRemoteFailed tells the user why the repository's HEAD could not be
 // read: an empty repository as such; otherwise only that git failed, since
 // git's own words may quote paths or hosts, and those go to the log.
 func lsRemoteFailed(err error) error {
 	if errors.Is(err, git.ErrEmpty) {
 		return kinded{ErrInvalid, err}
+	}
+	if errors.Is(err, git.ErrNoBranch) {
+		return failf(ErrInvalid, "設定的 Branch 不存在，請重新選擇")
 	}
 	log.Printf("catalog: %v", err)
 	return failf(ErrUpstream, "Git 無法從伺服器讀取這個 Repository；管理員可在伺服器記錄檔中查看詳細資訊")

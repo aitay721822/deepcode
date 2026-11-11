@@ -14,10 +14,12 @@ import { rise } from '../../lib/style/motion'
 import { useApi } from '../../lib/useApi'
 import { Frame } from '../Frame'
 import { useRepo } from '../useRepo'
+import { BranchCard } from './BranchCard'
 import { FilesPanel } from './files/FilesPanel'
 import { FileView } from './files/FileView'
 import { SyncCard } from './SyncCard'
 import { useSync } from './useSync'
+import { WebhookCard } from './WebhookCard'
 import { Toc, type TocItem } from './wiki/Toc'
 import { WikiArticle } from './wiki/WikiArticle'
 import { WikiNav } from './wiki/WikiNav'
@@ -98,7 +100,13 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     : ready?.commitSha
   // Whether the main column shows the latest job in a card: the first index job, or the wiki job above the wiki.
   const jobCard = ready ? !file && !!wikiJob : !!job
-  const syncCard = canSync && <SyncCard repo={repo} jobCard={jobCard} onSynced={reload} />
+  const syncCard = canSync && (
+    <div className="flex flex-col gap-3">
+      <SyncCard repo={repo} jobCard={jobCard} onSynced={reload} />
+      <BranchCard repo={repo} onChanged={reload} />
+      <WebhookCard repo={repo} />
+    </div>
+  )
 
   return (
     <Frame repo={repo}>

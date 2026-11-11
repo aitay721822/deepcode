@@ -11,9 +11,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
+	"deepcode/internal/app/server/repoapi/hooks"
 	"deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/platform/jobs"
 )
@@ -258,5 +260,86 @@ func checkWikiExport(t *testing.T, admin *client, repoID, sha string) {
 		t.Fatalf("unknown repository: %d", resp2.StatusCode)
 	} else {
 		resp2.Body.Close()
+	}
+}
+
+// checkBranchesAndHooks: the remote's branches are listed and an unknown one
+// is refused; a webhook secret is generated once, and a signed push of the
+// shown commit answers up to date, while a wrong signature is refused.
+func checkBranchesAndHooks(t *testing.T, admin *client, repoID, sha string) {
+	t.Helper()
+	var br struct {
+		Branches      []string `json:"branches"`
+		TrackedBranch string   `json:"trackedBranch"`
+		DefaultBranch string   `json:"defaultBranch"`
+	}
+	if code := admin.get("/api/repos/"+repoID+"/branches", &br); code != http.StatusOK || !slices.Contains(br.Branches, "main") || br.TrackedBranch != "" || br.DefaultBranch != "main" {
+		t.Fatalf("branches: %d %+v", code, br)
+	}
+	if code := admin.post("/api/repos/"+repoID+"/branch", `{"branch":"nope"}`, nil); code != http.StatusBadRequest {
+		t.Fatalf("unknown branch: %d", code)
+	}
+	var same struct {
+		UpToDate bool `json:"upToDate"`
+	}
+	if code := admin.post("/api/repos/"+repoID+"/branch", `{"branch":"main"}`, &same); code != http.StatusOK || !same.UpToDate {
+		t.Fatalf("branch main: %d %+v", code, same)
+	}
+	if code := admin.get("/api/repos/"+repoID+"/branches", &br); code != http.StatusOK || br.TrackedBranch != "main" {
+		t.Fatalf("stored branch: %d %+v", code, br)
+	}
+	if code := admin.post("/api/repos/"+repoID+"/branch", `{"branch":""}`, &same); code != http.StatusOK || !same.UpToDate {
+		t.Fatalf("follow default: %d %+v", code, same)
+	}
+	if code := admin.get("/api/repos/"+repoID+"/branches", &br); code != http.StatusOK || br.TrackedBranch != "" {
+		t.Fatalf("cleared branch: %d %+v", code, br)
+	}
+	var hook struct {
+		HasSecret bool `json:"hasSecret"`
+	}
+	if code := admin.get("/api/repos/"+repoID+"/webhook", &hook); code != http.StatusOK || hook.HasSecret {
+		t.Fatalf("webhook before: %d %+v", code, hook)
+	}
+	var made struct {
+		Secret string `json:"secret"`
+	}
+	if code := admin.post("/api/repos/"+repoID+"/webhook", `{}`, &made); code != http.StatusCreated || len(made.Secret) != 64 {
+		t.Fatalf("webhook secret: %d %q", code, made.Secret)
+	}
+	body := fmt.Sprintf(`{"ref":"refs/heads/main","after":%q}`, sha)
+	push := func(secret string) int {
+		req, _ := http.NewRequest(http.MethodPost, admin.base+"/api/hooks/"+repoID, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Hub-Signature-256", hooks.GitHub(secret, []byte(body)))
+		resp, err := (&http.Client{}).Do(req) // no cookie: the signature alone signs in
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := push(made.Secret); code != http.StatusOK {
+		t.Fatalf("signed push: %d", code)
+	}
+	if code := push("wrong"); code != http.StatusUnauthorized {
+		t.Fatalf("unsigned push: %d", code)
+	}
+	req, _ := http.NewRequest(http.MethodPost, admin.base+"/api/hooks/"+repoID, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if resp, err := (&http.Client{}).Do(req); err != nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("push without a signature: %v %d", err, resp.StatusCode)
+	} else {
+		resp.Body.Close()
+	}
+	req, _ = http.NewRequest(http.MethodPost, admin.base+"/api/hooks/"+repoID, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Gitlab-Token", made.Secret)
+	if resp, err := (&http.Client{}).Do(req); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("gitlab push: %v", err)
+	} else {
+		resp.Body.Close()
+	}
+	if code := admin.delete("/api/repos/" + repoID + "/webhook"); code != http.StatusNoContent {
+		t.Fatalf("clear webhook: %d", code)
 	}
 }

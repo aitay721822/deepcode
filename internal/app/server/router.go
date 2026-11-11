@@ -32,6 +32,7 @@ func Router(auth *authapi.API, repos *repoapi.API, admin *adminapi.API, health g
 
 	api := r.Group("/api", httpx.Session(auth.Sessions))
 	api.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, health) })
+	repos.MountHooks(api)
 	signedIn := api.Group("", httpx.SignedIn)
 	auth.Mount(api, signedIn)
 	repos.Mount(signedIn)

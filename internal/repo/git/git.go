@@ -21,6 +21,9 @@ import (
 // ErrEmpty is a repository whose default branch has no commit to index.
 var ErrEmpty = errors.New("Repository 的預設 Branch 沒有任何 Commit")
 
+// ErrNoBranch is a branch the remote does not have, or one with no commit.
+var ErrNoBranch = errors.New("Branch 不存在或沒有任何 Commit")
+
 // Client runs the system git with fixed arguments (never through a shell).
 // Each repository is a bare, shallow clone: files are read from the object
 // store by blob SHA, so there is no working tree to be affected by autocrlf,
@@ -162,6 +165,56 @@ func (g *Client) LsRemote(ctx context.Context, remote Remote) (string, error) {
 		}
 	}
 	return "", ErrEmpty // no HEAD line when there is no commit
+}
+
+// LsRemoteRef returns the commit SHA the remote's branch points at.
+func (g *Client) LsRemoteRef(ctx context.Context, remote Remote, branch string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	ref := "refs/heads/" + branch
+	out, err := g.run(ctx, remote, "-c", "credential.helper=", "ls-remote", remote.URL, ref)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		sha, got, _ := strings.Cut(line, "\t")
+		if got == ref && (len(sha) == 40 || len(sha) == 64) && strings.Trim(sha, "0123456789abcdef") == "" {
+			return sha, nil
+		}
+	}
+	return "", ErrNoBranch
+}
+
+// Branches returns the remote's branches, their names only, sorted.
+func (g *Client) Branches(ctx context.Context, remote Remote) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	out, err := g.run(ctx, remote, "-c", "credential.helper=", "ls-remote", "--heads", remote.URL)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, line := range strings.Split(string(out), "\n") {
+		_, ref, _ := strings.Cut(line, "\t")
+		if name, ok := strings.CutPrefix(ref, "refs/heads/"); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	if names == nil {
+		names = []string{}
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+// ValidBranch reports whether name is a branch git can check out: no leading
+// dash, and every rule check-ref-format states.
+func (g *Client) ValidBranch(ctx context.Context, name string) bool {
+	if name == "" || strings.HasPrefix(name, "-") || strings.ContainsAny(name, " ~^:?*[\\\x00") {
+		return false
+	}
+	_, err := g.run(ctx, Remote{}, "check-ref-format", "--branch", name)
+	return err == nil
 }
 
 // Fetch downloads exactly one commit (depth 1) into the repo's bare clone.

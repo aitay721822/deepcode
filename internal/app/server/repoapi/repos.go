@@ -2,6 +2,7 @@ package repoapi
 
 import (
 	"net/http"
+	"slices"
 
 	"github.com/gin-gonic/gin"
 
@@ -118,5 +119,57 @@ func (a *API) job(c *gin.Context) {
 func jobView(c *gin.Context, j *jobs.Job) {
 	if j != nil && j.Error != "" && !httpx.Principal(c).Can(role.JobsView) {
 		j.Error = "管理員可在工作主控台查看詳細資訊"
+	}
+}
+
+// branches names the remote's branches and the one the repository follows.
+func (a *API) branches(c *gin.Context) {
+	ctx, id := c.Request.Context(), httpx.RepoID(c)
+	repo, err := a.Catalog.Get(ctx, id)
+	if err != nil {
+		httpx.DomainError(c, err)
+		return
+	}
+	list, err := a.Catalog.Branches(ctx, id)
+	if err != nil {
+		httpx.DomainError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"branches": list, "trackedBranch": repo.TrackedBranch, "defaultBranch": repo.DefaultBranch})
+}
+
+// setBranch makes the repository follow branch, "" its default, and syncs it.
+func (a *API) setBranch(c *gin.Context) {
+	var body struct {
+		Branch string `json:"branch"`
+	}
+	if !httpx.Bind(c, &body) {
+		return
+	}
+	ctx, id := c.Request.Context(), httpx.RepoID(c)
+	if body.Branch != "" {
+		list, err := a.Catalog.Branches(ctx, id)
+		if err != nil {
+			httpx.DomainError(c, err)
+			return
+		}
+		if !slices.Contains(list, body.Branch) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "遠端沒有這個 Branch"})
+			return
+		}
+	}
+	if err := a.Catalog.SetBranch(ctx, id, body.Branch); err != nil {
+		httpx.DomainError(c, err)
+		return
+	}
+	job, err := a.Catalog.Sync(ctx, id)
+	switch {
+	case err != nil:
+		httpx.DomainError(c, err)
+	case job == nil:
+		c.JSON(http.StatusOK, gin.H{"upToDate": true})
+	default:
+		jobView(c, job)
+		c.JSON(http.StatusAccepted, gin.H{"job": job})
 	}
 }

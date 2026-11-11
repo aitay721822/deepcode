@@ -194,6 +194,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	checkJobConsole(t, admin, repo.ID)
 	checkWikiExport(t, admin, repo.ID, sha1)
+	checkBranchesAndHooks(t, admin, repo.ID, sha1)
 
 	// Chat: streamed answer; the grouped citation keeps the real reference
 	// and drops the made-up one.

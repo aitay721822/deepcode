@@ -12,6 +12,7 @@ import (
 	"deepcode/internal/access/token"
 	"deepcode/internal/app/importer"
 	"deepcode/internal/app/server/httpx"
+	"deepcode/internal/app/server/repoapi/hooks"
 	"deepcode/internal/knowledge/chat"
 	"deepcode/internal/knowledge/retrieval"
 	wikiview "deepcode/internal/knowledge/wiki/view"
@@ -32,6 +33,15 @@ type API struct {
 	Retriever *retrieval.Retriever
 	Chat      *chat.Service
 	Wiki      wikiview.Reader
+	Webhooks  *hooks.API
+}
+
+// MountHooks adds the webhook route to r, which needs no session: the
+// request's signature is its authentication.
+func (a *API) MountHooks(r gin.IRouter) {
+	if a.Webhooks != nil {
+		a.Webhooks.MountPublic(r)
+	}
 }
 
 // Mount adds the routes to r, whose requests are signed in.
@@ -42,6 +52,11 @@ func (a *API) Mount(r gin.IRouter) {
 	r.GET("/servers", httpx.Require(role.RepoImport), a.listServers)
 	r.GET("/repos/:id", read, a.getRepo)
 	r.POST("/repos/:id/sync", httpx.OnRepo(a.Catalog.ID, role.RepoSync), a.syncRepo)
+	r.GET("/repos/:id/branches", read, a.branches)
+	r.POST("/repos/:id/branch", httpx.OnRepo(a.Catalog.ID, role.RepoSync), a.setBranch)
+	if a.Webhooks != nil {
+		a.Webhooks.MountAdmin(r)
+	}
 	r.GET("/jobs/:id", a.job)
 
 	r.GET("/repos/:id/files", read, a.listFiles)

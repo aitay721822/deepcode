@@ -49,6 +49,7 @@ type Repo struct {
 	Description   string         `json:"description"`
 	Stars         int            `json:"stars"`
 	DefaultBranch string         `json:"defaultBranch"`
+	TrackedBranch string         `json:"trackedBranch"` // "" follows DefaultBranch
 	Snapshot      *Snapshot      `json:"snapshot"`
 	Job           *jobsstore.Job `json:"job"` // left for the catalog to fill in
 }
@@ -164,7 +165,7 @@ func (s *Store) Repo(ctx context.Context, id int64) (Repo, error) {
 
 func (s *Store) repos(ctx context.Context, visible func(int64) bool, where string, args ...any) ([]Repo, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT r.id, r.public_id, r.owner, r.name, r.url, g.kind, g.id, g.name, r.description, r.stars, r.default_branch,
+		SELECT r.id, r.public_id, r.owner, r.name, r.url, g.kind, g.id, g.name, r.description, r.stars, r.default_branch, r.tracked_branch,
 			s.id, s.commit_sha, coalesce(s.indexed_at, ''), s.wiki_status, s.embedding_model, s.file_count, s.chunk_count
 		FROM repositories r JOIN git_servers g ON g.id = r.git_server_id LEFT JOIN snapshots s ON s.id = r.ready_snapshot_id
 		`+where+` ORDER BY r.id DESC`, args...)
@@ -178,7 +179,7 @@ func (s *Store) repos(ctx context.Context, visible func(int64) bool, where strin
 		var sid sql.NullInt64
 		var sha, indexed, wikiStatus, model sql.NullString
 		var files, chunks sql.NullInt64
-		if err := rows.Scan(&v.ID, &v.PublicID, &v.Owner, &v.Name, &v.URL, &v.Provider, &v.ServerID, &v.ServerName, &v.Description, &v.Stars, &v.DefaultBranch,
+		if err := rows.Scan(&v.ID, &v.PublicID, &v.Owner, &v.Name, &v.URL, &v.Provider, &v.ServerID, &v.ServerName, &v.Description, &v.Stars, &v.DefaultBranch, &v.TrackedBranch,
 			&sid, &sha, &indexed, &wikiStatus, &model, &files, &chunks); err != nil {
 			return nil, err
 		}

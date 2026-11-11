@@ -37,6 +37,7 @@ export type Repo = {
   description: string
   stars: number
   defaultBranch: string
+  trackedBranch: string // "" follows defaultBranch
   snapshot: Snapshot | null
   job: Job | null
   permissions: Permission[] // what the reader may do on this repository: repo.read, repo.chat, repo.sync

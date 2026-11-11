@@ -69,3 +69,50 @@ func (c *Catalog) withJobs(ctx context.Context, list []Repo) ([]Repo, error) {
 	}
 	return list, nil
 }
+
+// Tracked returns the branch a user set, "" when the repository follows its
+// remote's HEAD.
+func (c *Catalog) Tracked(ctx context.Context, id int64) (string, error) {
+	tracked, _, err := c.Store.Branch(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return "", failf(ErrNotFound, "找不到 Repository")
+	}
+	return tracked, err
+}
+
+// Branch returns the branch repository id follows: the one a user set, else
+// its default, "" when neither is known.
+func (c *Catalog) Branch(ctx context.Context, id int64) (string, error) {
+	tracked, def, err := c.Store.Branch(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return "", failf(ErrNotFound, "找不到 Repository")
+	} else if err != nil {
+		return "", err
+	}
+	if tracked != "" {
+		return tracked, nil
+	}
+	return def, nil
+}
+
+// Branches returns the remote's branch names, sorted.
+func (c *Catalog) Branches(ctx context.Context, id int64) ([]string, error) {
+	remote, err := c.Servers.Remote(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return c.Git.Branches(ctx, remote)
+}
+
+// SetBranch sets the branch repository id follows; "" follows its default.
+// It does not sync: the caller queues that once the name is stored.
+func (c *Catalog) SetBranch(ctx context.Context, id int64, branch string) error {
+	if branch != "" && !c.Git.ValidBranch(ctx, branch) {
+		return failf(ErrInvalid, "Branch 名稱無效：%q", branch)
+	}
+	err := c.Store.SetBranch(ctx, id, branch)
+	if errors.Is(err, ErrNotFound) {
+		return failf(ErrNotFound, "找不到 Repository")
+	}
+	return err
+}

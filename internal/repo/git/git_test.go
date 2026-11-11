@@ -390,3 +390,19 @@ func TestFetchKeepsOneCommit(t *testing.T) {
 		t.Fatalf("a stopped fetch removed the clone: %v", err)
 	}
 }
+
+// TestValidBranch: a name git can check out, and the ones it cannot.
+func TestValidBranch(t *testing.T) {
+	g := &Client{}
+	ctx := context.Background()
+	for _, good := range []string{"main", "feature/x", "v1.2"} {
+		if !g.ValidBranch(ctx, good) {
+			t.Errorf("refused %q", good)
+		}
+	}
+	for _, bad := range []string{"", "-x", "a..b", "a b", "x.lock", "a~b", "a^b", "a:b", "a?b", "a[b", "a\\b", "a//b"} {
+		if g.ValidBranch(ctx, bad) {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}

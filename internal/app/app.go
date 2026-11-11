@@ -28,6 +28,7 @@ import (
 	"deepcode/internal/app/server/adminapi"
 	"deepcode/internal/app/server/authapi"
 	"deepcode/internal/app/server/repoapi"
+	"deepcode/internal/app/server/repoapi/hooks"
 	"deepcode/internal/knowledge/chat"
 	"deepcode/internal/knowledge/chat/harness"
 	chatstore "deepcode/internal/knowledge/chat/store"
@@ -117,7 +118,8 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	handler, err := server.Router(
 		&authapi.API{Sessions: sessions, Tokens: tokens, OAuth: &oauth.Service{Store: &oauthstore.Store{DB: db}, Tokens: tokens}},
 		&repoapi.API{Sessions: sessions, Tokens: tokens, Catalog: cat, Importer: &importer.Service{Catalog: cat}, Servers: servers, Queue: queue,
-			Retriever: retriever, Chat: conversations, Wiki: view.Reader{Store: wikis, Graph: graphs}},
+			Retriever: retriever, Chat: conversations, Wiki: view.Reader{Store: wikis, Graph: graphs},
+			Webhooks: &hooks.API{Catalog: cat, Box: box}},
 		&adminapi.API{Sessions: sessions, Accounts: accounts, Roles: roles, Servers: servers, Catalog: cat, Queue: queue, Bus: bus},
 		gin.H{"status": "ok", "chatModel": cfg.ChatModel, "embeddingModel": cfg.EmbedModel},
 		ui, loopback, cfg.TrustedProxies)
