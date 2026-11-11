@@ -61,22 +61,24 @@ func TestUnits(t *testing.T) {
 		t.Errorf("a long README is no guide: %+v", asides[0])
 	}
 
-	// petclinic's resources: thin, no imports, kin below src/main/ only; model/ joins what imports it, of two as kin.
-	paths = []string{"src/main/java/app/owner/Owner.java", "src/main/java/app/vet/Vet.java",
+	// petclinic's resources: thin, no imports, kin below src/main/ only; model/ joins what imports it, of two as kin;
+	// system/, at 150 weighed lines, is not thin (LinesPerPage), though under capLines: it stays a unit of its own.
+	paths = []string{"src/main/java/app/owner/Owner.java", "src/main/java/app/vet/Vet.java", "src/main/java/app/system/Cache.java",
 		"src/main/resources/db/h2/data.sql", "src/main/resources/db/mysql/data.sql", "src/main/java/app/model/Base.java"}
-	lines = map[string]int{"src/main/java/app/owner/Owner.java": 400, "src/main/java/app/vet/Vet.java": 400,
+	lines = map[string]int{"src/main/java/app/owner/Owner.java": 400, "src/main/java/app/vet/Vet.java": 400, "src/main/java/app/system/Cache.java": 150,
 		"src/main/resources/db/h2/data.sql": 40, "src/main/resources/db/mysql/data.sql": 60, "src/main/java/app/model/Base.java": 50}
 	edges := []graphstore.Edge{{Src: "src/main/java/app/vet/Vet.java", Dst: "src/main/java/app/model/Base.java"}}
 	code, _ = Units(paths, lines, nil, edges)
-	if got, want := keys(code), []string{"src/main/java/app/owner/", "src/main/java/app/model/, src/main/java/app/vet/",
+	if got, want := keys(code), []string{"src/main/java/app/owner/", "src/main/java/app/system/", "src/main/java/app/model/, src/main/java/app/vet/",
 		"src/main/resources/db/h2/, src/main/resources/db/mysql/"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("merged %v, want %v", got, want)
 	}
 }
 
 // TestCaps (G5): a unit's cap is min(the distinct names its files declare,
-// unclipped, 1 + its weight / LinesPerPage), a configuration file weighing a
-// quarter, at least 1.
+// unclipped, 1 + its weight / capLines), a configuration file weighing a
+// quarter, at least 1: a/ by its weight (550), b/ by its names (7, its weight
+// allowing 8).
 func TestCaps(t *testing.T) {
 	names := func(n int) []string {
 		out := make([]string, n)
@@ -86,14 +88,14 @@ func TestCaps(t *testing.T) {
 		return out
 	}
 	paths := []string{"a/a.go", "a/x.json", "b/b.go", "c/data.sql"}
-	lines := map[string]int{"a/a.go": 450, "a/x.json": 400, "b/b.go": 900, "c/data.sql": 900}
+	lines := map[string]int{"a/a.go": 450, "a/x.json": 400, "b/b.go": 1500, "c/data.sql": 900}
 	declared := map[string][]string{"a/a.go": names(8), "b/b.go": names(7)}
 	code, _ := Units(paths, lines, declared, nil)
 	got := map[string]int{}
 	for _, u := range code {
 		got[u.Key] = u.Cap
 	}
-	if want := map[string]int{"a/": 6, "b/": 7, "c/": 1}; !reflect.DeepEqual(got, want) {
+	if want := map[string]int{"a/": 3, "b/": 7, "c/": 1}; !reflect.DeepEqual(got, want) {
 		t.Errorf("caps %v, want %v", got, want)
 	}
 }
@@ -138,13 +140,13 @@ func TestShares(t *testing.T) {
 		{Key: analyzer.Tests, Kind: analyzer.Tests, Files: tests, Weight: Weigh(tests, lines, false)},
 		{Key: analyzer.Tooling, Kind: analyzer.Tooling, Files: []string{"Makefile"}, Weight: 500},
 	}
-	for _, c := range []struct{ p, docs, tests, tooling int }{{2, 15, 1, 1}, {40, 15, 3, 4}} {
+	for _, c := range []struct{ p, docs, tests, tooling int }{{2, 8, 1, 1}, {40, 8, 3, 3}} { // docs 1 + (4300/3)/capLines; tooling by p, then its weight
 		Shares(asides, lines, c.p)
 		if asides[0].Cap != c.docs || asides[1].Cap != c.tests || asides[2].Cap != c.tooling {
 			t.Errorf("p=%d: %d %d %d, want %d %d %d", c.p, asides[0].Cap, asides[1].Cap, asides[2].Cap, c.docs, c.tests, c.tooling)
 		}
 	}
-	guides := []Unit{{Key: analyzer.Docs, Kind: analyzer.Docs, Files: []string{"docs/a.md", "docs/b.md"}, Weight: 30 * LinesPerPage}} // weight enough for 11
+	guides := []Unit{{Key: analyzer.Docs, Kind: analyzer.Docs, Files: []string{"docs/a.md", "docs/b.md"}, Weight: 30 * LinesPerPage}} // weight enough for 6
 	if Shares(guides, nil, 2); guides[0].Cap != 2 {
 		t.Errorf("two heavy guides: %d pages", guides[0].Cap)
 	}

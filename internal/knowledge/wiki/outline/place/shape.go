@@ -94,7 +94,7 @@ func home(units []Unit, m [][]int, root int, groups [][]int, i int) int {
 }
 
 // Shares sets each aside kind's cap, p being the code pages planned: docs
-// and examples by their own structure, min(units, 1 + ⌊(w/3) / LinesPerPage⌋);
+// and examples by their own structure, min(units, 1 + ⌊(w/3) / capLines⌋);
 // tests at most ⌈p/10⌉, their weight cap and their units; tooling at most
 // ⌈p/10⌉ and its weight cap. Each present takes at least 1.
 func Shares(asides []Unit, lines map[string]int, p int) {
@@ -105,10 +105,10 @@ func Shares(asides []Unit, lines map[string]int, p int) {
 
 // Share is aside kind a's cap by Shares' rules.
 func Share(a Unit, lines map[string]int, p int) int {
-	units, byWeight := len(AsideUnits(a.Kind, a.Files, lines)), 1+int(a.Weight)/LinesPerPage
+	units, byWeight := len(AsideUnits(a.Kind, a.Files, lines)), 1+int(a.Weight)/capLines
 	switch a.Kind {
 	case analyzer.Docs, analyzer.Examples:
-		return max(1, min(units, 1+int(a.Weight/3)/LinesPerPage))
+		return max(1, min(units, 1+int(a.Weight/3)/capLines))
 	case analyzer.Tests:
 		return max(1, min((p+9)/10, byWeight, units))
 	}

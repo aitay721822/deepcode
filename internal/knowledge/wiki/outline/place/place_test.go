@@ -139,10 +139,10 @@ func TestCarry(t *testing.T) {
 	}
 }
 
-// TestReplan (G7e): a unit crossing a page's lines, a new thin folder, a new
-// one no code imports (though it imports others), or a cap-1 unit gone plans
-// nothing anew; a new imported section's worth of code does, and so does a
-// section's unit gone.
+// TestReplan (G7e): a unit growing past a thin page's lines and to a cap of 2
+// (capLines), a new thin folder, a new one no code imports (though it imports
+// others), or a cap-1 unit gone plans nothing anew; a new imported section's
+// worth of code does, and so does a section's unit gone.
 func TestReplan(t *testing.T) {
 	base := []string{"a/x.go", "c/c.go", "s/s.go"}
 	declared := map[string][]string{"a/x.go": {"A", "B"}, "s/s.go": {"S", "T"}, "p/a.go": {"X", "Y", "Z"}, "q/b.go": {"X", "Y", "Z"}}
@@ -159,7 +159,7 @@ func TestReplan(t *testing.T) {
 		"imported":   {append(slices.Clone(base), "p/a.go", "p/go.mod"), "the new p/ is a section's worth of code that other code imports"},
 		"gone":       {[]string{"a/x.go", "c/c.go"}, "s/, which had a section of its own, is gone"},
 	} {
-		is, _ := Raw(c.head, map[string]int{"a/x.go": 105, "c/c.go": 50, "s/s.go": 300, "n/y.go": 50, "p/a.go": 300, "q/b.go": 300}, declared)
+		is, _ := Raw(c.head, map[string]int{"a/x.go": 205, "c/c.go": 50, "s/s.go": 300, "n/y.go": 50, "p/a.go": 300, "q/b.go": 300}, declared)
 		if got := Replan(was, is, edges); got != c.want {
 			t.Errorf("%s: %q, want %q", name, got, c.want)
 		}

@@ -215,7 +215,7 @@ func TestRunPlansSections(t *testing.T) {
 	for _, f := range files {
 		lines := map[bool]int{false: 100, true: 600}[strings.HasPrefix(f, "docs/")]
 		stmts = append(stmts, fmt.Sprintf(`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, '%s', 'go', 'h', 1, %d)`, f, lines))
-		if strings.HasPrefix(f, "api/") { // two subjects each: api/'s cap is 5, the others' 1
+		if strings.HasPrefix(f, "api/") { // two subjects each: api/'s cap is 3 (400 lines), the others' 1
 			stmts = append(stmts, fmt.Sprintf(`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, '%[1]s', '%[1]sA', 'A', 'function', 1, 1), (1, '%[1]s', '%[1]sB', 'B', 'function', 2, 2)`, f))
 		}
 	}
@@ -268,7 +268,7 @@ func TestRunPlansSections(t *testing.T) {
 	}
 	var trimmed Planning
 	g = runWiki(t, testDB(t, stmts...), &fakeModel{}, "abc", func(g *Generator) { g.MaxPages, g.Planned = 8, func(p Planning) { trimmed = p } })
-	if pages, _ := g.Store.Pages(context.Background(), 1); trimmed.Ceiling == nil || *trimmed.Ceiling != (Ceiling{Limit: 8, Wanted: 14, Planned: len(pages)}) || len(pages) > 8 {
+	if pages, _ := g.Store.Pages(context.Background(), 1); trimmed.Ceiling == nil || *trimmed.Ceiling != (Ceiling{Limit: 8, Wanted: 12, Planned: len(pages)}) || len(pages) > 8 {
 		t.Fatalf("under a ceiling of 8: %+v, %d pages", trimmed.Ceiling, len(pages))
 	}
 }

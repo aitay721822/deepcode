@@ -229,9 +229,21 @@ func (c *OpenAI) fail(path string, res *http.Response, err error) error {
 	return fmt.Errorf("%s %s: %w", c.ModelName, path, err)
 }
 
+// ErrFailed: the server failed the answer it was giving (an error inside the
+// stream, a failed response) and sent none of its text, as Strata does when
+// the structured answer it holds back fails its check: the model's or the
+// server's failure, not a feature the server lacks.
+var ErrFailed = errors.New("the server failed the answer")
+
+// answerFailed is a server's message that the answer failed (refused), an
+// ErrFailed.
+type answerFailed struct{ error }
+
+func (answerFailed) Is(target error) bool { return target == ErrFailed }
+
 // refused is the error for a server's message that the answer failed, quoted.
 func (c *OpenAI) refused(path, msg string) error {
-	return fmt.Errorf("%s %s: %s", c.ModelName, path, c.quote([]byte(cmp.Or(msg, "the answer failed, the server saying no more"))))
+	return answerFailed{fmt.Errorf("%s %s: %s", c.ModelName, path, c.quote([]byte(cmp.Or(msg, "the answer failed, the server saying no more"))))}
 }
 
 // quote is a server's message fit for an error: the API key masked, since a

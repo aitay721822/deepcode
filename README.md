@@ -20,7 +20,7 @@
    chat_base_url: http://host:8080/v1
    chat_api_key: your-key
    chat_model: your-chat-model
-   # chat_api: completions  # 或 responses；有些伺服器的 /responses 遇到非 JSON 回覆會直接回錯，請用 completions
+   # chat_api: completions  # 或 responses
    # embed_model: your-embedding-model
    # chat_context: 524288
    # chat_tokenizer: tokenizer.json

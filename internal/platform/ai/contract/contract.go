@@ -114,7 +114,8 @@ type Turn[T any] struct {
 	Kind string
 	// Ask sends p and reads the reply. A reply that does not read into T is
 	// an error wrapping ai.ErrSchema; one that reads but fails the schema is
-	// v with an error wrapping ErrLoose.
+	// v with an error wrapping ErrLoose; one the server failed, sending no
+	// text, is an error wrapping ai.ErrFailed.
 	Ask func(ctx context.Context, p ai.Prompt) (v T, reply string, err error)
 	// Check names every rule the schema states that v breaks, and what the
 	// schema cannot say.
@@ -135,18 +136,20 @@ const jsonNote = "Your reply is %s. Reply again with only the JSON asked for."
 // Run asks, checks, repairs once with p.After(reply, note), checks again, has
 // code fix the rest, and counts each rule at each step. A reply that does not
 // read into T counts as Kind.json and is repaired like any other violation;
-// if the repair does not read either, Run fails with ai.ErrSchema. A first
-// reply that read stands, as it was, when its repair fails for any reason but
-// ctx's end, as a page's draft does when writing it again fails. A loose
-// reply goes to Check like any other; if Check names nothing, it counts as
-// Kind.schema.other and stands unrepaired. No repair is asked for Minor
-// violations alone.
+// so does an answer the server failed (ai.ErrFailed), asked again as p, as
+// there is no reply to quote. If the repair does not read either, Run fails
+// with its error. A first reply that read stands, as it was, when its repair
+// fails for any reason but ctx's end, as a page's draft does when writing it
+// again fails. A loose reply goes to Check like any other; if Check names
+// nothing, it counts as Kind.schema.other and stands unrepaired. No repair is
+// asked for Minor violations alone.
 func Run[T any](ctx context.Context, p ai.Prompt, t Turn[T], c *Counts) (T, error) {
 	unread := Rule(t.Kind + ".json")
 	v, reply, err := t.Ask(ctx, p)
 	var vs []Violation
+	failed := errors.Is(err, ai.ErrFailed)
 	switch {
-	case errors.Is(err, ai.ErrSchema):
+	case failed, errors.Is(err, ai.ErrSchema):
 		vs = []Violation{{Rule: unread, Detail: err.Error()}}
 		if d := (*ai.DecodeError)(nil); errors.As(err, &d) {
 			vs[0].Detail = d.Error()
@@ -160,19 +163,23 @@ func Run[T any](ctx context.Context, p ai.Prompt, t Turn[T], c *Counts) (T, erro
 	}
 	c.add(first, vs...)
 	if slices.ContainsFunc(vs, func(x Violation) bool { return !x.Minor }) {
-		note := fmt.Sprintf(jsonNote, vs[0].Detail)
-		if vs[0].Rule != unread {
-			note = t.Note(vs)
+		again := p // the server sent no text: nothing to quote
+		if !failed {
+			note := fmt.Sprintf(jsonNote, vs[0].Detail)
+			if vs[0].Rule != unread {
+				note = t.Note(vs)
+			}
+			again = p.After(reply, note)
 		}
-		fix, _, err := t.Ask(ctx, p.After(reply, note))
-		failed := err != nil && !errors.Is(err, ErrLoose)
+		fix, _, err := t.Ask(ctx, again)
+		broke := err != nil && !errors.Is(err, ErrLoose)
 		switch {
-		case failed && (vs[0].Rule == unread || ctx.Err() != nil):
-			if errors.Is(err, ai.ErrSchema) {
+		case broke && (vs[0].Rule == unread || ctx.Err() != nil):
+			if errors.Is(err, ai.ErrSchema) || errors.Is(err, ai.ErrFailed) {
 				c.add(repaired, vs...)
 			}
 			return v, err
-		case failed:
+		case broke:
 			c.add(repaired, vs...) // the first stands, as it was
 		default:
 			if vs[0].Rule == unread || t.Merge == nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -140,6 +141,78 @@ func TestJSON(t *testing.T) {
 		srv.Close()
 		if v.A != c.want || text != c.text || errors.Is(err, ErrLoose) != c.loose || errors.Is(err, ai.ErrSchema) != c.bad || err == nil && (c.loose || c.bad) {
 			t.Errorf("%s: %+v %q %v", c.text, v, text, err)
+		}
+	}
+}
+
+// TestFailedAnswer: an answer the server failed, sending no text, as Strata
+// does (an error inside the stream, a failed response, an error event), is a
+// json violation asked again as the same request; failing again, Run returns
+// the second error: the server's words (ErrFailed), or the reader's when the
+// second does not read (ErrSchema). An unread reply's repair the server fails
+// ends the same way. One longer than the context, or a connection lost, is
+// the error it is, asked once.
+func TestFailedAnswer(t *testing.T) {
+	type reply struct {
+		A int `json:"a"`
+	}
+	const (
+		failure  = `data: {"error":{"type":"structured_output_failed","message":"model did not return valid JSON"}}` + "\n\ndata: [DONE]\n\n"
+		failed   = `data: {"type":"response.failed","response":{"error":{"code":"structured_output_failed","message":"model did not return valid JSON"}}}` + "\n\n"
+		event    = `data: {"type":"error","code":"x","message":"model did not return valid JSON"}` + "\n\n"
+		overflow = `data: {"error":{"type":"exceed_context_size_error","message":"too long","n_prompt_tokens":9,"n_ctx":4}}` + "\n\n"
+		lost     = "(lost)" // the connection lost after what comes before it
+	)
+	text := func(s, finish string) string { // Chat Completions'
+		chunk, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"index": 0, "delta": map[string]string{"content": s}, "finish_reason": finish}}})
+		return fmt.Sprintf("data: %s\n\n", chunk)
+	}
+	said := func(s string) string { // the Responses API's whole answer
+		d, _ := json.Marshal(map[string]string{"type": "response.output_text.delta", "delta": s})
+		return fmt.Sprintf("data: %s\n\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n", d)
+	}
+	C, R := ai.Completions, ai.Responses
+	for _, c := range []struct {
+		name, api string
+		streams   []string
+		want      int
+		is, err   string // is: failed (ErrFailed), schema (ErrSchema), context (ErrContext), other (none of them)
+		repair    string // the second request: same (as the first), note (with the note), or "" (none)
+		counts    map[Rule]Count
+	}{
+		{"failed, then read", C, []string{failure, text(`{"a":7}`, "stop")}, 7, "", "", "same", map[Rule]Count{"k.json": {1, 0, 0}}},
+		{"failed twice", C, []string{failure, failure}, 0, "failed", "m /chat/completions: received error while streaming: ", "same", map[Rule]Count{"k.json": {1, 1, 0}}},
+		{"failed response, then read", R, []string{failed, said(`{"a":7}`)}, 7, "", "", "same", map[Rule]Count{"k.json": {1, 0, 0}}},
+		{"error event, then no JSON", R, []string{event, said("oops")}, 0, "schema", "not the JSON of r", "same", map[Rule]Count{"k.json": {1, 1, 0}}},
+		{"no JSON, then failed", C, []string{text("oops", "stop"), failure}, 0, "failed", "model did not return valid JSON", "note", map[Rule]Count{"k.json": {1, 1, 0}}},
+		{"longer than the context", C, []string{overflow}, 0, "context", "too long", "", map[Rule]Count{}},
+		{"connection lost", C, []string{text(`{"a":`, "") + lost}, 0, "other", "unexpected EOF", "", map[Rule]Count{}},
+	} {
+		var bodies []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			stream := c.streams[len(bodies)]
+			bodies = append(bodies, string(b))
+			w.Header().Set("Content-Type", "text/event-stream")
+			stream, cut := strings.CutSuffix(stream, lost)
+			fmt.Fprint(w, stream)
+			if cut {
+				w.(http.Flusher).Flush()
+				panic(http.ErrAbortHandler)
+			}
+		}))
+		var counts Counts
+		turn := Turn[reply]{Kind: "k", Ask: JSON(&ai.OpenAI{BaseURL: srv.URL, ModelName: "m", API: c.api}, ai.Schema[reply]("r")),
+			Check: func(reply) []Violation { return nil }, Note: func([]Violation) string { return "" }, Fix: func(*reply) {}}
+		v, err := Run(context.Background(), ai.Prompt{Dynamic: "q"}, turn, &counts)
+		srv.Close()
+		if v.A != c.want || len(bodies) != len(c.streams) || (err == nil) != (c.err == "") || err != nil && !strings.Contains(err.Error(), c.err) ||
+			errors.Is(err, ai.ErrSchema) != (c.is == "schema") || errors.Is(err, ai.ErrFailed) != (c.is == "failed") ||
+			errors.As(err, new(*ai.ErrContext)) != (c.is == "context") || !reflect.DeepEqual(counts.Snapshot(), c.counts) {
+			t.Errorf("%s: %+v after %d requests, %v, counts %v", c.name, v, len(bodies), err, counts.Snapshot())
+		}
+		if len(bodies) == 2 && (c.repair == "same") != (bodies[1] == bodies[0]) || c.repair == "note" && !strings.Contains(bodies[1], "Your reply is not the JSON of r") {
+			t.Errorf("%s: asked %s, then %s", c.name, bodies[0], bodies[1])
 		}
 	}
 }

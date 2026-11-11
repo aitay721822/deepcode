@@ -38,9 +38,14 @@ type Unit struct {
 	Raw    []string // the keys of the units merged into it, sorted: its identity across snapshots
 }
 
-// LinesPerPage is the weighed lines a unit needs for each page past its
-// first: about what one of DeepWiki's pages covers.
+// LinesPerPage is the weighed lines under which a page, or a unit, is thin.
 const LinesPerPage = 100
+
+// capLines is the weighed lines a unit's cap needs for each page past its
+// first: 2·LinesPerPage, so a unit planned at its cap averages twice a thin
+// page's lines (Probe C: at LinesPerPage, chi's middleware/ of 2696 lines in
+// 31 files capped at 27, and zustand's 42 guides at a page each).
+const capLines = 2 * LinesPerPage
 
 // maxLines is the most lines one file weighs: a bundled file need not be
 // marked generated.
@@ -159,8 +164,8 @@ func choices(files []string) []string {
 	return files
 }
 
-// capOf is u's cap: min(subjects, 1 + ⌊weight / LinesPerPage⌋), at least 1,
-// the subjects being the distinct names its files declare.
+// capOf is u's cap: min(subjects, 1 + ⌊weight / capLines⌋), at least 1, the
+// subjects being the distinct names its files declare.
 func capOf(u Unit, declared map[string][]string) int {
 	names := map[string]bool{}
 	for _, f := range u.Files {
@@ -168,7 +173,7 @@ func capOf(u Unit, declared map[string][]string) int {
 			names[n] = true
 		}
 	}
-	return max(1, min(len(names), 1+int(u.Weight)/LinesPerPage))
+	return max(1, min(len(names), 1+int(u.Weight)/capLines))
 }
 
 // mergeThin merges each thin unit, the lightest first, into its partner
