@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"deepcode/internal/repo/index/analyzer"
-	"deepcode/internal/repo/index/graph/store"
+	"deepcode/internal/repo/index/graphstore"
 )
 
 // Edges returns the snapshot's import edges between its files.
@@ -56,6 +56,10 @@ func (g *Graph) Impact(ctx context.Context, base, snap int64, changed map[string
 	if len(moved) == 0 {
 		return out, nil
 	}
+	var dsts []string
+	for p := range moved {
+		dsts = append(dsts, p)
+	}
 	for _, s := range []int64{base, snap} {
 		edges, err := g.Store.Edges(ctx, s)
 		if err != nil {
@@ -64,6 +68,15 @@ func (g *Graph) Impact(ctx context.Context, base, snap int64, changed map[string
 		for _, e := range edges {
 			if moved[e.Dst] && e.Src != e.Dst {
 				out[e.Src] = true
+			}
+		}
+		callers, err := g.Store.CallersOf(ctx, s, dsts)
+		if err != nil {
+			return nil, err
+		}
+		for _, src := range callers {
+			if !moved[src] {
+				out[src] = true
 			}
 		}
 	}

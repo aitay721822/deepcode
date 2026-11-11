@@ -8,8 +8,8 @@ import (
 	"context"
 
 	"deepcode/internal/repo/index/analyzer"
-	"deepcode/internal/repo/index/chunker"
 	"deepcode/internal/repo/index/graph"
+	"deepcode/internal/repo/index/indexer/chunker"
 	"deepcode/internal/repo/index/indexer/store"
 )
 
@@ -21,13 +21,17 @@ const termsBatch = 500
 func (ix *Indexer) write(ctx context.Context, snap, prev int64, parsed []parsedFile, copies []string) error {
 	files := make([]store.File, len(parsed))
 	for i, p := range parsed {
-		var imports *string                                // NULL: Parse reads no imports of the language, or the file is generated
+		var imports, references *string                    // NULL: Parse reads no imports or calls of the language, or the file is generated
 		if analyzer.ReadsImports(p.lang) && !p.generated { // a hand-written copy fills them in
 			s := graph.Imports(p.imports)
 			imports = &s
 		}
-		f := store.File{Path: p.path, Lang: p.lang, Hash: p.sha, Content: p.content, Imports: imports, Size: p.size, Lines: p.lines,
-			Generated: p.generated, Symbols: symbols(nil, p.symbols, "")}
+		if analyzer.HasGrammar(p.lang) && !p.generated {
+			s := graph.Imports(p.references)
+			references = &s
+		}
+		f := store.File{Path: p.path, Lang: p.lang, Hash: p.sha, Content: p.content, Imports: imports, References: references,
+			Size: p.size, Lines: p.lines, Generated: p.generated, Symbols: symbols(nil, p.symbols, "")}
 		for _, c := range p.chunks {
 			f.Chunks = append(f.Chunks, store.Chunk{Symbol: c.Symbol, StartLine: c.StartLine, EndLine: c.EndLine, Content: c.Content,
 				Hash: contentHash(p.path, c.Symbol, c.Content), Terms: chunker.Terms(p.path, c.Content)})

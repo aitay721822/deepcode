@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 func TestFacts(t *testing.T) {

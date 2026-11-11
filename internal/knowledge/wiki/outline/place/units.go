@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"deepcode/internal/repo/index/analyzer"
-	graphstore "deepcode/internal/repo/index/graph/store"
+	graphstore "deepcode/internal/repo/index/graphstore"
 )
 
 // The kinds of code units: a folder holding a project manifest, else a

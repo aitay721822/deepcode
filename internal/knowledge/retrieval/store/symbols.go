@@ -105,9 +105,31 @@ func (s *Store) Users(ctx context.Context, snapshotID int64, names []string, lim
 			args = append(args, n)
 		}
 	}
-	return scanIDs(s.DB.QueryContext(ctx, `SELECT min(c.id) FROM symbols s
+	ids, err := scanIDs(s.DB.QueryContext(ctx, `SELECT min(c.id) FROM symbols s
 		JOIN file_edges e ON e.snapshot_id = s.snapshot_id AND e.dst = s.path AND e.src <> s.path
 		JOIN chunks c ON c.snapshot_id = s.snapshot_id AND c.path = e.src AND instr(c.content, s.name) > 0
 		WHERE s.snapshot_id = ? AND s.name COLLATE NOCASE IN (`+in+`) AND s.name IN (`+in+`) AND `+secondary+` = 1.0
 		GROUP BY c.path ORDER BY count(DISTINCT s.name) DESC, min(c.id) LIMIT ?`, append(args, limit)...))
+	if err != nil || len(ids) >= limit {
+		return ids, err
+	}
+	// A caller that names the declaration without importing its file.
+	calls, err := scanIDs(s.DB.QueryContext(ctx, `SELECT min(c.id) FROM symbols s
+		JOIN call_edges e ON e.snapshot_id = s.snapshot_id AND e.dst = s.path AND e.src <> s.path AND e.name = s.name
+		JOIN chunks c ON c.snapshot_id = s.snapshot_id AND c.path = e.src AND instr(c.content, s.name) > 0
+		WHERE s.snapshot_id = ? AND s.name COLLATE NOCASE IN (`+in+`) AND s.name IN (`+in+`) AND `+secondary+` = 1.0
+		GROUP BY c.path ORDER BY count(DISTINCT s.name) DESC, min(c.id) LIMIT ?`, append(args, limit)...))
+	if err != nil {
+		return ids, err
+	}
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		seen[id] = true
+	}
+	for _, id := range calls {
+		if !seen[id] && len(ids) < limit {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }

@@ -22,7 +22,7 @@ import (
 	aicontract "deepcode/internal/platform/ai/contract"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/index/analyzer"
-	graphstore "deepcode/internal/repo/index/graph/store"
+	graphstore "deepcode/internal/repo/index/graphstore"
 )
 
 // Planning is how the model planned one wiki: the time it took, its

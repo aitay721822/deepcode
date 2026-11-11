@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"deepcode/internal/repo/index/analyzer"
-	graphstore "deepcode/internal/repo/index/graph/store"
+	graphstore "deepcode/internal/repo/index/graphstore"
 )
 
 // keys are units' keys.

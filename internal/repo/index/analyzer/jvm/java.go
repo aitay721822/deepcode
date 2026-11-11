@@ -7,7 +7,7 @@ import (
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	tsjava "github.com/tree-sitter/tree-sitter-java/bindings/go"
 
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 // Java is the grammar for .java files. Javadoc is a block_comment; annotations
@@ -16,6 +16,7 @@ var Java = &syntax.Grammar{
 	Language: sitter.NewLanguage(tsjava.Language()),
 	Decl:     decl,
 	Facts:    facts,
+	Refs:     syntax.Calls,
 	Leading:  syntax.Kinds("line_comment", "block_comment"),
 }
 

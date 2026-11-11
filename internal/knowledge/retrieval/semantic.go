@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"deepcode/internal/repo/index/analyzer"
-	"deepcode/internal/repo/index/vectorstore"
+	"deepcode/internal/repo/index/indexer/vectorstore"
 )
 
 // secondaryCosine weighs the cosine of a test, example, doc, hidden-folder or

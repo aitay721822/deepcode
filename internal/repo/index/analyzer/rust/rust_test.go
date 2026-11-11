@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 const sample = `//! Crate docs.

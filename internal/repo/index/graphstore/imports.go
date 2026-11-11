@@ -1,10 +1,11 @@
-// Package store keeps the import graph in SQLite: the modules each file
-// content imports, read once, and each snapshot's edges between its files.
+// Package store keeps the import and call graph in SQLite: the modules and
+// names each file content names, read once, and each snapshot's edges.
 package store
 
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"deepcode/internal/platform/storage"
 )
@@ -25,9 +26,14 @@ func grammars(langs []string) (string, []any) {
 // Stale returns the ready snapshots that have files in langs but no edges.
 func (s *Store) Stale(ctx context.Context, langs []string) ([]int64, error) {
 	cond, args := grammars(langs)
+	cond2 := strings.Replace(cond, "f.language", "f2.language", 1)
 	rows, err := s.DB.QueryContext(ctx, `SELECT s.id FROM snapshots s WHERE s.status = 'ready'
 		AND EXISTS (SELECT 1 FROM source_files f WHERE f.snapshot_id = s.id AND `+cond+`)
-		AND NOT EXISTS (SELECT 1 FROM file_edges e WHERE e.snapshot_id = s.id) ORDER BY s.id`, args...)
+		AND (NOT EXISTS (SELECT 1 FROM file_edges e WHERE e.snapshot_id = s.id)
+			OR (EXISTS (SELECT 1 FROM source_files f2 JOIN file_contents c2 ON c2.hash = f2.content_hash
+				WHERE f2.snapshot_id = s.id AND `+cond2+` AND c2.imports IS NOT NULL AND c2.calls IS NULL)
+				AND NOT EXISTS (SELECT 1 FROM call_edges e2 WHERE e2.snapshot_id = s.id))) ORDER BY s.id`,
+		append(append([]any{}, args...), args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -85,11 +91,13 @@ func (s *Store) SetImports(ctx context.Context, batch []Imports) error {
 
 // configs is the SQL condition that a file is one whose content resolving
 // imports and entries reads, at any depth and in any case: go.mod, .NET
-// project files, Cargo.toml, package.json and Maven's and Gradle's builds.
+// project files, Cargo.toml, package.json, Maven's and Gradle's builds, and
+// Python's package settings.
 const configs = `(f.language = 'go.mod' OR lower(f.path) GLOB '*.csproj' OR lower(f.path) GLOB '*.vbproj' OR lower(f.path) GLOB '*.fsproj'
 	OR lower(f.path) GLOB '*directory.build.props' OR lower(f.path) = 'cargo.toml' OR lower(f.path) GLOB '*/cargo.toml'
-	OR lower(f.path) IN ('package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts')
-	OR lower(f.path) GLOB '*/package.json' OR lower(f.path) GLOB '*/pom.xml' OR lower(f.path) GLOB '*/build.gradle' OR lower(f.path) GLOB '*/build.gradle.kts')`
+	OR lower(f.path) IN ('package.json', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'pyproject.toml', 'setup.cfg', 'setup.py')
+	OR lower(f.path) GLOB '*/package.json' OR lower(f.path) GLOB '*/pom.xml' OR lower(f.path) GLOB '*/build.gradle' OR lower(f.path) GLOB '*/build.gradle.kts'
+	OR lower(f.path) GLOB '*/pyproject.toml' OR lower(f.path) GLOB '*/setup.cfg' OR lower(f.path) GLOB '*/setup.py')`
 
 // Mains returns the paths of the snapshot's hand-written files declaring a
 // function or method named main or Main: where a program starts.
@@ -115,22 +123,22 @@ func (s *Store) Paths(ctx context.Context, snap int64) ([]string, error) {
 	return scanPaths(rows)
 }
 
-// Files passes file the path, language and stored imports of each of the
-// snapshot's hand-written files in langs.
-func (s *Store) Files(ctx context.Context, snap int64, langs []string, file func(path, lang, imports string)) error {
+// Files passes file the path, language, stored imports and calls of each of
+// the snapshot's hand-written files in langs.
+func (s *Store) Files(ctx context.Context, snap int64, langs []string, file func(path, lang, imports, references string)) error {
 	cond, args := grammars(langs)
-	rows, err := s.DB.QueryContext(ctx, `SELECT f.path, f.language, coalesce(c.imports, '') FROM source_files f
+	rows, err := s.DB.QueryContext(ctx, `SELECT f.path, f.language, coalesce(c.imports, ''), coalesce(c.calls, '') FROM source_files f
 		JOIN file_contents c ON c.hash = f.content_hash WHERE f.snapshot_id = ? AND NOT f.generated AND `+cond, append([]any{snap}, args...)...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var path, lang, imports string
-		if err := rows.Scan(&path, &lang, &imports); err != nil {
+		var path, lang, imports, references string
+		if err := rows.Scan(&path, &lang, &imports, &references); err != nil {
 			return err
 		}
-		file(path, lang, imports)
+		file(path, lang, imports, references)
 	}
 	return rows.Err()
 }

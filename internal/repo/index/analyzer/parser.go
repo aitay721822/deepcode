@@ -5,6 +5,7 @@ package analyzer
 
 import (
 	"sort"
+	"strconv"
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	tsgo "github.com/tree-sitter/tree-sitter-go/bindings/go"
@@ -14,8 +15,9 @@ import (
 	"deepcode/internal/repo/index/analyzer/dotnet"
 	"deepcode/internal/repo/index/analyzer/jvm"
 	"deepcode/internal/repo/index/analyzer/markdown"
+	"deepcode/internal/repo/index/analyzer/python"
 	"deepcode/internal/repo/index/analyzer/rust"
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 type Symbol = syntax.Symbol
@@ -23,12 +25,13 @@ type Symbol = syntax.Symbol
 var comments = syntax.Kinds("comment")
 
 var languages = map[string]*syntax.Grammar{
-	"go":         {Language: sitter.NewLanguage(tsgo.Language()), Decl: decl, Facts: goImports, Leading: comments},
-	"javascript": {Language: sitter.NewLanguage(tsjs.Language()), Decl: decl, Facts: jsImports, Leading: comments},
-	"typescript": {Language: sitter.NewLanguage(tsts.LanguageTypescript()), Decl: decl, Facts: jsImports, Leading: comments},
-	"tsx":        {Language: sitter.NewLanguage(tsts.LanguageTSX()), Decl: decl, Facts: jsImports, Leading: comments},
+	"go":         {Language: sitter.NewLanguage(tsgo.Language()), Decl: decl, Facts: goImports, Refs: syntax.Calls, Leading: comments},
+	"javascript": {Language: sitter.NewLanguage(tsjs.Language()), Decl: decl, Facts: jsImports, Refs: syntax.Calls, Leading: comments},
+	"typescript": {Language: sitter.NewLanguage(tsts.LanguageTypescript()), Decl: decl, Facts: jsImports, Refs: syntax.Calls, Leading: comments},
+	"tsx":        {Language: sitter.NewLanguage(tsts.LanguageTSX()), Decl: decl, Facts: jsImports, Refs: syntax.Calls, Leading: comments},
 	"csharp":     dotnet.CSharp,
 	"java":       jvm.Java,
+	"python":     python.Python,
 	"rust":       rust.Rust,
 }
 
@@ -52,8 +55,9 @@ func (p *Parser) Close() {
 // JavaScript and TypeScript the modules as its source spells them, for other
 // languages the facts their resolver in the graph package reads.
 type File struct {
-	Symbols []Symbol
-	Imports []string
+	Symbols    []Symbol
+	Imports    []string
+	References []string // "name@line" of each call, for the name-based call graph
 }
 
 // Version is raised whenever what Detect, Generated or Parse make of a file
@@ -62,8 +66,9 @@ type File struct {
 // test plans; 3, C#'s top-level statements as Main and Markdown's sections;
 // 4, JavaScript's functions assigned to members (res.send = function send),
 // and a JSDoc a blank line above its declaration; 5, Markdown's generated
-// mark and its mdBook includes as imports.
-const Version = 5
+// mark and its mdBook includes as imports; 6, Python's functions, classes and
+// imports; 7, the names each file calls.
+const Version = 7
 
 // HasGrammar reports whether Parse reads lang's declarations and imports with
 // a grammar; Markdown's sections and includes it reads without (markdown).
@@ -115,5 +120,10 @@ func (p *Parser) Parse(lang string, src []byte) File {
 	}
 	defer tree.Close()
 	syms, imports := syntax.Extract(g, tree.RootNode(), src)
-	return File{Symbols: syms, Imports: imports}
+	refs := syntax.Refs(g, tree.RootNode(), src)
+	refText := make([]string, len(refs))
+	for i, r := range refs {
+		refText[i] = r.Name + "@" + strconv.Itoa(r.Line)
+	}
+	return File{Symbols: syms, Imports: imports, References: refText}
 }

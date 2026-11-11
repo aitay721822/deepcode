@@ -7,7 +7,7 @@ import (
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	tscs "github.com/tree-sitter/tree-sitter-c-sharp/bindings/go"
 
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 // CSharp is the C# grammar. A file-scoped namespace (namespace A;) is a
@@ -16,6 +16,7 @@ var CSharp = &syntax.Grammar{
 	Language: sitter.NewLanguage(tscs.Language()),
 	Decl:     decl,
 	Facts:    facts,
+	Refs:     syntax.Calls,
 	Leading:  syntax.Kinds("comment"),
 	Scope:    "file_scoped_namespace_declaration",
 }

@@ -20,10 +20,10 @@ import (
 	"deepcode/internal/repo/gitserver"
 	serverstore "deepcode/internal/repo/gitserver/store"
 	"deepcode/internal/repo/index/graph"
-	graphstore "deepcode/internal/repo/index/graph/store"
+	graphstore "deepcode/internal/repo/index/graphstore"
 	"deepcode/internal/repo/index/indexer"
 	indexstore "deepcode/internal/repo/index/indexer/store"
-	"deepcode/internal/repo/index/vectorstore"
+	"deepcode/internal/repo/index/indexer/vectorstore"
 )
 
 func TestRetrieval(t *testing.T) {

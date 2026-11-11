@@ -2,7 +2,7 @@
 
 從 GitHub、GitLab（含自架的 GitHub Enterprise 與 GitLab）匯入 Repository，建立 Symbol 與程式碼索引，生成附來源的 Wiki，並以 Hybrid Retrieval 回答程式碼問題（Ask、Deep、Codemap）。以 RBAC（使用者、角色、權限）限制每個人能看到哪些 Repository；後台管理帳號、角色與 Git 伺服器，並即時顯示背景工作的進度。另提供 MCP，讓代理程式接入。
 
-單一 Go 執行檔：REST / SSE API、內嵌的 React 介面與背景工作都在同一個程序內，SQLite 是唯一的資料庫。支援 C#/.NET、Go、Java、JavaScript、TypeScript、Rust。
+單一 Go 執行檔：REST / SSE API、內嵌的 React 介面與背景工作都在同一個程序內，SQLite 是唯一的資料庫。支援 C#/.NET、Go、Java、JavaScript、TypeScript、Python、Rust。
 
 ## Quick start
 

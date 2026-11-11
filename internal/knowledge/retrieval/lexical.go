@@ -8,7 +8,7 @@ import (
 	"unicode"
 
 	"deepcode/internal/knowledge/retrieval/names"
-	"deepcode/internal/repo/index/chunker"
+	"deepcode/internal/repo/index/indexer/chunker"
 )
 
 var (

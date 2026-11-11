@@ -6,7 +6,7 @@ import (
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
 
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 // facts lists what a Rust file names, in the order the graph's resolver reads

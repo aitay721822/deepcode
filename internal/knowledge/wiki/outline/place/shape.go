@@ -5,7 +5,7 @@ import (
 	"slices"
 
 	"deepcode/internal/repo/index/analyzer"
-	graphstore "deepcode/internal/repo/index/graph/store"
+	graphstore "deepcode/internal/repo/index/graphstore"
 )
 
 // FlatPages is the most pages a wiki planned flat holds: one request, every

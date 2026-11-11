@@ -17,7 +17,7 @@ import (
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/index/graph"
-	graphstore "deepcode/internal/repo/index/graph/store"
+	graphstore "deepcode/internal/repo/index/graphstore"
 )
 
 // TestSearchKeepsNamed: the search keeps a named file's best chunk, though

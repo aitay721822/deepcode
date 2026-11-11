@@ -30,6 +30,13 @@ func (s Symbol) QualifiedName(parent string) string {
 	return s.Name
 }
 
+// Reference is a name a file calls, at the line it calls it: where a
+// name-based call graph tries an edge, when the name is declared once.
+type Reference struct {
+	Name string
+	Line int
+}
+
 // Grammar is how one language is read.
 type Grammar struct {
 	Language *sitter.Language
@@ -39,6 +46,8 @@ type Grammar struct {
 	// Facts lists what the file imports or refers to, in the form its
 	// language's resolver in the graph package reads; nil reads none.
 	Facts func(x *Extractor, root *sitter.Node) []string
+	// Refs lists the names its calls name, at their lines; nil reads none.
+	Refs func(x *Extractor, root *sitter.Node) []Reference
 	// Leading are the node kinds that belong to the declaration after them:
 	// comments, and attributes where they are siblings (Rust's #[derive]).
 	Leading map[string]bool

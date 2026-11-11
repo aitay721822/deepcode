@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 // flat renders symbols as "Qualified.Name kind start-end", children indented.

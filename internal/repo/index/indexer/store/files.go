@@ -13,6 +13,7 @@ type File struct {
 	Hash       string // the content's: the blob's SHA
 	Content    string
 	Imports    *string // nil (NULL) when no grammar reads the language, or the file is generated
+	References *string // nil (NULL) likewise; the names the file calls
 	Size       int64
 	Lines      int
 	Generated  bool
@@ -60,13 +61,17 @@ func (s *Store) Write(ctx context.Context, snap, prev int64, files []File, copie
 		}
 	}
 	for _, f := range files {
-		var imports any // NULL
+		var imports, references any // NULL
 		if f.Imports != nil {
 			imports = *f.Imports
 		}
-		// This version's imports replace what an older one stored (NULL, or read otherwise).
-		if _, err := tx.ExecContext(ctx, `INSERT INTO file_contents(hash, content, imports) VALUES (?, ?, ?)
-			ON CONFLICT(hash) DO UPDATE SET imports = coalesce(excluded.imports, file_contents.imports)`, f.Hash, f.Content, imports); err != nil {
+		if f.References != nil {
+			references = *f.References
+		}
+		// This version's imports and calls replace what an older one stored (NULL, or read otherwise).
+		if _, err := tx.ExecContext(ctx, `INSERT INTO file_contents(hash, content, imports, calls) VALUES (?, ?, ?, ?)
+			ON CONFLICT(hash) DO UPDATE SET imports = coalesce(excluded.imports, file_contents.imports),
+			calls = coalesce(excluded.calls, file_contents.calls)`, f.Hash, f.Content, imports, references); err != nil {
 			return err
 		}
 		last, err := replaced(ctx, tx, snap, f.Path)

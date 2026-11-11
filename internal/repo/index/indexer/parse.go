@@ -13,7 +13,7 @@ import (
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/index/analyzer"
-	"deepcode/internal/repo/index/chunker"
+	"deepcode/internal/repo/index/indexer/chunker"
 )
 
 const (
@@ -29,12 +29,13 @@ type file struct {
 
 type parsedFile struct {
 	file
-	content   string
-	lines     int
-	generated bool
-	symbols   []analyzer.Symbol
-	imports   []string
-	chunks    []chunker.Chunk
+	content    string
+	lines      int
+	generated  bool
+	symbols    []analyzer.Symbol
+	imports    []string
+	references []string
+	chunks     []chunker.Chunk
 }
 
 // parse stores the commit's indexable files batch by batch: files already in
@@ -176,5 +177,5 @@ func parseFile(p *analyzer.Parser, f file, raw []byte) (parsedFile, bool) {
 		parsed = p.Parse(f.lang, []byte(content))
 	}
 	return parsedFile{file: f, content: content, lines: len(lines), generated: generated, symbols: parsed.Symbols,
-		imports: parsed.Imports, chunks: chunker.Chunks(lines, parsed.Symbols)}, true
+		imports: parsed.Imports, references: parsed.References, chunks: chunker.Chunks(lines, parsed.Symbols)}, true
 }

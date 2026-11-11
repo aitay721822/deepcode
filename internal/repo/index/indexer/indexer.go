@@ -16,7 +16,7 @@ import (
 	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/index/graph"
 	"deepcode/internal/repo/index/indexer/store"
-	"deepcode/internal/repo/index/vectorstore"
+	"deepcode/internal/repo/index/indexer/vectorstore"
 )
 
 type Limits struct {

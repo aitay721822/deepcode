@@ -6,10 +6,11 @@ package graph
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"deepcode/internal/repo/index/analyzer"
-	"deepcode/internal/repo/index/graph/store"
+	"deepcode/internal/repo/index/graphstore"
 )
 
 // Graph is the import graph of the snapshots, kept in Store.
@@ -32,6 +33,9 @@ func (g *Graph) Link(ctx context.Context, snap int64) (int, error) {
 	if err := g.readImports(ctx, snap); err != nil {
 		return 0, err
 	}
+	if err := g.readReferences(ctx, snap); err != nil {
+		return 0, err
+	}
 	files, configs, err := g.load(ctx, snap)
 	if err != nil {
 		return 0, err
@@ -50,7 +54,11 @@ func (g *Graph) Link(ctx context.Context, snap int64) (int, error) {
 	for _, p := range paths {
 		indexed[p] = true
 	}
-	return g.save(ctx, snap, resolve(files, configs, mains, indexed))
+	n, err := g.save(ctx, snap, resolve(files, configs, mains, indexed))
+	if err != nil {
+		return 0, err
+	}
+	return n, g.linkCalls(ctx, snap, files)
 }
 
 // LinkStale links the ready snapshots that have files with a grammar but no
@@ -92,15 +100,85 @@ func (g *Graph) readImports(ctx context.Context, snap int64) error {
 	}
 }
 
+// readReferences parses the files of the snapshot whose calls were never
+// read, readBatch at a time, as readImports does.
+func (g *Graph) readReferences(ctx context.Context, snap int64) error {
+	p := analyzer.NewParser()
+	defer p.Close()
+	langs := analyzer.Grammars()
+	for last := ""; ; {
+		var batch []store.References
+		err := g.Store.UnreadReferences(ctx, snap, langs, last, readBatch, func(hash, lang, content string) {
+			batch = append(batch, store.References{Hash: hash, References: Imports(p.Parse(lang, []byte(content)).References)})
+		})
+		if err != nil || len(batch) == 0 {
+			return err
+		}
+		if err := g.Store.SetReferences(ctx, batch); err != nil {
+			return err
+		}
+		last = batch[len(batch)-1].Hash
+	}
+}
+
+// maxCalls bounds the name-based call edges one file makes: a call to a name
+// declared once in the snapshot, past this the file's calls are noise.
+const maxCalls = 50
+
+// linkCalls stores the snapshot's name-based call edges: a unique callable
+// name names one file, and a file's calls to it are edges, at most maxCalls.
+func (g *Graph) linkCalls(ctx context.Context, snap int64, files []file) error {
+	decls, err := g.Store.Callables(ctx, snap)
+	if err != nil {
+		return err
+	}
+	var calls []store.Call
+	for _, f := range files {
+		n := 0
+		seen := map[string]bool{}
+		for _, ref := range f.refs {
+			name, lineText, ok := strings.Cut(ref, "@")
+			if !ok || name == "" {
+				continue
+			}
+			ds := decls[name]
+			if len(ds) == 0 {
+				continue
+			}
+			dst := ds[0].Dst
+			same := true
+			for _, d := range ds {
+				if d.Dst != dst {
+					same = false
+					break
+				}
+			}
+			if !same || dst == f.path || seen[name+"|"+dst] { // one file declares it: overloads and a class with its constructor
+				continue
+			}
+			seen[name+"|"+dst] = true
+			line, _ := strconv.Atoi(lineText)
+			calls = append(calls, store.Call{Src: f.path, Dst: dst, Name: name, SrcLine: line, DstLine: ds[0].DstLine})
+			if n++; n == maxCalls {
+				break
+			}
+		}
+	}
+	return g.Store.ReplaceCalls(ctx, snap, calls)
+}
+
 // load reads the snapshot's files whose imports Parse reads, generated ones
 // aside, with their imports, and the content of its configs by path: go.mod,
 // .NET project files, Cargo.toml, package.json and Maven's and Gradle's builds.
 func (g *Graph) load(ctx context.Context, snap int64) ([]file, map[string]string, error) {
 	var files []file
-	err := g.Store.Files(ctx, snap, analyzer.Imported(), func(path, lang, imports string) {
+	err := g.Store.Files(ctx, snap, analyzer.Imported(), func(path, lang, imports, references string) {
 		f := file{path: path, lang: lang}
 		if imports != "" {
 			f.imports = strings.Split(imports, "\n")
+		}
+		if references != "" {
+			f.refs = strings.Split(references, "\n")
 		}
 		files = append(files, f)
 	})
@@ -142,5 +220,8 @@ func (g *Graph) save(ctx context.Context, snap int64, edges []edge) (int, error)
 // Unlink deletes the snapshot's edges, storeBatch at a time so no statement
 // holds the write lock for long.
 func (g *Graph) Unlink(ctx context.Context, snap int64) error {
+	if err := g.Store.UnlinkCalls(ctx, snap, storeBatch); err != nil {
+		return err
+	}
 	return g.Store.Unlink(ctx, snap, storeBatch)
 }

@@ -13,7 +13,7 @@ import (
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/repo/index/graph"
-	"deepcode/internal/repo/index/vectorstore"
+	"deepcode/internal/repo/index/indexer/vectorstore"
 )
 
 type Retriever struct {

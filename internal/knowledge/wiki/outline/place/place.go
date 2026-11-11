@@ -9,7 +9,7 @@ import (
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/knowledge/wiki/outline"
 	"deepcode/internal/repo/index/analyzer"
-	graphstore "deepcode/internal/repo/index/graph/store"
+	graphstore "deepcode/internal/repo/index/graphstore"
 )
 
 // TestsMark ends a tests unit's key, after its folder's: a folder's tests and

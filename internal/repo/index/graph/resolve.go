@@ -9,8 +9,9 @@ import (
 	"deepcode/internal/repo/index/graph/dotnet"
 	"deepcode/internal/repo/index/graph/entry"
 	"deepcode/internal/repo/index/graph/jvm"
+	"deepcode/internal/repo/index/graph/python"
 	"deepcode/internal/repo/index/graph/rust"
-	"deepcode/internal/repo/index/graph/store"
+	"deepcode/internal/repo/index/graphstore"
 )
 
 // file is a source file in a language with a grammar, with the modules it
@@ -18,6 +19,7 @@ import (
 type file struct {
 	path, lang string
 	imports    []string
+	refs       []string // "name@line" of each call
 }
 
 // edge is an import of one file by another: Src imports Dst.
@@ -27,10 +29,10 @@ type edge = store.Edge
 // resolves, from its files' facts (the analyzer's folder of the same name
 // reads them) and configs; a family's files are resolved together, as one
 // family's languages may use each other's declarations.
-var family = map[string]string{"csharp": "dotnet", "java": "jvm", "rust": "rust"}
+var family = map[string]string{"csharp": "dotnet", "java": "jvm", "python": "python", "rust": "rust"}
 
 var resolvers = map[string]func(files map[string][]string, configs map[string]string) [][2]string{
-	"dotnet": dotnet.Resolve, "jvm": jvm.Resolve, "rust": rust.Resolve,
+	"dotnet": dotnet.Resolve, "jvm": jvm.Resolve, "python": python.Resolve, "rust": rust.Resolve,
 }
 
 // jsExts are the extensions a JavaScript or TypeScript specifier may leave

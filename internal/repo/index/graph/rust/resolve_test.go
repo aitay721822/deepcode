@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	rustgrammar "deepcode/internal/repo/index/analyzer/rust"
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 // edges resolves sources, read with the analyzer's Rust grammar, as "src -> dst" lines, sorted and once each.

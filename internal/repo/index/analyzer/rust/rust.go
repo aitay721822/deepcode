@@ -6,7 +6,7 @@ import (
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	tsrust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
 
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 // Rust is how .rs files are read.
@@ -14,6 +14,7 @@ var Rust = &syntax.Grammar{
 	Language: sitter.NewLanguage(tsrust.Language()),
 	Decl:     decl,
 	Facts:    facts,
+	Refs:     syntax.Calls,
 	// Doc comments and #[derive] are siblings before the item they describe.
 	Leading: syntax.Kinds("line_comment", "block_comment", "attribute_item"),
 }

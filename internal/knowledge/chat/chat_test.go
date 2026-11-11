@@ -28,7 +28,7 @@ import (
 	"deepcode/internal/repo/catalog"
 	catalogstore "deepcode/internal/repo/catalog/store"
 	"deepcode/internal/repo/index/graph"
-	graphstore "deepcode/internal/repo/index/graph/store"
+	graphstore "deepcode/internal/repo/index/graphstore"
 )
 
 // TestAskLimit: a user has at most maxAsking answers written at a time, which

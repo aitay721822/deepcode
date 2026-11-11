@@ -8,7 +8,7 @@ import (
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
 
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 // facts lists what the graph's dotnet resolver reads of a C# file, in this

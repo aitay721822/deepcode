@@ -17,9 +17,9 @@ import (
 	"deepcode/internal/repo/gitserver"
 	serverstore "deepcode/internal/repo/gitserver/store"
 	"deepcode/internal/repo/index/analyzer"
-	"deepcode/internal/repo/index/chunker"
 	"deepcode/internal/repo/index/graph"
-	graphstore "deepcode/internal/repo/index/graph/store"
+	graphstore "deepcode/internal/repo/index/graphstore"
+	"deepcode/internal/repo/index/indexer/chunker"
 	"deepcode/internal/repo/index/indexer/store"
 )
 

@@ -3,7 +3,7 @@ package change
 import (
 	"slices"
 
-	"deepcode/internal/repo/index/chunker"
+	"deepcode/internal/repo/index/indexer/chunker"
 )
 
 // Novel reports whether a chunk named name declares something none of the

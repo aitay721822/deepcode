@@ -5,7 +5,7 @@ import (
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
 
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 // decl turns a Go, JavaScript or TypeScript declaration into symbols.

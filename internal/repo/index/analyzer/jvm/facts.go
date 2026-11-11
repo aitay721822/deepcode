@@ -8,7 +8,7 @@ import (
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
 
-	"deepcode/internal/repo/index/analyzer/syntax"
+	"deepcode/internal/repo/index/syntax"
 )
 
 // facts lists what a Java file declares and uses, as the graph package's Java

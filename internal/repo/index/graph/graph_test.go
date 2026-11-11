@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"deepcode/internal/platform/storage"
-	"deepcode/internal/repo/index/graph/store"
+	"deepcode/internal/repo/index/graphstore"
 )
 
 // TestResolve: Go imports name every non-test file of a package through the
@@ -281,6 +281,27 @@ func TestImpactTypeBody(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %v (%v), want %v", c.name, got, err, want)
 		}
+	}
+}
+
+// TestImpactCalls (item 8): a file that calls a changed declaration by name,
+// without importing its file, reaches the impact too.
+func TestImpactCalls(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	g := &Graph{Store: &store.Store{DB: db}}
+	run(t, db, `INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r')`)
+	run(t, db, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'a', 'ready'), (2, 1, 'b', 'ready')`)
+	for _, snap := range []int64{1, 2} {
+		addFile(t, db, snap, "pkg/a.go", "go", "package pkg\n\nfunc A() {}\n")
+		addFile(t, db, snap, "main.go", "go", "package main\n\nfunc main() { pkg.A() }\n")
+	}
+	run(t, db, `INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line, signature)
+		VALUES (1, 'pkg/a.go', 'A', 'A', 'function', 3, 3, 'func A() {'), (2, 'pkg/a.go', 'A', 'A', 'function', 3, 3, 'func A(n int) {')`)
+	run(t, db, `INSERT INTO call_edges(snapshot_id, src, dst, name, src_line, dst_line) VALUES (1, 'main.go', 'pkg/a.go', 'A', 3, 3), (2, 'main.go', 'pkg/a.go', 'A', 3, 3)`)
+	got, err := g.Impact(ctx, 1, 2, map[string]bool{"pkg/a.go": true})
+	if err != nil || !reflect.DeepEqual(got, map[string]bool{"main.go": true}) {
+		t.Errorf("a name-based caller reached %v (%v), want main.go", got, err)
 	}
 }
 
