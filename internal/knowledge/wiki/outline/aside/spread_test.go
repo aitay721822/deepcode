@@ -1,136 +1,95 @@
 package aside
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
 	"deepcode/internal/knowledge/wiki/outline"
-	"deepcode/internal/knowledge/wiki/outline/contract"
 	"deepcode/internal/knowledge/wiki/outline/place"
-	"deepcode/internal/platform/ai"
-	aicontract "deepcode/internal/platform/ai/contract"
 	"deepcode/internal/repo/index/analyzer"
 )
 
-// TestTurn: a level-2 reply's rules are mirrored (each member given, an
-// index among its group's pages) and fixed: a member left out or past them
-// goes to the page with the fewest. The message holds the aside's lines for
-// the members, the section's pages, and the group's by index.
-func TestTurn(t *testing.T) {
-	members := place.AsideUnits(analyzer.Docs, []string{"m1", "m2"}, nil, nil)
-	format, err := Format(members, 2)
-	if err != nil {
-		t.Fatal(err)
+// keys are n guide keys under folder key, key + "000.md" and on.
+func keys(key string, n int) []string {
+	var out []string
+	for i := range n {
+		out = append(out, fmt.Sprintf("%s%03d.md", key, i))
 	}
-	for text, rule := range map[string]string{`{"assign":{"m1":0,"m2":1}}`: "", `{"assign":{"m1":0,"m2":2}}`: "spread.index", `{"assign":{"m1":0,"m2":-1}}`: "spread.index",
-		`{"assign":{"m1":0}}`: "spread.unassigned", `{"assign":{"m1":0,"m2":null}}`: "spread.unassigned"} {
-		var v Reply
-		_, schemaErr := ai.Decode(format, text)
-		json.Unmarshal([]byte(text), &v)
-		var named []string
-		for _, v := range Turn(nil, members, 2).Check(v) {
-			named = append(named, string(v.Rule))
-		}
-		if (schemaErr != nil) != (rule != "") || strings.Join(named, "+") != rule {
-			t.Errorf("%s: schema error %v, check %v; want %s", text, schemaErr, named, rule)
-		}
-	}
-	four := place.AsideUnits(analyzer.Docs, []string{"m1", "m2", "m3", "m4"}, nil, nil)
-	zero, five, below := 0, 5, -1
-	r := Reply{Assign: map[string]*int{"m1": &zero, "m2": nil, "m3": &five, "m4": &below}}
-	Turn(nil, four, 2).Fix(&r)
-	if got := map[string]int{"m1": *r.Assign["m1"], "m2": *r.Assign["m2"], "m3": *r.Assign["m3"], "m4": *r.Assign["m4"]}; !reflect.DeepEqual(got, map[string]int{"m1": 0, "m2": 1, "m3": 0, "m4": 1}) {
-		t.Errorf("fixed %v", got)
-	}
-	pages := []outline.Page{{Title: "Install", Terms: []string{"setup"}}, {Title: "Usage", Terms: []string{"api", "run"}}, {Title: "FAQ"}}
-	m := Message("", []string{"S"}, "Docs", analyzer.Docs, pages, []int{2, 1}, place.AsideUnits(analyzer.Docs, []string{"docs/q.md"}, nil, nil), map[string][]string{"docs/q.md": {"Questions"}}, nil)
-	for _, want := range []string{"The section's pages: Install | Usage | FAQ\n", "\n0. FAQ: \n1. Usage: api, run\n", `- "docs/q.md" (1 files, 0 lines): Questions`} {
-		if !strings.Contains(m, want) || strings.Contains(m, "spans") {
-			t.Errorf("message lacks %q, or speaks of spans:\n%s", want, m)
-		}
-	}
+	return out
 }
 
-// TestSpread: only a group given two pages or more is asked, in even
-// batches of at most most, path order, each with its group's pages; a
-// member goes to the page its batch gives it; a page left with none goes;
-// those of the groups' pages holding more than contract.Crowd, which
-// batches checked alone may make, are counted as residual aside.crowded, a
-// page at the limit not, nor one level 1 alone crowds.
+// TestSpread: each group apart is asked in even batches of at most most,
+// path order, after the pages so far, each for one page and its members'
+// weight's share of the rest of the group's Cap (one batch the whole Cap),
+// no more than its units, so no more than Cap in all, a Cap of three over
+// three batches one each; the pages each gives are added in turn; a batch's
+// request failing fails the spread.
 func TestSpread(t *testing.T) {
-	names := func(key string, n int) []string {
-		var out []string
-		for i := range n {
-			out = append(out, fmt.Sprintf("%s%03d.md", key, i))
-		}
-		return out
+	files := append(append(keys("a/", 10), keys("c/", 250)...), keys("e/", 101)...)
+	lines := map[string]int{}
+	for _, f := range keys("c/", 84) { // c/'s first batch weighs three times the others
+		lines[f] = 3
 	}
-	files := append(append(append([]string{"x.md"}, names("a/", 10)...), names("b/", 2)...), names("c/", 250)...)
-	units := place.AsideUnits(analyzer.Docs, files, nil, nil)
-	groups := []place.Unit{{Key: "a/", Raw: names("a/", 10)}, {Key: "b/", Raw: names("b/", 2)}, {Key: "c/", Raw: names("c/", 250)}}
-	idx := func(is ...int) []*int {
-		var out []*int
-		for _, i := range is {
-			out = append(out, &i)
-		}
-		return out
+	for _, f := range keys("e/", 51) {
+		lines[f] = 100
 	}
-	r := Reply{}
-	reply := map[string][]*int{"a/": idx(0, 2), "b/": idx(1), "c/": idx(1, 2)}
-	pages := []outline.Page{{Title: "P0", Units: []string{"x.md"}}, {Title: "P1", Units: names("b/", 2)}, {Title: "P2"}, {Title: "P3"}}
+	units := place.AsideUnits(analyzer.Docs, files, lines, nil)
+	apart := []place.Unit{{Key: "a/", Raw: keys("a/", 10), Cap: 4}, {Key: "c/", Raw: keys("c/", 250), Cap: 30}, {Key: "e/", Raw: keys("e/", 101), Cap: 101}}
 	var asked []string
-	var counts aicontract.Counts
-	got, err := Spread(pages, contract.AsideReply{Spans: reply}, groups, units, 100, func(batch []place.Unit, span []int) (Reply, error) {
-		asked = append(asked, fmt.Sprintf("%d %v %s", len(batch), span, batch[0].Key))
-		r.Assign = map[string]*int{}
-		for _, u := range batch {
-			r.Assign[u.Key] = idx(map[bool]int{true: 1, false: 0}[span[0] == 0])[0]
+	got, err := Spread([]outline.Page{{Title: "P0"}}, apart, units, 100, func(pages []outline.Page, g place.Unit, batch []place.Unit, k int) ([]outline.Page, error) {
+		asked = append(asked, fmt.Sprintf("%s %d %s k%d after %d", g.Key, len(batch), batch[0].Key, k, len(pages)))
+		return []outline.Page{{Title: batch[0].Key}}, nil
+	})
+	want := []string{"a/ 10 a/000.md k4 after 1", "c/ 84 c/000.md k17 after 2", "c/ 83 c/084.md k6 after 3", "c/ 83 c/167.md k6 after 4",
+		"e/ 51 e/000.md k51 after 5", "e/ 50 e/051.md k1 after 6"}
+	if err != nil || !reflect.DeepEqual(asked, want) || len(got) != 7 || got[0].Title != "P0" || got[6].Title != "e/051.md" {
+		t.Errorf("asked %v, %d pages (%v)", asked, len(got), err)
+	}
+	// Even weights: 250 units of a Cap of 30 ask 10, 9 and 9; of a Cap of 3, one each.
+	for cap, want := range map[int]string{30: "10 9 9", 3: "1 1 1"} {
+		asked = nil
+		Spread(nil, []place.Unit{{Key: "c/", Raw: keys("c/", 250), Cap: cap}}, place.AsideUnits(analyzer.Docs, keys("c/", 250), nil, nil), 100,
+			func(_ []outline.Page, _ place.Unit, batch []place.Unit, k int) ([]outline.Page, error) {
+				asked = append(asked, fmt.Sprint(k))
+				return nil, nil
+			})
+		if strings.Join(asked, " ") != want {
+			t.Errorf("even weights, a Cap of %d, asked %v", cap, asked)
 		}
-		return r, nil
-	}, &counts)
-	var shape []string
-	for _, p := range got {
-		shape = append(shape, fmt.Sprintf("%s:%d", p.Title, len(p.Units)))
 	}
-	want := []string{"10 [0 2] a/000.md", "84 [1 2] c/000.md", "83 [1 2] c/084.md", "83 [1 2] c/167.md"}
-	if err != nil || !reflect.DeepEqual(asked, want) || !reflect.DeepEqual(shape, []string{"P0:1", "P1:252", "P2:10"}) ||
-		!reflect.DeepEqual(counts.Snapshot(), map[aicontract.Rule]aicontract.Count{"aside.crowded": {Residual: 1}}) {
-		t.Errorf("asked %v, pages %v, counts %v (%v)", asked, shape, counts.Snapshot(), err)
-	}
-	// At the limit is not past it, the limit counting the pages kept: 8 of 12 units on one of 3 (at most 8, not 6 of 4).
-	counts = aicontract.Counts{}
-	twelve := place.AsideUnits(analyzer.Docs, names("g/", 12), nil, nil)
-	got, err = Spread([]outline.Page{{Title: "Q0"}, {Title: "Q1"}, {Title: "Q2"}, {Title: "Q3"}}, contract.AsideReply{Spans: map[string][]*int{"g/": idx(0, 1, 2)}},
-		[]place.Unit{{Key: "g/", Raw: names("g/", 12)}}, twelve, 100, func(batch []place.Unit, span []int) (Reply, error) {
-			r.Assign = map[string]*int{}
-			for j, u := range batch {
-				k := min(2, max(0, j-6)/2) // 8, 2, 2
-				r.Assign[u.Key] = &k
-			}
-			return r, nil
-		}, &counts)
-	if err != nil || len(got) != 3 || len(got[0].Units) != 8 || len(counts.Snapshot()) != 0 {
-		t.Errorf("at the limit: %d pages, counts %v (%v)", len(got), counts.Snapshot(), err)
+	if _, err := Spread(nil, apart, units, 100, func([]outline.Page, place.Unit, []place.Unit, int) ([]outline.Page, error) {
+		return nil, errors.New("down")
+	}); err == nil {
+		t.Error("a failed batch passed")
 	}
 	// Batches are the fewest: a group of 100 is one, of 200 two.
 	if one, two := batches(make([]place.Unit, 100), 100), batches(make([]place.Unit, 200), 100); len(one) != 1 || len(two) != 2 || len(two[1]) != 100 {
 		t.Errorf("batches of 100 and 200: %d, %d", len(one), len(two))
 	}
-	// A batch's request failing fails the spread.
-	if _, err := Spread(got, contract.AsideReply{Spans: map[string][]*int{"g/": idx(0, 1)}}, []place.Unit{{Key: "g/", Raw: names("g/", 12)}}, twelve, 100,
-		func([]place.Unit, []int) (Reply, error) { return Reply{}, errors.New("down") }, &counts); err == nil {
-		t.Error("a failed batch passed")
+}
+
+// TestMessage: a level-2 message holds the aside's lines for the batch, the
+// section's pages so far (none, no line), and what the batch is of its group;
+// it states no number of pages, as no message does (contract's G7f).
+func TestMessage(t *testing.T) {
+	g := place.Unit{Key: "docs/", Raw: keys("docs/", 12), Cap: 7}
+	batch := place.AsideUnits(analyzer.Docs, []string{"docs/q.md"}, nil, nil)
+	m := Message("", []string{"S"}, "Docs", analyzer.Docs, []outline.Page{{Title: "Install"}, {Title: "Usage"}}, g, batch, map[string][]string{"docs/q.md": {"Questions"}}, nil)
+	for _, want := range []string{"The section's pages so far: Install | Usage\n", `- "docs/q.md" (1 files, 0 lines): Questions`,
+		"These are 1 of the 12 units of \"docs/\", planned apart in pages of their own: plan those pages, none taking another page's subject.\n"} {
+		if !strings.Contains(m, want) {
+			t.Errorf("message lacks %q:\n%s", want, m)
+		}
 	}
-	// No group of two pages: 11 units on one of 10 pages (at most 6) is level 1's to count.
-	counts, pages = aicontract.Counts{}, []outline.Page{{Title: "P", Units: names("y/", 11)}}
-	for i := range 9 {
-		pages = append(pages, outline.Page{Title: fmt.Sprint(i), Units: []string{fmt.Sprint(i)}})
+	count := regexp.MustCompile(`(?i)\b(\d+|(up to|at most|at least|exactly) \w+)\s+(pages?|sections?)\b`)
+	if c := count.FindString(m); c != "" || strings.Contains(m, "7") {
+		t.Errorf("a count of pages, %q:\n%s", c, m)
 	}
-	if got, err := Spread(pages, contract.AsideReply{}, nil, make([]place.Unit, 20), 100, nil, &counts); err != nil || len(got) != 10 || len(counts.Snapshot()) != 0 {
-		t.Errorf("level 1 only: %d pages, counts %v (%v)", len(got), counts.Snapshot(), err)
+	if m := Message("", nil, "Docs", analyzer.Docs, nil, g, batch, nil, nil); strings.Contains(m, "so far") {
+		t.Errorf("no pages yet:\n%s", m)
 	}
 }

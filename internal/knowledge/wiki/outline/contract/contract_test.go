@@ -57,7 +57,7 @@ func TestNoPageCounts(t *testing.T) {
 	parts := []Part{{Key: "1", Units: units}, {Key: "docs", Units: units, Kind: analyzer.Docs}}
 	count := regexp.MustCompile(`(?i)\b(\d+|(up to|at most|at least|exactly) \w+)\s+(pages?|sections?)\b`) // not "no two pages share a subject"
 	for i, s := range []string{OutlinePrompt, SectionPrompt, AsidePrompt, FlatPrompt, OutlineMessage("", "", parts, lines),
-		SectionMessage("", []string{"S"}, "S", units, units[:1], nil, lines), AsideMessage("", []string{"S"}, "Docs", analyzer.Docs, units, nil, lines),
+		SectionMessage("", []string{"S"}, "S", units, units[:1], nil, lines), AsideMessage("", []string{"S"}, "Docs", analyzer.Docs, units, []place.Unit{apart("g/", 3, 7)}, nil, lines),
 		FlatMessage("", "", units, nil, lines)} {
 		if m := count.FindString(s); m != "" || i >= 4 && strings.Contains(s, "7") {
 			t.Errorf("text %d states a count or a cap, %q:\n%s", i, m, s)
@@ -135,7 +135,7 @@ func TestMirror(t *testing.T) {
 			var v AsideReply
 			_, schemaErr = ai.Decode(aside, c.text)
 			json.Unmarshal([]byte(c.text), &v)
-			named = rules(checkAside(v, units, 2))
+			named = rules(checkAside(v, units, 2, func(n int) int { return Crowd(len(units), n) }))
 		case "flat":
 			var v FlatReply
 			_, schemaErr = ai.Decode(flat, c.text)
@@ -264,16 +264,17 @@ func TestAside(t *testing.T) {
 		{"null and left out", g(3), 2, AsideReply{Pages: []Head{{"A", none}, {"B", none}}, Assign: map[string]*int{"g1": nil, "g3": at(map[string]int{"x": 0})["x"]}},
 			[]string{"aside.unassigned", "aside.unassigned", "aside.empty"}, [][]string{{"A", "g2", "g3"}, {"B", "g1"}}},
 	} {
-		if got := rules(checkAside(c.r, c.units, c.most)); !reflect.DeepEqual(got, c.check) {
+		crowd := func(pages int) int { return Crowd(len(c.units), pages) }
+		if got := rules(checkAside(c.r, c.units, c.most, crowd)); !reflect.DeepEqual(got, c.check) {
 			t.Errorf("%s: check %v, want %v", c.name, got, c.check)
 		}
-		fixAside(&c.r, c.units, c.most, "docs")
+		fixAside(&c.r, c.units, c.most, crowd, "docs")
 		var got [][]string
 		for _, p := range AsidePages(c.r, c.units) {
 			got = append(got, append([]string{p.Title}, p.Units...))
 		}
-		if c.r.Pages[0].Terms = none; !reflect.DeepEqual(got, c.want) || len(checkAside(c.r, c.units, c.most)) != 0 {
-			t.Errorf("%s: pages %v, want %v; left %v", c.name, got, c.want, rules(checkAside(c.r, c.units, c.most)))
+		if c.r.Pages[0].Terms = none; !reflect.DeepEqual(got, c.want) || len(checkAside(c.r, c.units, c.most, crowd)) != 0 {
+			t.Errorf("%s: pages %v, want %v; left %v", c.name, got, c.want, rules(checkAside(c.r, c.units, c.most, crowd)))
 		}
 	}
 	if p := AsidePages(AsideReply{Pages: []Head{{"A", none}}, Assign: map[string]*int{"g1": nil}}, g(1)); len(p) != 1 || len(p[0].Units) != 0 { // unfixed: a null index is no page's
@@ -291,90 +292,90 @@ func group(key string, n int) place.Unit {
 	return u
 }
 
-// TestSpans (follow-up 2, level 1): a group's pages are mirrored (spans:
-// given, no more than its units or most, each a page's index) and fixed: an
-// index past the pages or named twice goes, a group given none goes to the
-// page with the fewest units, one crowding a page takes the next with the
-// fewest; a group on one page puts its units there, one on more none
-// (aside.Spread does). Its line names how many units it joins and an even sample
-// of them, never their headings, over a budget of names: one group of 1000
-// names all, 100 of 20 ten each, spread over them; a message with no group
-// says nothing of spans, a request of groups only asks for no "assign".
-func TestSpans(t *testing.T) {
+// apart is a group planned apart (aside.Apart) in at most k pages.
+func apart(key string, n, k int) place.Unit {
+	u := group(key, n)
+	u.Cap = k
+	return u
+}
+
+// TestGroups (5.1, level 1): a group (aside.Group) is one unit: assigned one
+// page under "assign", it puts the units it joins there and counts as one; a
+// crowd the caller fixes holds however many pages the reply gives. Its line
+// names how many units it joins and an even sample of them, never their
+// headings, over a budget of names: one group of 1000 names all, 100 of 20
+// ten each, spread over them; those planned apart are listed after the rest,
+// given no page; with no group a message says nothing of groups.
+func TestGroups(t *testing.T) {
 	units := []place.Unit{group("d/", 3), unit("g1", 1)}
 	format, err := AsideFormat(units, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const pq = `"pages":[{"title":"P","terms":[]},{"title":"Q","terms":[]}],"assign":{"g1":0}`
-	for text, rule := range map[string]string{`{` + pq + `,"spans":{"d/":[0,1]}}`: "", `{` + pq + `,"spans":{"d/":[]}}`: "aside.unassigned+aside.empty", `{` + pq + `}`: "aside.unassigned+aside.empty",
-		`{` + pq + `,"spans":{"d/":[0,1,0]}}`: "aside.span+aside.duplicate", `{` + pq + `,"spans":{"d/":[0,2]}}`: "aside.index+aside.empty", `{` + pq + `,"spans":{"d/":[null]}}`: "aside.index+aside.empty"} {
+	const pq = `{"pages":[{"title":"P","terms":[]},{"title":"Q","terms":[]}],"assign":{"g1":0`
+	for text, rule := range map[string]string{pq + `,"d/":1}}`: "", pq + `}}`: "aside.unassigned+aside.empty", pq + `,"d/":2}}`: "aside.index+aside.empty",
+		pq + `},"spans":{"d/":[1]}}`: "aside.unassigned+aside.empty"} {
 		var v AsideReply
 		_, schemaErr := ai.Decode(format, text)
 		json.Unmarshal([]byte(text), &v)
-		if named := rules(checkAside(v, units, 2)); (schemaErr != nil) != (rule != "") || strings.Join(named, "+") != rule {
+		if named := rules(checkAside(v, units, 2, func(n int) int { return Crowd(2, n) })); (schemaErr != nil) != (rule != "") || strings.Join(named, "+") != rule {
 			t.Errorf("%s: schema error %v, check %v; want %s", text, schemaErr, named, rule)
 		}
 	}
-	if only, err := AsideFormat([]place.Unit{group("d/", 3)}, 2); err != nil { // groups only: no "assign"
-		t.Errorf("groups only: %v", err)
-	} else if _, err := ai.Decode(only, `{"pages":[{"title":"P","terms":[]}],"spans":{"d/":[0]}}`); err != nil {
-		t.Errorf("groups only: %v", err)
+	none, one := []string{}, 1
+	r := AsideReply{Pages: []Head{{"P", none}, {"", none}}, Assign: map[string]*int{"g1": new(int), "d/": &one}}
+	if p := AsidePages(r, units); len(p) != 2 || !slices.Equal(p[1].Units, []string{"d/1.md", "d/2.md", "d/3.md"}) || !slices.Equal(p[0].Units, []string{"g1"}) {
+		t.Errorf("a group's page: %+v", p)
 	}
-	none := []string{}
-	one, five := 1, 5
-	for _, c := range []struct {
-		units []place.Unit
-		r     AsideReply
-		check []string
-		want  [][]string // each page's title, then its units
-	}{
-		{units, AsideReply{Pages: []Head{{"A", none}, {"", none}, {"C", none}}, Assign: map[string]*int{"g1": new(int)}, Spans: map[string][]*int{"d/": {&one, &one, &five}}},
-			[]string{"aside.duplicate", "aside.index", "aside.title", "aside.empty"}, [][]string{{"A", "g1"}, {"d", "d/1.md", "d/2.md", "d/3.md"}}},
-		{[]place.Unit{group("d/", 20), unit("g1", 1), unit("g2", 1)}, AsideReply{Pages: []Head{{"A", none}, {"B", none}, {"C", none}}, Assign: map[string]*int{"g1": new(int), "g2": new(int)}},
-			[]string{"aside.unassigned", "aside.empty", "aside.empty"}, [][]string{{"A", "g1", "g2"}, {"B"}, {"C"}}},
-		{[]place.Unit{group("d/", 20), unit("g1", 1)}, AsideReply{Pages: []Head{{"A", none}, {"B", none}, {"C", none}}, Assign: map[string]*int{"g1": &one}, Spans: map[string][]*int{"d/": {new(int)}}},
-			[]string{"aside.crowded", "aside.empty"}, [][]string{{"A"}, {"B", "g1"}, {"C"}}},
-	} {
-		if got := rules(checkAside(c.r, c.units, 3)); !reflect.DeepEqual(got, c.check) {
-			t.Errorf("check %v, want %v", got, c.check)
-		}
-		fixAside(&c.r, c.units, 3, "docs")
-		var got [][]string
-		for _, p := range AsidePages(c.r, c.units) {
-			got = append(got, append([]string{p.Title}, p.Units...))
-		}
-		if !reflect.DeepEqual(got, c.want) || len(checkAside(c.r, c.units, 3)) != 0 {
-			t.Errorf("pages %v, want %v; left %v", got, c.want, rules(checkAside(c.r, c.units, 3)))
-		}
+	// A group of 20 and a unit on one page are two units, not 21: within the crowd of 2 on one page (6).
+	two := []place.Unit{group("d/", 20), unit("g1", 1)}
+	if vs := checkAside(AsideReply{Pages: []Head{{"P", none}}, Assign: map[string]*int{"g1": new(int), "d/": new(int)}}, two, 1, func(n int) int { return Crowd(2, n) }); len(vs) != 0 {
+		t.Errorf("a group counted as its units: %v", rules(vs))
 	}
-	// A page holds ⌈units/pages⌉ of a group: 17 on one of 5 pages (at most 8) take three, not two.
-	r := AsideReply{Pages: []Head{{"A", none}, {"B", none}, {"C", none}, {"D", none}, {"E", none}}, Spans: map[string][]*int{"d/": {new(int)}}}
-	if fixAside(&r, []place.Unit{group("d/", 17)}, 5, "docs"); len(r.Spans["d/"]) != 3 || len(r.Pages) != 3 {
-		t.Errorf("17 units widened to %d pages of %d", len(r.Spans["d/"]), len(r.Pages))
+	// A batch planned apart in at most 10 pages crowds past 6 (20 units over 10), however few pages its reply gives: two
+	// of ten are crowded, and fixed by new pages, four of 6, 6, 6 and 2; an aside's crowd is over the reply's pages, 20 over two.
+	var twenty []place.Unit
+	for i := range 20 {
+		twenty = append(twenty, unit(fmt.Sprint("u", i), 1))
+	}
+	halves := AsideReply{Pages: []Head{{"A", none}, {"B", none}}, Assign: map[string]*int{}}
+	for i, u := range twenty {
+		halves.Assign[u.Key] = &[]int{0, 1}[i%2]
+	}
+	batch := AsideBatch(nil, twenty, 10, "docs")
+	if got := rules(batch.Check(halves)); !slices.Equal(got, []string{"aside.crowded", "aside.crowded"}) || len(Aside(nil, twenty, 10, "docs").Check(halves)) != 0 {
+		t.Errorf("a batch's crowd: %v", got)
+	}
+	if batch.Fix(&halves); len(halves.Pages) != 4 || len(batch.Check(halves)) != 0 || len(AsidePages(halves, twenty)[3].Units) != 2 {
+		t.Errorf("fixed: %d pages, %v", len(halves.Pages), rules(batch.Check(halves)))
 	}
 	declared := map[string][]string{"docs/one.md": {"Install"}}
 	big := group("docs/", 1000)
 	for _, f := range big.Raw {
 		declared[f] = []string{"Heading"}
 	}
-	m := AsideMessage("", nil, "Docs", analyzer.Docs, []place.Unit{big, unit("docs/one.md", 1, "docs/one.md")}, declared, nil)
-	if !strings.Contains(m, `"docs/" (a group of 1000 units,`) || !strings.Contains(m, big.Raw[999]+"\n") || strings.Contains(m, "Heading") || !strings.Contains(m, "Install") || !strings.Contains(m, `"spans"`) {
+	m := AsideMessage("", nil, "Docs", analyzer.Docs, []place.Unit{big, unit("docs/one.md", 1, "docs/one.md")}, nil, declared, nil)
+	if !strings.Contains(m, `"docs/" (a group of 1000 units,`) || !strings.Contains(m, big.Raw[999]+"\n") || strings.Contains(m, "Heading") || !strings.Contains(m, "Install") ||
+		!strings.Contains(m, "goes to one page as a unit does") || strings.Contains(m, "planned apart") {
 		t.Errorf("one group's line:\n%.600s", m)
 	}
 	// A guide with the code it shows is listed by its headings.
 	declared["src/ch02.md"], declared["listings/a/src/main.rs"] = []string{"Guessing Game"}, []string{"main"}
-	if m := AsideMessage("", nil, "Docs", analyzer.Docs, []place.Unit{unit("src/ch02.md", 1, "listings/a/src/main.rs", "src/ch02.md"), unit("src/ch03.md", 1, "c/x.rs", "src/ch03.md")}, declared, nil); !strings.Contains(m, "(2 files, 0 lines): Guessing Game\n") || !strings.Contains(m, "(2 files, 0 lines): c/x.rs, src/ch03.md\n") {
+	if m := AsideMessage("", nil, "Docs", analyzer.Docs, []place.Unit{unit("src/ch02.md", 1, "listings/a/src/main.rs", "src/ch02.md"), unit("src/ch03.md", 1, "c/x.rs", "src/ch03.md")}, nil, declared, nil); !strings.Contains(m, "(2 files, 0 lines): Guessing Game\n") || !strings.Contains(m, "(2 files, 0 lines): c/x.rs, src/ch03.md\n") {
 		t.Errorf("a guide showing code, by its headings, else its files:\n%s", m)
 	}
 	var many []place.Unit
 	for i := range 100 {
 		many = append(many, group(fmt.Sprintf("g%02d/", i), 20))
 	}
-	if m := AsideMessage("", nil, "Docs", analyzer.Docs, many, nil, nil); strings.Count(m, ".md") != 1000 || strings.Count(m, "/19.md, …\n") != 100 || strings.Contains(m, "/2.md") {
+	if m := AsideMessage("", nil, "Docs", analyzer.Docs, many[:60], many[60:], nil, nil); strings.Count(m, ".md") != 1000 || strings.Count(m, "/19.md, …\n") != 100 || strings.Contains(m, "/2.md") {
 		t.Errorf("100 groups name %d units:\n%.600s", strings.Count(m, ".md"), m)
 	}
-	if m := AsideMessage("", nil, "Docs", analyzer.Docs, []place.Unit{unit("a.md", 1, "a.md")}, nil, nil); strings.Contains(m, "spans") {
+	if m := AsideMessage("", nil, "Docs", analyzer.Docs, []place.Unit{unit("a.md", 1, "a.md")}, []place.Unit{apart("src/", 12, 9)}, nil, nil); !strings.Contains(m, "planned apart, in pages of their own; they are listed so that no page here takes their subjects, and are assigned none:\n- \"src/\" (a group of 12 units") ||
+		strings.Contains(m, "goes to one page") || strings.Index(m, `"a.md"`) > strings.Index(m, `"src/"`) {
+		t.Errorf("a group planned apart, after the rest:\n%s", m)
+	}
+	if m := AsideMessage("", nil, "Docs", analyzer.Docs, []place.Unit{unit("a.md", 1, "a.md")}, nil, nil, nil); strings.Contains(m, "group") || strings.Contains(m, "apart") {
 		t.Errorf("no group, yet:\n%s", m)
 	}
 }

@@ -312,7 +312,8 @@ func (g *Generator) sectioned(ctx context.Context, about, layout string, code []
 // page is the outline's head holding its unit's files; an aside of one page,
 // the head holding the kind's. Code and tooling are planned by unit (the
 // section request, split within the limits); tests, examples and docs by
-// assigning their units to pages (the aside request).
+// assigning their units to pages (the aside request), a section of more
+// units than one names in two levels (package aside).
 func (g *Generator) part(ctx context.Context, p contract.Part, head outline.Page, about string, titles []string, s structure, r *planRun) ([]outline.Page, error) {
 	u := p.Units[0]
 	asides := place.AsideUnits(p.Kind, u.Files, s.lines, u.Home)
@@ -343,27 +344,31 @@ func (g *Generator) part(ctx context.Context, p contract.Part, head outline.Page
 		r.counts.Residual("section.duplicate", contract.Distinct(pages)) // across split requests, each checked alone
 		return place.Place(p.Units, pages, s.edges), nil
 	}
-	groups := aside.Group(asides, asideUnits)
-	f, err := contract.AsideFormat(groups, u.Cap)
-	if err != nil {
-		return nil, err
-	}
-	reply, err := aicontract.Run(ctx, ai.Prompt{Static: contract.AsidePrompt, Dynamic: contract.AsideMessage(about, titles, head.Title, p.Kind, groups, s.declared, s.lines)},
-		contract.Aside(ask(g, r, f), groups, u.Cap, p.Kind), &r.counts)
-	if err != nil {
-		return nil, err
-	}
-	pages := contract.AsidePages(reply, groups)
-	pages, err = aside.Spread(pages, reply, groups, asides, asideUnits, func(batch []place.Unit, span []int) (aside.Reply, error) {
-		f, err := aside.Format(batch, len(span))
+	// plan asks for units' pages, at most most, held to turn's rules.
+	plan := func(message string, units []place.Unit, most int, turn func(contract.Ask[contract.AsideReply], []place.Unit, int, string) aicontract.Turn[contract.AsideReply]) ([]outline.Page, error) {
+		f, err := contract.AsideFormat(units, most)
 		if err != nil {
-			return aside.Reply{}, err
+			return nil, err
 		}
-		return aicontract.Run(ctx, ai.Prompt{Static: aside.Prompt, Dynamic: aside.Message(about, titles, head.Title, p.Kind, pages, span, batch, s.declared, s.lines)},
-			aside.Turn(ask(g, r, f), batch, len(span)), &r.counts)
-	}, &r.counts)
+		reply, err := aicontract.Run(ctx, ai.Prompt{Static: contract.AsidePrompt, Dynamic: message}, turn(ask(g, r, f), units, most, p.Kind), &r.counts)
+		return contract.AsidePages(reply, units), err
+	}
+	rest, apart, left := aside.Apart(aside.Group(asides, asideUnits), u.Cap, asideUnits)
+	var pages []outline.Page
+	if len(rest) > 0 {
+		var err error
+		if pages, err = plan(contract.AsideMessage(about, titles, head.Title, p.Kind, rest, apart, s.declared, s.lines), rest, left, contract.Aside); err != nil {
+			return nil, err
+		}
+	}
+	pages, err := aside.Spread(pages, apart, asides, asideUnits, func(pages []outline.Page, grp place.Unit, batch []place.Unit, k int) ([]outline.Page, error) {
+		return plan(aside.Message(about, titles, head.Title, p.Kind, pages, grp, batch, s.declared, s.lines), batch, k, contract.AsideBatch)
+	})
 	if err != nil {
 		return nil, err
+	}
+	if len(apart) > 0 { // across the section's requests, each checked alone
+		r.counts.Residual("aside.duplicate", contract.Distinct(pages))
 	}
 	return place.Place(asides, pages, nil), nil
 }

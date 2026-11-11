@@ -1,8 +1,9 @@
 // Package aside plans an aside section (docs, examples, tests) of more units
-// than one request names, in two levels: one request, with the whole section
-// in view, gives each group of them (Group) its pages; then a group given two
-// pages or more has its units spread over them (Spread), a request for each
-// batch of them.
+// than one request names, in two levels: code joins them into groups (Group)
+// and gives each its share of the section's pages by weight (Apart); a group
+// of two pages or more is planned apart, in at most that many, a request for
+// each batch of its units (Spread); one request, with the whole section in
+// view, plans the pages of the rest.
 package aside
 
 import (
@@ -69,6 +70,57 @@ func Group(units []place.Unit, most int) []place.Unit {
 		return cmp.Or(cmp.Compare(b.Weight, a.Weight), strings.Compare(a.Key, b.Key))
 	})
 	return units
+}
+
+// Apart splits units, Group's, of an aside of most pages, its groups asked
+// in batches of at most per units (Spread): a group's share of the pages is
+// ⌊most·w/W⌋ by weight (w its, W all units'), no more than the units it
+// joins; with a page for each of its batches, and two at the least, it is
+// planned apart, its Cap the share. While those apart take more than the
+// rest leaves them (one page, with any rest), each share is cut in
+// proportion, one cut below its least joining the rest. left is most less
+// the shares, the rest's pages.
+func Apart(units []place.Unit, most, per int) (rest, apart []place.Unit, left int) {
+	total := 0.0
+	for _, u := range units {
+		total += u.Weight
+	}
+	share, least := map[string]int{}, map[string]int{}
+	for _, u := range units {
+		least[u.Key] = max(2, (len(u.Raw)+per-1)/per)
+		if k := min(len(u.Raw), int(float64(most)*u.Weight/max(total, 1e-9))); k >= least[u.Key] {
+			share[u.Key] = k
+		}
+	}
+	for {
+		room, sum := most, 0
+		if len(share) < len(units) {
+			room--
+		}
+		for _, k := range share {
+			sum += k
+		}
+		if sum <= room || sum == 0 {
+			break
+		}
+		for key, k := range share {
+			if k = k * room / sum; k >= least[key] {
+				share[key] = k
+			} else {
+				delete(share, key)
+			}
+		}
+	}
+	left = most
+	for _, u := range units {
+		if k, ok := share[u.Key]; ok {
+			u.Cap = k
+			apart, left = append(apart, u), left-k
+		} else {
+			rest = append(rest, u)
+		}
+	}
+	return rest, apart, left
 }
 
 // above is the folder holding the file or folder unit key k ("./" at the root).

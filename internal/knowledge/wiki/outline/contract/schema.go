@@ -57,9 +57,8 @@ type (
 	}
 	SectionReply map[string][]Planned
 	AsideReply   struct {
-		Pages  []Head            `json:"pages"`
-		Assign map[string]*int   `json:"assign"`          // nil for a null index, which no page has
-		Spans  map[string][]*int `json:"spans,omitempty"` // a group's pages (aside.Group), asked only with one
+		Pages  []Head          `json:"pages"`
+		Assign map[string]*int `json:"assign"` // nil for a null index, which no page has
 	}
 	FlatReply struct {
 		Overview Head         `json:"overview"`
@@ -132,28 +131,15 @@ func SectionFormat(us []place.Unit, b Bounds) (ai.Format[SectionReply], error) {
 	return ai.Dynamic[SectionReply]("wiki_section", units(us, b))
 }
 
-// AsideFormat asks for an aside's pages, 1 to most, each unit's page (none
-// with groups only), and, with a group among us, each group's pages under
-// "spans", 1 to as many as it has units, no more than most. Its bounds hold
-// no enum, so it is past the limits with or without them.
+// AsideFormat asks for an aside's pages, 1 to most, and each unit's page, a
+// group's (aside.Group) as one. Its bounds hold no enum, so it is past the
+// limits with or without them.
 func AsideFormat(us []place.Unit, most int) (ai.Format[AsideReply], error) {
-	index := func() map[string]any { return map[string]any{"type": "integer", "minimum": 0, "maximum": most - 1} }
-	assign, spans := map[string]any{}, map[string]any{}
+	assign := map[string]any{}
 	for _, u := range us {
-		if grouped(u) {
-			spans[u.Key] = array(index(), 1, min(most, len(u.Raw)), true)
-		} else {
-			assign[u.Key] = index()
-		}
+		assign[u.Key] = map[string]any{"type": "integer", "minimum": 0, "maximum": most - 1}
 	}
-	props := map[string]any{"pages": array(head(true), 1, most, true), "assign": Object(assign)}
-	if len(spans) > 0 {
-		props["spans"] = Object(spans)
-	}
-	if len(assign) == 0 { // groups only: nothing to assign
-		delete(props, "assign")
-	}
-	return ai.Dynamic[AsideReply]("wiki_aside", Object(props))
+	return ai.Dynamic[AsideReply]("wiki_aside", Object(map[string]any{"pages": array(head(true), 1, most, true), "assign": Object(assign)}))
 }
 
 // FlatFormat asks for the overview, the labels and each unit's pages.

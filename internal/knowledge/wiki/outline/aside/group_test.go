@@ -72,3 +72,46 @@ func TestGroup(t *testing.T) {
 		t.Errorf("150 guides: %d units, %+v", len(g), g[0].Key)
 	}
 }
+
+// TestApart: a group's share of the pages is its weight's, ⌊most·w/W⌋, no
+// more than its units, and apart from two, or a page for each of its
+// batches; the rest keep their order and take what is left; with units
+// only, all are the rest. While those apart leave the rest no page, each
+// share is cut in proportion, one cut below its least joining the rest; no
+// pages at all end it too.
+func TestApart(t *testing.T) {
+	g := func(key string, n int, w float64) place.Unit {
+		return place.Unit{Key: key, Raw: keys(key, n), Weight: w}
+	}
+	one := func(key string, w float64) place.Unit { return place.Unit{Key: key, Raw: []string{key}, Weight: w} }
+	shape := func(rest, apart []place.Unit, left int) string {
+		var r, a []string
+		for _, u := range rest {
+			r = append(r, u.Key)
+		}
+		for _, u := range apart {
+			a = append(a, fmt.Sprintf("%s%d", u.Key, u.Cap))
+		}
+		return fmt.Sprintf("rest %v apart %v left %d", r, a, left)
+	}
+	for _, c := range []struct {
+		units []place.Unit
+		most  int
+		want  string
+	}{
+		{[]place.Unit{one("a.md", 5), one("b.md", 1)}, 9, "rest [a.md b.md] apart [] left 9"},
+		{[]place.Unit{g("src/", 112, 45135), g("first/", 20, 1500), one("x.md", 1797), g("second/", 10, 1200)}, 38, "rest [first/ x.md second/] apart [src/34] left 4"},
+		{[]place.Unit{g("few/", 3, 900), one("x.md", 100)}, 38, "rest [x.md] apart [few/3] left 35"},
+		{[]place.Unit{g("p/", 9, 50), g("q/", 9, 50), one("x.md", 0)}, 10, "rest [x.md] apart [p/4 q/4] left 2"},
+		{[]place.Unit{g("p/", 9, 50), g("q/", 9, 50), one("x.md", 0)}, 4, "rest [p/ q/ x.md] apart [] left 4"},
+		{[]place.Unit{g("p/", 9, 50), g("q/", 9, 50)}, 10, "rest [] apart [p/5 q/5] left 0"},
+		{[]place.Unit{g("big/", 250, 10), one("x.md", 90)}, 20, "rest [big/ x.md] apart [] left 20"}, // 2 pages for 3 batches
+		{[]place.Unit{g("big/", 250, 10), one("x.md", 90)}, 30, "rest [x.md] apart [big/3] left 27"},
+		{[]place.Unit{g("big/", 250, 50), g("q/", 9, 50), one("x.md", 0)}, 6, "rest [big/ x.md] apart [q/2] left 4"}, // cut by 5/6: big/ to 2, below its 3
+		{[]place.Unit{g("p/", 9, 50), one("x.md", 0)}, 0, "rest [p/ x.md] apart [] left 0"},
+	} {
+		if got := shape(Apart(c.units, c.most, 100)); got != c.want {
+			t.Errorf("Apart(%d units, %d) = %s, want %s", len(c.units), c.most, got, c.want)
+		}
+	}
+}
