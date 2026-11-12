@@ -81,9 +81,9 @@ func TestPlanRoundTrip(t *testing.T) {
 	}
 }
 
-// TestDeclsTexts: Decls is the named files' types and functions in line
-// order, no method among them (so no C# top-level Main); Texts is the named
-// files' texts, a missing one none.
+// TestDeclsTexts: Decls is the named files' types, functions and methods in
+// line order, each with its qualified name and span, a namespace not among
+// them; Texts is the named files' texts, a missing one none.
 func TestDeclsTexts(t *testing.T) {
 	ctx := context.Background()
 	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "deepcode.db"))
@@ -98,13 +98,14 @@ func TestDeclsTexts(t *testing.T) {
 			(1, 'a.go', 'go', 'h1', 1, 1), (1, 'b.cs', 'csharp', 'h2', 1, 1), (1, 'c.go', 'go', 'h2', 1, 1);
 		INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES
 			(1, 'a.go', 'Run', 'Run', 'function', 5, 6), (1, 'a.go', 'T', 'T', 'struct', 2, 3), (1, 'a.go', 'M', 'T.M', 'method', 3, 3),
-			(1, 'b.cs', 'Main', 'Main', 'method', 1, 1), (1, 'c.go', 'C', 'C', 'function', 1, 1)`); err != nil {
+			(1, 'b.cs', 'Main', 'Main', 'method', 1, 1), (1, 'b.cs', 'N', 'N', 'namespace', 1, 9), (1, 'c.go', 'C', 'C', 'function', 1, 1)`); err != nil {
 		t.Fatal(err)
 	}
 	s := &Store{DB: db}
 	decls, err := s.Decls(ctx, 1, []string{"a.go", "b.cs"})
 	texts, textErr := s.Texts(ctx, 1, []string{"a.go", "gone.go"})
-	if want := map[string][]Decl{"a.go": {{"T", "struct", 2}, {"Run", "function", 5}}}; err != nil || textErr != nil || !reflect.DeepEqual(decls, want) ||
+	if want := map[string][]Decl{"a.go": {{"T", "struct", "T", 2, 3}, {"M", "method", "T.M", 3, 3}, {"Run", "function", "Run", 5, 6}},
+		"b.cs": {{"Main", "method", "Main", 1, 1}}}; err != nil || textErr != nil || !reflect.DeepEqual(decls, want) ||
 		!reflect.DeepEqual(texts, map[string]string{"a.go": "x"}) {
 		t.Fatalf("decls %+v (%v), texts %v (%v)", decls, err, texts, textErr)
 	}

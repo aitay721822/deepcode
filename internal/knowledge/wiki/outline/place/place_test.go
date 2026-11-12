@@ -167,8 +167,8 @@ func TestReplan(t *testing.T) {
 }
 
 // TestRecipes (G9): a recipe goes to the page sharing most of its words, the
-// overview, heads and full pages aside, ties to the fewest units; README
-// joins the page's files once.
+// overview, heads, full pages and pages of tooling or tests only aside, ties
+// to the fewest units; README joins the page's files once.
 func TestRecipes(t *testing.T) {
 	full := []string{"1", "2", "3", "4", "5", "6"}
 	pages := []outline.Page{
@@ -177,15 +177,19 @@ func TestRecipes(t *testing.T) {
 		{Title: "Store", Terms: []string{"create"}, Units: []string{"src/"}},
 		{Title: "Persist middleware", Terms: []string{"persist", "storage"}, Units: full},
 		{Title: "Selectors", Terms: []string{"selector"}},
+		{Title: "Build and CI", Terms: []string{"github", "actions"}, Units: []string{analyzer.Tooling}},
+		{Title: "Tests", Terms: []string{"async", "actions"}, Units: []string{"src/" + TestsMark, analyzer.Tooling}},
+		{Title: "Hooks", Terms: []string{"actions"}, Units: []string{"src/hooks/", analyzer.Tooling}},
 	}
-	got, left := Recipes(pages, "README.md", []string{"Persist middleware", "Selectors", "Store"}, map[int]bool{1: true})
+	got, left := Recipes(pages, "README.md", []string{"Persist middleware", "Selectors", "Store", "Async actions"}, map[int]bool{1: true})
 	if len(left) != 0 {
 		t.Fatalf("left %v", left)
 	}
 	if !reflect.DeepEqual(got[4].Units, []string{"README.md#Persist middleware", "README.md#Selectors"}) || !reflect.DeepEqual(got[4].Placed, []string{"README.md"}) {
 		t.Errorf("Selectors page: %+v", got[4])
 	}
-	if !reflect.DeepEqual(got[2].Units, []string{"src/", "README.md#Store"}) || len(got[3].Units) != 6 {
-		t.Errorf("Store page %+v, full page %+v", got[2], got[3])
+	if !reflect.DeepEqual(got[2].Units, []string{"src/", "README.md#Store"}) || len(got[3].Units) != 6 ||
+		len(got[5].Units) != 1 || len(got[6].Units) != 2 || !reflect.DeepEqual(got[7].Units, []string{"src/hooks/", analyzer.Tooling, "README.md#Async actions"}) {
+		t.Errorf("Store page %+v, full page %+v, tooling %+v, tests %+v, code and tooling %+v", got[2], got[3], got[5], got[6], got[7])
 	}
 }

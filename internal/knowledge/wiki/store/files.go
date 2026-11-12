@@ -115,23 +115,25 @@ func (s *Store) Hashes(ctx context.Context, snap int64, paths []string) (map[str
 	return out, rows.Err()
 }
 
-// Decl is a type or function a file declares: its name, its kind and the
-// line it starts on, a leading doc comment's.
+// Decl is a type, function or method a file declares: its name, its kind,
+// its qualified name (a method's names its type, Router.route) and the lines
+// it spans from its first, a leading doc comment's.
 type Decl struct {
-	Name, Kind string
-	Line       int
+	Name, Kind, Qualified string
+	Line, End             int
 }
 
-// Decls returns the types and functions each of paths declares, in line
-// order: no method, so no C# top-level statements' synthetic Main.
+// Decls returns the types, functions and methods each of paths declares, in
+// line order. C#'s top-level statements declare a synthetic Main method,
+// whose qualified name names no type.
 func (s *Store) Decls(ctx context.Context, snap int64, paths []string) (map[string][]Decl, error) {
 	list, err := json.Marshal(paths)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT path, name, kind, start_line FROM symbols WHERE snapshot_id = ?
+	rows, err := s.DB.QueryContext(ctx, `SELECT path, name, kind, qualified_name, start_line, end_line FROM symbols WHERE snapshot_id = ?
 		AND path IN (SELECT value FROM json_each(?))
-		AND kind IN ('class', 'struct', 'interface', 'trait', 'enum', 'record', 'type', 'function', 'macro', 'union') ORDER BY path, start_line`, snap, string(list))
+		AND kind IN ('class', 'struct', 'interface', 'trait', 'enum', 'record', 'type', 'function', 'macro', 'union', 'method') ORDER BY path, start_line`, snap, string(list))
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +142,7 @@ func (s *Store) Decls(ctx context.Context, snap int64, paths []string) (map[stri
 	for rows.Next() {
 		var p string
 		var d Decl
-		if err := rows.Scan(&p, &d.Name, &d.Kind, &d.Line); err != nil {
+		if err := rows.Scan(&p, &d.Name, &d.Kind, &d.Qualified, &d.Line, &d.End); err != nil {
 			return nil, err
 		}
 		out[p] = append(out[p], d)

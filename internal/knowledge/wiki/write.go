@@ -147,8 +147,8 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 // otherFiles is what code adds last to page p, written to sk, under the
 // wiki's label: each file and aside unit of p no heading covers
 // (skeleton.Others, home the code each guide shows), a file linked with the
-// first declarations it holds, a folder by its path; "" when every one has a
-// heading. No model writes it.
+// first types and functions it declares, a folder by its path; "" when every
+// one has a heading. No model writes it.
 func (g *Generator) otherFiles(ctx context.Context, snap int64, src source, p page, sk skeleton.Skeleton, home map[string]string) (string, error) {
 	others := skeleton.Others(sk, append(slices.Clone(p.Files.Chosen), p.Files.Placed...), p.Files.Units, home)
 	if len(others) == 0 {
@@ -171,8 +171,10 @@ func (g *Generator) otherFiles(ctx context.Context, snap int64, src source, p pa
 		}
 		fmt.Fprintf(&b, "\n- [%s](%s)", o, gitserver.FileURL(src.kind, src.url, src.sha, o))
 		var names []string
-		for _, d := range decls[o][:min(maxDeclared, len(decls[o]))] {
-			names = append(names, "`"+d.Name+"`")
+		for _, d := range decls[o] {
+			if d.Kind != "method" && len(names) < maxDeclared {
+				names = append(names, "`"+d.Name+"`")
+			}
 		}
 		if len(names) > 0 {
 			b.WriteString(": " + strings.Join(names, ", "))

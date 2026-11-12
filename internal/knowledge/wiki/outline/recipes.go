@@ -66,11 +66,26 @@ func Shown(src string) []Section {
 	return out
 }
 
-// Title is the # title Markdown text src opens with, and its line; "" and 0
-// for none.
+// Title is the # title Markdown text src opens with, else the title its YAML
+// front matter gives (title: …, as Docusaurus, VitePress and Jekyll guides
+// carry theirs), and its line; "" and 0 for none.
 func Title(src string) (string, int) {
 	if secs := markdown.Sections([]byte(src)); len(secs) > 0 && strings.HasPrefix(secs[0].Signature, "# ") {
 		return OneLine(strings.NewReplacer("`", "", "*", "").Replace(secs[0].Name)), secs[0].StartLine
+	}
+	lines := strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n")
+	if strings.TrimSpace(lines[0]) != "---" {
+		return "", 0
+	}
+	for i, l := range lines[1:] {
+		if strings.TrimSpace(l) == "---" {
+			break
+		}
+		if v, ok := strings.CutPrefix(l, "title:"); ok {
+			if v = strings.Trim(strings.TrimSpace(v), `"'`); v != "" {
+				return OneLine(v), i + 2
+			}
+		}
 	}
 	return "", 0
 }

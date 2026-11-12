@@ -125,17 +125,20 @@ const maxUnits = 6
 
 // Recipes places each of recipes, a README's (outline.Recipes), on the page
 // whose title, terms and units share the most of its retrieval.Terms, the
-// overview (page 0), section heads (heads) and pages of maxUnits units aside,
-// ties going to the page with the fewest units, then the first: the recipe
-// becomes one of its units, readme + "#" + the recipe, and readme joins its
-// placed files. It returns the recipes no page had room for.
+// overview (page 0), section heads (heads), pages of maxUnits units and pages
+// of tooling or tests only aside (a recipe shows the code in use, "Async
+// actions" no GitHub Actions), ties going to the page with the fewest units,
+// then the first: the recipe becomes one of its units, readme + "#" + the
+// recipe, and readme joins its placed files. It returns the recipes no page
+// had room for.
 func Recipes(pages []outline.Page, readme string, recipes []string, heads map[int]bool) ([]outline.Page, []string) {
+	built := func(u string) bool { return u == analyzer.Tooling || strings.HasSuffix(u, TestsMark) }
 	var left []string
 	for _, r := range recipes {
 		words := retrieval.Terms(r)
 		best, most := -1, -1
 		for i, p := range pages {
-			if i == 0 || heads[i] || len(p.Units) >= maxUnits {
+			if i == 0 || heads[i] || len(p.Units) >= maxUnits || len(p.Units) > 0 && !slices.ContainsFunc(p.Units, func(u string) bool { return !built(u) }) {
 				continue
 			}
 			terms := retrieval.Terms(p.Title + "\n" + strings.Join(p.Terms, " ") + "\n" + strings.Join(p.Units, " "))

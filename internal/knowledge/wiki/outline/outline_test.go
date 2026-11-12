@@ -1,6 +1,7 @@
 package outline
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -47,6 +48,26 @@ func TestRecipes(t *testing.T) {
 	for _, s := range []string{src, strings.ReplaceAll(src, "\n", "\r\n")} {
 		if got := Recipes(s); !slices.Equal(got, []string{"Install", "Transient updates", "Why lib"}) {
 			t.Errorf("recipes %q", got)
+		}
+	}
+}
+
+// TestTitle: a guide's # title, else its front matter's title: (quotes
+// aside) at its line; none for a title: past the front matter or none at all.
+func TestTitle(t *testing.T) {
+	for src, want := range map[string]string{
+		"# The `create` API\n\ntext":                                "The create API @1",
+		"---\ntitle: createWithEqualityFn\nnav: 2\n---\n\n## Usage": "createWithEqualityFn @2",
+		"---\r\nnav: 2\r\ntitle: 'Persist'\r\n---\r\ntext":          "Persist @3",
+		"---\ntitle: Front\n---\n# Own title\n":                     "Own title @4",
+		"---\nnav: 2\n---\ntitle: body text\n":                      " @0",
+		"## Usage\n\ntext":                                          " @0",
+		"intro\ntitle: no front matter\n":                           " @0",
+		"---\ntitle:\n---\ntext\n":                                  " @0",
+		"":                                                          " @0",
+	} {
+		if title, line := Title(src); fmt.Sprintf("%s @%d", title, line) != want {
+			t.Errorf("Title(%q) = %q @%d, want %s", src, title, line, want)
 		}
 	}
 }

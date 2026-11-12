@@ -408,19 +408,18 @@ func TestRunOutcomes(t *testing.T) {
 }
 
 // TestRunWritesSkeleton: a page is held to its skeleton, its chosen file's
-// type. A first draft, fenced and titled, lacking the heading is cleaned and
-// repaired, asked for that section alone, and the repair goes in after the
-// intro; the page renders with it, cited, and Written tells it. Its placed
-// file, with no heading, is listed last under the wiki's Other files label,
-// linked, by its first three declarations, and so is its folder of tests,
-// whose heading no source showed, by its path.
+// type with its function at level 3. A fenced, titled first draft lacking
+// them is cleaned and repaired for those sections alone, after the intro; the
+// page renders with it, cited, and Written tells it. Its placed file, with no
+// heading, is listed last under the Other files label, linked, by its first
+// three types and functions; its folder of tests, unsourced, by its path.
 func TestRunWritesSkeleton(t *testing.T) {
 	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status, wiki_status, wiki_language, wiki_labels) VALUES (1, 1, 'abc', 'ready', 'failed', 'English', '{"stack":"Stack","otherFiles":"More files"}')`,
 		`INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`,
 		`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, 'a.go', 'go', 'h', 1, 9), (1, 'b.go', 'go', 'h', 1, 4)`,
 		`INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash) VALUES (1, 'a.go', 'Router', 1, 9, 'func route()' || char(10) || 'type Router struct' || char(10, 51, 10, 52, 10, 53, 10, 54, 10, 55, 10, 56, 10, 57), 'c')`,
 		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'a.go', 'route', 'route', 'function', 1, 1), (1, 'a.go', 'Router', 'Router', 'struct', 2, 9),
-			(1, 'b.go', 'c', 'c', 'function', 2, 2), (1, 'b.go', 'B', 'B', 'struct', 1, 1), (1, 'b.go', 'e', 'e', 'function', 4, 4), (1, 'b.go', 'd', 'd', 'function', 3, 3)`,
+			(1, 'b.go', 'c', 'c', 'function', 2, 2), (1, 'b.go', 'B', 'B', 'struct', 1, 1), (1, 'b.go', 'm', 'B.m', 'method', 1, 1), (1, 'b.go', 'e', 'e', 'function', 4, 4), (1, 'b.go', 'd', 'd', 'function', 3, 3)`,
 		`INSERT INTO wiki_pages(snapshot_id, slug, title, query, position, content, files) VALUES (1, '1-overview', 'Overview', '', 0, 'Written before.', NULL),
 			(1, '2-routing', 'Routing', 'router', 1, '', '{"chosen":["a.go"],"placed":["b.go"],"units":["./","e2e/ (tests)"]}')`)
 	model := &fakeModel{first: "```markdown\n# Routing\nIntro.\n```"}
@@ -431,9 +430,9 @@ func TestRunWritesSkeleton(t *testing.T) {
 		!strings.HasSuffix(pages[1].Content, "\n\n## More files\n\n- [b.go](https://example.com/o/r/blob/abc/b.go): `B`, `c`, `d`\n- `e2e/`") {
 		t.Fatalf("%+v %v", pages, err)
 	}
-	if len(model.writes) != 2 || len(model.plans) != 0 || !strings.Contains(model.writes[0], "Its headings, in order:\n## Router\nIts files: a.go, b.go\n") ||
-		!slices.Equal(w.Headings, []string{"Router"}) || len(w.Lacking) != 0 || !slices.Equal(w.Unsourced, []string{"e2e"}) || !w.Repaired ||
-		w.Contracts["write.heading"] != (aicontract.Count{First: 1}) {
+	if len(model.writes) != 2 || len(model.plans) != 0 || !strings.Contains(model.writes[0], "Its headings, in order:\n## Router\n### route\nIts files: a.go, b.go\n") ||
+		!slices.Equal(w.Headings, []string{"Router", "route"}) || len(w.Lacking) != 0 || !slices.Equal(w.Unsourced, []string{"e2e"}) || !w.Repaired ||
+		w.Contracts["write.heading"] != (aicontract.Count{First: 2}) {
 		t.Errorf("asked %q; written %+v", model.writes, w)
 	}
 }

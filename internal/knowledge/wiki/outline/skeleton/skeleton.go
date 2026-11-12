@@ -30,7 +30,7 @@ type Heading struct {
 // Skeleton is a page's headings, in order.
 type Skeleton []Heading
 
-// The most level-2 headings a page has, and level-3 ones under a guide's.
+// The most level-2 headings a page has, and level-3 ones under one.
 const (
 	maxHeads    = 6
 	maxChildren = 4
@@ -81,11 +81,11 @@ func kind(u string) (string, string) {
 
 // Build is the skeleton of a page covering units, its chosen files chosen
 // and all its files files, in order: a heading for each unit that has one (a
-// guide by its # title, else its name, with a level-3 heading for each of up
-// to maxChildren of its sections that show code; an example by its folder's
-// name; a folder of tests by its path's last two parts, the root's "tests"), then one for each
-// README recipe, then one for each chosen file by its main declaration
-// (declared). A name one file gives twice (a guide's section named as the
+// guide by its title (outline.Title), else its name, with a level-3 heading
+// for each of up to maxChildren of its sections that show code; an example by
+// its folder's name; a folder of tests by its path's last two parts, the
+// root's "tests"), then one for each README recipe, then each chosen file's
+// (subjects). A name one file gives twice (a guide's section named as the
 // guide) is headed once. It keeps maxHeads level-2 headings, each with its
 // own; the chosen files' are the first left out. Of those, it keeps at most
 // most headings with an anchor, as page search takes no more: every level-2
@@ -130,8 +130,7 @@ func Build(units, chosen, files []string, src Source, most int) Skeleton {
 	}
 	out = append(asides, recipes...)
 	for _, f := range chosen {
-		name, line := declared(f, src.Decls[f])
-		out = append(out, Heading{Name: name, Level: 2, Unit: f, Anchor: retrieval.Anchor{Path: f, Line: line}})
+		out = append(out, subjects(f, src.Decls[f])...)
 	}
 	seen := map[[2]string]bool{}
 	out = slices.DeleteFunc(out, func(h Heading) bool {
@@ -194,19 +193,86 @@ func Others(s Skeleton, files, units []string, home map[string]string) []string 
 	return out
 }
 
-// declared is the heading of chosen file f: the first type it declares, else its
-// first function, and the line it starts on; else its name, at its first
-// chunk (0). C#'s top-level statements declare a synthetic Main method, which
-// decls never hold, so Program.cs is headed "Program".
-func declared(f string, decls []store.Decl) (string, int) {
-	for _, types := range []bool{true, false} {
-		for _, d := range decls {
-			if (d.Kind != "function" && d.Kind != "macro") == types {
-				return d.Name, d.Line
+// subjects are the headings of chosen file f: its weightiest type or function
+// at level 2, then up to maxChildren more at level 3, of that type's methods
+// and the file's other types and functions, weightiest first, each name once.
+// A type weighs the lines of its span and its methods' (a C# class holds its
+// methods, a Rust struct's are in impl blocks); a function or a method, its
+// span's. Ties go to a type, then to the first. Inline tests (a declaration
+// in a tests or test module, Rust's mod tests) are no subject; a function or
+// method named test is. A file with no type or function is headed by its
+// name at its first chunk (0): C#'s top-level statements declare only a
+// synthetic Main method, so Program.cs is headed "Program".
+func subjects(f string, decls []store.Decl) []Heading {
+	type subject struct {
+		d      store.Decl
+		weight int
+		typ    bool
+	}
+	rank := func(s []subject) {
+		slices.SortStableFunc(s, func(a, b subject) int {
+			switch {
+			case a.weight != b.weight:
+				return b.weight - a.weight
+			case a.typ && !b.typ:
+				return -1
+			case b.typ && !a.typ:
+				return 1
 			}
+			return a.d.Line - b.d.Line
+		})
+	}
+	var tops []subject
+	methods := map[string][]store.Decl{} // by their type's qualified name
+	for _, d := range decls {
+		if q := strings.Split(d.Qualified, "."); slices.ContainsFunc(q[:len(q)-1], func(p string) bool { return strings.EqualFold(p, "tests") || strings.EqualFold(p, "test") }) {
+			continue
+		}
+		switch d.Kind {
+		case "method":
+			if i := strings.LastIndex(d.Qualified, "."); i > 0 {
+				methods[d.Qualified[:i]] = append(methods[d.Qualified[:i]], d)
+			}
+		case "function", "macro":
+			tops = append(tops, subject{d: d, weight: max(1, d.End-d.Line+1)})
+		default:
+			tops = append(tops, subject{d: d, typ: true})
 		}
 	}
-	return bare(f), 0
+	key := func(d store.Decl) string { return cmp.Or(d.Qualified, d.Name) }
+	for i, s := range tops {
+		if !s.typ {
+			continue
+		}
+		lines := map[int]bool{}
+		for _, d := range append([]store.Decl{s.d}, methods[key(s.d)]...) {
+			for l := d.Line; l <= max(d.Line, d.End); l++ {
+				lines[l] = true
+			}
+		}
+		tops[i].weight = len(lines)
+	}
+	if rank(tops); len(tops) == 0 {
+		return []Heading{{Name: bare(f), Level: 2, Unit: f, Anchor: retrieval.Anchor{Path: f}}}
+	}
+	top := tops[0]
+	out := []Heading{{Name: top.d.Name, Level: 2, Unit: f, Anchor: retrieval.Anchor{Path: f, Line: top.d.Line}}}
+	pool := slices.Clone(tops[1:])
+	if top.typ {
+		for _, m := range methods[key(top.d)] {
+			pool = append(pool, subject{d: m, weight: max(1, m.End-m.Line+1)})
+		}
+	}
+	rank(pool)
+	for _, s := range pool {
+		if len(out) > maxChildren {
+			break
+		}
+		if !slices.ContainsFunc(out, func(h Heading) bool { return fold(h.Name) == fold(s.d.Name) }) {
+			out = append(out, Heading{Name: s.d.Name, Level: 3, Unit: f, Anchor: retrieval.Anchor{Path: f, Line: s.d.Line}})
+		}
+	}
+	return out
 }
 
 // bare is the name of file f without its extension.
