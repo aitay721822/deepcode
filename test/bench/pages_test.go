@@ -29,12 +29,13 @@ type coverage struct {
 var citeLink = regexp.MustCompile(`\[((?:[^\]\\\n]|\\.)*?):\d+-\d+\]\(\S*?#L\d+-L?\d+\)`) // a path may hold parentheses
 
 // rewritten counts head's pages that are not base's page of the same title
-// with the same text, their citations' lines and links aside: the pages the
-// update wrote, as a carried page's citations follow their lines to head.
+// with the same text, their citations' lines and links and every link's commit
+// aside: the pages the update wrote, as a carried page's citations follow
+// their lines to head and its other links move to head's commit.
 func rewritten(ctx context.Context, db *sql.DB, base, head int64) (int, error) {
 	texts := map[int64]map[string]map[string]bool{base: {}, head: {}} // by snapshot, title: texts
 	for snap, pages := range texts {
-		rows, err := db.QueryContext(ctx, `SELECT title, content FROM wiki_pages WHERE snapshot_id = ?`, snap)
+		rows, err := db.QueryContext(ctx, `SELECT p.title, replace(p.content, s.commit_sha, '') FROM wiki_pages p JOIN snapshots s ON s.id = p.snapshot_id WHERE p.snapshot_id = ?`, snap)
 		if err != nil {
 			return 0, err
 		}
@@ -159,7 +160,8 @@ func cover(topics []score.Topic, heads []string) coverage {
 }
 
 // TestRewritten: a page whose citations only moved, to other lines at another
-// commit, was not rewritten; one whose text changed, or a new one, was.
+// commit, or whose file links only moved to that commit, was not rewritten;
+// one whose text changed, or a new one, was.
 func TestRewritten(t *testing.T) {
 	ctx := context.Background()
 	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "deepcode.db"))
@@ -170,10 +172,12 @@ func TestRewritten(t *testing.T) {
 	link := func(sha string, n int) string {
 		return fmt.Sprintf("See [a.go:%d-%d](https://x/blob/%s/a.go#L%[1]d-L%[1]d).", n, n, sha)
 	}
+	file := func(sha string) string { return "Also [b.go](https://x/blob/" + sha + "/b.go)." } // an Other files row
 	for _, q := range []string{`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://x', 'o', 'r')`,
-		`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'b', 'ready'), (2, 1, 'h', 'ready')`,
-		`INSERT INTO wiki_pages(snapshot_id, slug, title, position, content) VALUES (1, '1', 'Moved', 0, '` + link("b", 1) + `'),
-			(1, '2', 'Edited', 1, 'old'), (2, '1', 'Moved', 0, '` + link("h", 3) + `'), (2, '2', 'Edited', 1, 'new'), (2, '3', 'Added', 2, 'x')`} {
+		`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'b0', 'ready'), (2, 1, 'h0', 'ready')`,
+		`INSERT INTO wiki_pages(snapshot_id, slug, title, position, content) VALUES (1, '1', 'Moved', 0, '` + link("b0", 1) + `'),
+			(1, '2', 'Edited', 1, 'old'), (2, '1', 'Moved', 0, '` + link("h0", 3) + `'), (2, '2', 'Edited', 1, 'new'), (2, '3', 'Added', 2, 'x')`,
+		`INSERT INTO wiki_pages(snapshot_id, slug, title, position, content) VALUES (1, '4', 'Listed', 3, '` + file("b0") + `'), (2, '4', 'Listed', 3, '` + file("h0") + `')`} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatal(err)
 		}
