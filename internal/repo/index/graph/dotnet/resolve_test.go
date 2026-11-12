@@ -30,8 +30,22 @@ var files = map[string][]string{
 	"src/Shop.Shared/Customer.cs": {"ns:Shop.Shared", "def:Shop.Shared.Customer"},
 	"src/Shop.Shared/Tax.cs":      {"ns:Shop.Pricing", "def:Shop.Pricing.Tax"},
 
-	// Another project: Shop.Ordering's global using and <Using> are not its.
-	"src/Shop.Jobs/Job.cs": {"ns:Shop.Jobs", "def:Shop.Jobs.Job", "type:Clock", "type:Tax"},
+	// Another project: Shop.Ordering's global using and <Using> are not its,
+	// nor Shop.Core's types, a project it does not reference, by name or by a
+	// static using.
+	"src/Shop.Jobs/Job.cs":        {"using:Shop.Core", "static:Shop.Core.Guard", "ns:Shop.Jobs", "def:Shop.Jobs.Job", "type:Clock", "type:Tax", "type:Money"},
+	"src/Shop.Jobs/Extensions.cs": {"def:Extensions"},
+	// An app sees its own Extensions, not the global namespace's of a project
+	// it does not reference; Order by its reference, Money through Order's.
+	"src/Shop.Api/Program.cs":    {"using:Shop.Api", "using:Shop.Ordering", "using:Shop.Core", "type:Extensions", "type:Order", "type:Money"},
+	"src/Shop.Api/Extensions.cs": {"ns:Shop.Api", "def:Shop.Api.Extensions"},
+	// A file outside any project sees every project's types, and so does one
+	// of a project that reaches a reference by a property or one its
+	// Directory.Build.props adds.
+	"scripts/Seed.cs":        {"using:Shop.Core", "type:Money"},
+	"src/Shop.Tools/Tool.cs": {"using:Shop.Core", "type:Money"},
+	"src/Shop.Cli/Cli.cs":    {"using:Shop.Core", "type:Money"},
+	"ext/Plugin/Plugin.cs":   {"using:Shop.Core", "type:Guard"},
 
 	"legacy/Legacy.App/Program.cs":     {"using:Legacy.Core", "ns:Legacy.App", "def:Legacy.App.Program", "type:Repository", "type:Text"},
 	"legacy/Legacy.Core/Repository.cs": {"ns:Legacy.Core", "def:Legacy.Core.Repository"},
@@ -52,7 +66,12 @@ var configs = map[string]string{
 </Project>`,
 	"src/Shop.Shared/Shop.Shared.csproj": `<Project Sdk="Microsoft.NET.Sdk" />`,
 	"src/Shop.Jobs/Shop.Jobs.csproj":     `<Project Sdk="Microsoft.NET.Sdk.Worker" />`,
+	"src/Shop.Api/Shop.Api.csproj":       `<Project Sdk="Microsoft.NET.Sdk.Web"><ItemGroup><ProjectReference Include="..\Shop.Ordering\Shop.Ordering.csproj" /></ItemGroup></Project>`,
 	"tools/Tool.fsproj":                  `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="..\src\Shop.Core\Shop.Core.csproj" /></ItemGroup></Project>`,
+	"src/Shop.Tools/Shop.Tools.csproj":   `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="$(RepoRoot)src\Shop.Core\Shop.Core.csproj" /></ItemGroup></Project>`,
+	"src/Shop.Cli/Shop.Cli.csproj":       `<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="..\Shop.Tools\Shop.Tools.csproj" /></ItemGroup></Project>`,
+	"ext/Directory.Build.props":          `<Project><ItemGroup><ProjectReference Include="$(MSBuildThisFileDirectory)..\src\Shop.Core\Shop.Core.csproj" /></ItemGroup></Project>`,
+	"ext/Plugin/Plugin.csproj":           `<Project Sdk="Microsoft.NET.Sdk" />`,
 
 	"legacy/Directory.Build.props": `<Project><ItemGroup><Using Include="Legacy.Util" /></ItemGroup></Project>`,
 	"legacy/Legacy.App/Legacy.App.csproj": "\ufeff" + `<?xml version="1.0" encoding="utf-8"?>
@@ -96,9 +115,18 @@ var configs = map[string]string{
 
 func TestResolve(t *testing.T) {
 	want := []string{
+		"ext/Plugin/Plugin.cs src/Shop.Core/Guard.cs",
 		"legacy/Legacy.App/Legacy.App.csproj legacy/Legacy.Core/Legacy.Core.csproj",
 		"legacy/Legacy.App/Program.cs legacy/Legacy.Core/Repository.cs",
 		"legacy/Legacy.App/Program.cs legacy/Legacy.Util/Text.cs",
+		"scripts/Seed.cs src/Shop.Core/Money.cs",
+		"src/Shop.Api/Program.cs src/Shop.Api/Extensions.cs",
+		"src/Shop.Api/Program.cs src/Shop.Core/Money.cs",
+		"src/Shop.Api/Program.cs src/Shop.Ordering/Order.Lines.cs",
+		"src/Shop.Api/Program.cs src/Shop.Ordering/Order.cs",
+		"src/Shop.Api/Shop.Api.csproj src/Shop.Ordering/Shop.Ordering.csproj",
+		"src/Shop.Cli/Cli.cs src/Shop.Core/Money.cs",
+		"src/Shop.Cli/Shop.Cli.csproj src/Shop.Tools/Shop.Tools.csproj",
 		"src/Shop.Ordering/Customer.cs src/Shop.Core/Guard.cs",
 		"src/Shop.Ordering/Customer.cs src/Shop.Core/Money.cs",
 		"src/Shop.Ordering/Order.cs src/Shop.Core/Entity.cs",
@@ -112,6 +140,7 @@ func TestResolve(t *testing.T) {
 		"src/Shop.Ordering/Shop.Ordering.csproj src/Shop.Shared/Shop.Shared.csproj",
 		"src/Shop.Ordering/Web/Checkout.cs src/Shop.Ordering/Order.Lines.cs",
 		"src/Shop.Ordering/Web/Checkout.cs src/Shop.Ordering/Order.cs",
+		"src/Shop.Tools/Tool.cs src/Shop.Core/Money.cs",
 		"tools/Tool.fsproj src/Shop.Core/Shop.Core.csproj",
 	}
 	if got := render(Resolve(files, configs)); strings.Join(got, "\n") != strings.Join(want, "\n") {

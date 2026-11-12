@@ -123,6 +123,25 @@ func (s *Store) UnlinkCalls(ctx context.Context, snap int64, batch int) error {
 	}
 }
 
+// CallPairs returns each pair of files of the snapshot one of which calls a
+// name the other declares, once, a file's calls of its own names aside.
+func (s *Store) CallPairs(ctx context.Context, snap int64) ([]Edge, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT DISTINCT src, dst FROM call_edges WHERE snapshot_id = ? AND src <> dst ORDER BY src, dst`, snap)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Edge
+	for rows.Next() {
+		var e Edge
+		if err := rows.Scan(&e.Src, &e.Dst); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // CallersOf returns the files that call a name declared in one of dsts, sorted.
 func (s *Store) CallersOf(ctx context.Context, snap int64, dsts []string) ([]string, error) {
 	if len(dsts) == 0 {

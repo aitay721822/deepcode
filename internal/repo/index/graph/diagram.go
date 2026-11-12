@@ -3,33 +3,53 @@ package graph
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
 // A diagram stays legible in the wiki's column: at most maxNodes directories
-// and maxEdges arrows, the busiest.
+// and maxEdges arrows, the busiest; one of fewer than minNodes says little.
 const (
 	maxNodes = 14
 	maxEdges = 24
 	maxDepth = 3
+	minNodes = 3
 )
 
 // Diagram draws the imports between the snapshot's directories, tests,
-// examples and docs aside, as a Mermaid flowchart, or returns "" when its
-// files import none of each other's. It
-// cuts directories to the most levels, at most maxDepth, that leave at most
-// maxNodes of them linked; one level is drawn trimmed if even that leaves
-// more. Long runs of folders a level folds are shortened in the labels.
+// examples and docs aside, as a Mermaid flowchart. It cuts directories to the
+// most levels, at most maxDepth, that leave at most maxNodes of them linked;
+// one level is drawn trimmed if even that leaves more. When that draws fewer
+// than minNodes, as for a package and its middleware folder, or a folder
+// whose files import only each other, the directory most links lead into at
+// that level is drawn as its files, linked by imports and calls, if that
+// draws more. Long runs of folders a level folds are shortened in the
+// labels. It returns "" when the snapshot has no imports, or draws nothing.
 func (g *Graph) Diagram(ctx context.Context, snap int64) (string, error) {
 	edges, err := g.Store.Edges(ctx, snap)
 	if err != nil || len(edges) == 0 {
 		return "", err
 	}
 	t := levels(edges)
-	var dirs []DirEdge
-	for depth := maxDepth; depth >= 1; depth-- {
-		if dirs = t.group(depth); len(nodes(dirs)) <= maxNodes {
-			break
+	depth := maxDepth
+	dirs := t.group(depth)
+	for len(nodes(dirs)) > maxNodes && depth > 1 {
+		depth--
+		dirs = t.group(depth)
+	}
+	if len(nodes(dirs)) < minNodes {
+		calls, err := g.Store.CallPairs(ctx, snap)
+		if err != nil {
+			return "", err
+		}
+		seen := map[edge]bool{}
+		u := levels(slices.DeleteFunc(append(slices.Clone(edges), calls...), func(e edge) bool { // a pair both imported and called once
+			dup := seen[e]
+			seen[e] = true
+			return dup
+		}))
+		if files := u.expand(depth); min(len(nodes(files)), maxNodes) > len(nodes(dirs)) {
+			t, dirs = u, files
 		}
 	}
 	for i, e := range dirs {

@@ -4,14 +4,19 @@ import (
 	"encoding/xml"
 	"io"
 	"path"
+	"slices"
 	"strings"
 )
 
 // project is what a project file, or a Directory.Build.props, says about the
 // build: the projects it references and the namespaces every file of it uses.
+// It is open when it references one by a path this reads no project from: an
+// MSBuild property or wildcard in it ($(RepoRoot)src\X.csproj), or a
+// ProjectReference its Directory.Build.props adds.
 type project struct {
 	refs   []string // ProjectReference, as the file spells them (..\Core\Core.csproj)
 	usings []string // <Using Include="X.Y" />, a global using
+	open   bool
 }
 
 // readProject reads a project file, SDK-style or the old ToolsVersion kind:
@@ -71,12 +76,12 @@ func hasSources(p string) bool {
 
 // projects reads every project file of configs, F# ones too, with the global
 // usings of the nearest Directory.Build.props at or above it, as MSBuild
-// imports only that one.
+// imports only that one, and whether it is open.
 func projects(configs map[string]string) map[string]project {
-	props := map[string][]string{} // directory → its Directory.Build.props' usings
+	props := map[string]project{} // directory → its Directory.Build.props
 	for p, content := range configs {
 		if strings.EqualFold(path.Base(p), "Directory.Build.props") {
-			props[dir(p)] = readProject(content).usings
+			props[dir(p)] = readProject(content)
 		}
 	}
 	out := map[string]project{}
@@ -86,7 +91,8 @@ func projects(configs map[string]string) map[string]project {
 		}
 		pr := readProject(content)
 		u, _ := nearest(props, dir(p))
-		pr.usings = append(pr.usings, u...)
+		pr.usings = append(pr.usings, u.usings...)
+		pr.open = len(u.refs) > 0 || slices.ContainsFunc(pr.refs, func(r string) bool { return strings.ContainsAny(r, "$*") })
 		out[p] = pr
 	}
 	return out

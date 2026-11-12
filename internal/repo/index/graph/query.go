@@ -70,7 +70,8 @@ func (g *Graph) Impact(ctx context.Context, base, snap int64, changed map[string
 	return out, nil
 }
 
-// DirEdge counts the imports from the files of one directory into another's.
+// DirEdge counts the imports from the files of one directory into another's;
+// in a diagram that draws a directory as its files (expand), a file is one.
 type DirEdge struct {
 	From, To string
 	Count    int
@@ -91,9 +92,37 @@ func group(edges []edge, depth int) []DirEdge { return levels(edges).group(depth
 
 // group is group for the tree's edges.
 func (t tree) group(depth int) []DirEdge {
+	return t.count(func(f string) string { return t.cut(f, depth) })
+}
+
+// expand is group with the directory the most of the edges lead into, from
+// it or another, as its files, the first in path order on a tie: the pairs
+// of them, and of them and the other directories.
+func (t tree) expand(depth int) []DirEdge {
+	into := map[string]int{}
+	for i := 1; i < len(t.pairs); i += 2 {
+		into[t.cut(t.pairs[i], depth)]++
+	}
+	open := ""
+	for d, n := range into {
+		if n > into[open] || n == into[open] && d < open {
+			open = d
+		}
+	}
+	return t.count(func(f string) string {
+		if d := t.cut(f, depth); d != open {
+			return d
+		}
+		return f
+	})
+}
+
+// count counts the edges between the nodes node names their files by, those
+// within one aside, most first.
+func (t tree) count(node func(string) string) []DirEdge {
 	counts := map[[2]string]int{}
 	for i := 0; i < len(t.pairs); i += 2 {
-		if from, to := t.cut(t.pairs[i], depth), t.cut(t.pairs[i+1], depth); from != to {
+		if from, to := node(t.pairs[i]), node(t.pairs[i+1]); from != to {
 			counts[[2]string{from, to}]++
 		}
 	}

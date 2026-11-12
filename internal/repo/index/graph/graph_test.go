@@ -355,6 +355,16 @@ func TestDiagram(t *testing.T) {
 	if got := group([]edge{{Src: "a/x.go", Dst: "b/y.go"}, {Src: "c/x.go", Dst: "b/y.go"}, {Src: "c/z.go", Dst: "b/w.go"}}, 1); !reflect.DeepEqual(got, []DirEdge{{"c", "b", 2}, {"a", "b", 1}}) {
 		t.Errorf("busiest first: %+v", got)
 	}
+	// A package and its middleware: the package, which the most links lead
+	// into, is drawn as its files; on a tie, the first directory.
+	mw := []edge{{Src: "middleware/a.go", Dst: "mux.go"}, {Src: "middleware/b.go", Dst: "mux.go"}, {Src: "middleware/a.go", Dst: "tree.go"},
+		{Src: "mux.go", Dst: "tree.go"}, {Src: "middleware/a.go", Dst: "middleware/b.go"}}
+	if got := levels(mw).expand(maxDepth); !reflect.DeepEqual(got, []DirEdge{{"middleware", "mux.go", 2}, {"middleware", "tree.go", 1}, {"mux.go", "tree.go", 1}}) {
+		t.Errorf("expanded: %+v", got)
+	}
+	if got := levels([]edge{{Src: "b/x.go", Dst: "b/y.go"}, {Src: "a/x.go", Dst: "a/y.go"}}).expand(1); !reflect.DeepEqual(got, []DirEdge{{"a/x.go", "a/y.go", 1}}) {
+		t.Errorf("expanded on a tie: %+v", got)
+	}
 	var full []edge // six directories all importing each other: 30 arrows
 	for i := range 6 {
 		for j := range 6 {
@@ -368,5 +378,37 @@ func TestDiagram(t *testing.T) {
 	}
 	if draw(nil) != "" {
 		t.Error("no edges, no diagram")
+	}
+}
+
+// TestDiagramFiles: a diagram of fewer than three directories draws the one
+// most links lead into as its files, linked by imports and calls, a call pair
+// once and a file's own calls aside (TestLinkStale: one that would draw no
+// more stays).
+func TestDiagramFiles(t *testing.T) {
+	db := open(t)
+	g := &Graph{Store: &store.Store{DB: db}}
+	run(t, db, `INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r')`)
+	run(t, db, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'a', 'ready')`)
+	run(t, db, `INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'index.js', 'lib/express.js'), (1, 'lib/express.js', 'lib/app.js')`)
+	run(t, db, `INSERT INTO call_edges(snapshot_id, src, dst, name, src_line, dst_line) VALUES (1, 'lib/app.js', 'lib/view.js', 'render', 3, 1),
+		(1, 'lib/app.js', 'lib/view.js', 'lookup', 4, 9), (1, 'lib/app.js', 'lib/app.js', 'init', 5, 1), (1, 'lib/express.js', 'lib/app.js', 'app', 2, 1)`)
+	want := "flowchart TD\n  n0[\"(root)\"]\n  n1[\"lib/express.js\"]\n  n2[\"lib/app.js\"]\n  n3[\"lib/view.js\"]\n  n0 --> n1\n  n2 --> n3\n  n1 --> n2\n"
+	if got, err := g.Diagram(context.Background(), 1); err != nil || got != want {
+		t.Errorf("diagram %q %v", got, err)
+	}
+	if got, err := g.Store.CallPairs(context.Background(), 1); err != nil || !reflect.DeepEqual(got, []edge{{Src: "lib/app.js", Dst: "lib/view.js"}, {Src: "lib/express.js", Dst: "lib/app.js"}}) {
+		t.Errorf("call pairs %+v %v", got, err)
+	}
+	// Twenty folders at two levels and more, one at the first: the files are
+	// drawn at the level the directories are.
+	run(t, db, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (2, 1, 'b', 'ready')`)
+	run(t, db, `INSERT INTO file_edges(snapshot_id, src, dst) VALUES (2, 'z/y.go', 'z/w.go')`)
+	for i := range 20 {
+		run(t, db, `INSERT INTO file_edges(snapshot_id, src, dst) VALUES (2, ?, 'z/y.go')`, fmt.Sprintf("a/b%02d/c/x.go", i))
+	}
+	want = "flowchart TD\n  n0[\"a\"]\n  n1[\"z/y.go\"]\n  n2[\"z/w.go\"]\n  n0 --> n1\n  n1 --> n2\n"
+	if got, err := g.Diagram(context.Background(), 2); err != nil || got != want {
+		t.Errorf("diagram at one level %q %v", got, err)
 	}
 }

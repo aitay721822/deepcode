@@ -55,7 +55,11 @@ func parse(facts []string) unit {
 // edges {src, dst}: src uses a type dst declares, or src's project references
 // dst. A file belongs to the project file in its nearest directory that has
 // one, and the global usings of any file of that project, of the project file
-// and of its Directory.Build.props apply to all of the project's files.
+// and of its Directory.Build.props apply to all of the project's files. A
+// file sees the types its own project declares, those of the projects it
+// references, directly or through another, as SDK builds pass references on,
+// and those of files outside any project; a file outside any sees them all,
+// as does one whose project reaches an open one (project).
 func Resolve(files map[string][]string, configs map[string]string) [][2]string {
 	projs := projects(configs)
 	owners := map[string]string{} // directory → its C# or VB.NET project file
@@ -81,8 +85,48 @@ func Resolve(files map[string][]string, configs map[string]string) [][2]string {
 		globals[p] = append(globals[p], pr.usings...)
 	}
 	out := references(projs, configs)
+	refs := map[string][]string{} // project file → those it references
+	for _, e := range out {
+		refs[e[0]] = append(refs[e[0]], e[1])
+	}
+	of := map[string]string{} // file → its project
 	for i, p := range paths {
-		out = append(out, uses(p, units[i], scopes(units[i], globals[owner[i]]), defs)...)
+		of[p] = owner[i]
+	}
+	reached := map[string]map[string]bool{} // project file → it and those it reaches, nil for all
+	for i, p := range paths {
+		r, ok := reached[owner[i]]
+		if !ok {
+			r = reach(owner[i], refs, projs)
+			reached[owner[i]] = r
+		}
+		sees := func(f string) bool { return r == nil || of[f] == "" || r[of[f]] }
+		out = append(out, uses(p, units[i], scopes(units[i], globals[owner[i]]), defs, sees)...)
+	}
+	return out
+}
+
+// reach is project p and every project it references, directly or through
+// another; nil, all of them, for none (a file outside any project) and when
+// one it reaches is open, as a reference this cannot read may name any.
+func reach(p string, refs map[string][]string, projs map[string]project) map[string]bool {
+	if p == "" {
+		return nil
+	}
+	out := map[string]bool{}
+	open := false
+	var walk func(string)
+	walk = func(q string) {
+		if !out[q] {
+			out[q], open = true, open || projs[q].open
+			for _, r := range refs[q] {
+				walk(r)
+			}
+		}
+	}
+	walk(p)
+	if open {
+		return nil
 	}
 	return out
 }
@@ -107,14 +151,14 @@ func scopes(u unit, globals []string) []string {
 }
 
 // uses are the edges from file p: to the types its static usings and
-// aliases name, then to the files declaring each type it refers to, up to
-// maxEdges files.
-func uses(p string, u unit, scopes []string, defs map[string][]string) [][2]string {
+// aliases name, then to the files declaring each type it refers to, of those
+// it sees, up to maxEdges files.
+func uses(p string, u unit, scopes []string, defs map[string][]string, sees func(string) bool) [][2]string {
 	seen := map[string]bool{p: true}
 	var out [][2]string
 	add := func(dsts []string) {
 		for _, d := range dsts {
-			if !seen[d] && len(out) < maxEdges {
+			if !seen[d] && sees(d) && len(out) < maxEdges {
 				seen[d] = true
 				out = append(out, [2]string{p, d})
 			}
@@ -124,22 +168,23 @@ func uses(p string, u unit, scopes []string, defs map[string][]string) [][2]stri
 		add(defs[t])
 	}
 	for _, r := range u.refs {
-		add(find(r, scopes, defs))
+		add(find(r, scopes, defs, sees))
 	}
 	return out
 }
 
 // find is the files declaring the type name refers to in the first scope
-// that has it; failing that, name less its last part (Settings.Instance is a
-// property of Settings, Status.Open a member of Status).
-func find(name string, scopes []string, defs map[string][]string) []string {
+// that has it declared in a file sees takes; failing that, name less its
+// last part (Settings.Instance is a property of Settings, Status.Open a
+// member of Status).
+func find(name string, scopes []string, defs map[string][]string, sees func(string) bool) []string {
 	for ; name != ""; name = parent(name) {
 		for _, s := range scopes {
 			q := name
 			if s != "" {
 				q = s + "." + name
 			}
-			if fs := defs[q]; len(fs) > 0 {
+			if fs := defs[q]; slices.ContainsFunc(fs, sees) {
 				return fs
 			}
 		}
