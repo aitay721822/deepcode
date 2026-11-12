@@ -284,24 +284,29 @@ func TestImpactTypeBody(t *testing.T) {
 	}
 }
 
-// TestImpactCalls (item 8): a file that calls a changed declaration by name,
-// without importing its file, reaches the impact too.
-func TestImpactCalls(t *testing.T) {
+// TestImpactTypeMethodBody (item 4, revised): a class's methods are masked out
+// of its text, so a method body that changes reaches no importer, while a
+// field that changes does.
+func TestImpactTypeMethodBody(t *testing.T) {
 	ctx := context.Background()
 	db := open(t)
 	g := &Graph{Store: &store.Store{DB: db}}
 	run(t, db, `INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://example.com/o/r', 'o', 'r')`)
 	run(t, db, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'a', 'ready'), (2, 1, 'b', 'ready')`)
 	for _, snap := range []int64{1, 2} {
-		addFile(t, db, snap, "pkg/a.go", "go", "package pkg\n\nfunc A() {}\n")
-		addFile(t, db, snap, "main.go", "go", "package main\n\nfunc main() { pkg.A() }\n")
+		body := "1"
+		if snap == 2 {
+			body = "2"
+		}
+		addFile(t, db, snap, "pkg/c.cs", "csharp", "class C {\n  void M() { return "+body+"; }\n}\n")
+		addFile(t, db, snap, "main.cs", "csharp", "class Main { void F() { new C(); } }\n")
+		run(t, db, `INSERT INTO file_edges(snapshot_id, src, dst) VALUES (?, 'main.cs', 'pkg/c.cs')`, snap)
+		run(t, db, `INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line, signature)
+			VALUES (?, 'pkg/c.cs', 'C', 'C', 'class', 1, 3, 'class C {'), (?, 'pkg/c.cs', 'M', 'C.M', 'method', 2, 2, 'void M()')`, snap, snap)
 	}
-	run(t, db, `INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line, signature)
-		VALUES (1, 'pkg/a.go', 'A', 'A', 'function', 3, 3, 'func A() {'), (2, 'pkg/a.go', 'A', 'A', 'function', 3, 3, 'func A(n int) {')`)
-	run(t, db, `INSERT INTO call_edges(snapshot_id, src, dst, name, src_line, dst_line) VALUES (1, 'main.go', 'pkg/a.go', 'A', 3, 3), (2, 'main.go', 'pkg/a.go', 'A', 3, 3)`)
-	got, err := g.Impact(ctx, 1, 2, map[string]bool{"pkg/a.go": true})
-	if err != nil || !reflect.DeepEqual(got, map[string]bool{"main.go": true}) {
-		t.Errorf("a name-based caller reached %v (%v), want main.go", got, err)
+	got, err := g.Impact(ctx, 1, 2, map[string]bool{"pkg/c.cs": true})
+	if err != nil || len(got) != 0 {
+		t.Errorf("a method body's change reached %v (%v)", got, err)
 	}
 }
 

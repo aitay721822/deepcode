@@ -139,8 +139,9 @@ func (s *Store) Dependencies(ctx context.Context, snap int64, paths []string, li
 
 // Declarations returns the declarations of the snapshot's files in paths,
 // each file's in an order that moving them within the file keeps: a function
-// by its signature, a type by the text it spans, so a field or a method that
-// changes reaches it; a class spans its methods' bodies too.
+// by its signature, a type by the text it spans with its methods' lines left
+// out, so a field or a variant that changes reaches it while a method body
+// stays its own declaration's.
 func (s *Store) Declarations(ctx context.Context, snap int64, paths map[string]bool) (map[string][]string, error) {
 	if len(paths) == 0 {
 		return map[string][]string{}, nil
@@ -172,21 +173,45 @@ func (s *Store) Declarations(ctx context.Context, snap int64, paths map[string]b
 		return nil, err
 	}
 	defer rows.Close()
-	parts := map[string][]string{}
+	type sym struct {
+		path, kind, qual, sig string
+		start, end            int
+	}
+	var syms []sym
 	for rows.Next() {
-		var p, kind, qual, sig string
-		var start, end int
-		if err := rows.Scan(&p, &kind, &qual, &sig, &start, &end); err != nil {
+		var v sym
+		if err := rows.Scan(&v.path, &v.kind, &v.qual, &v.sig, &v.start, &v.end); err != nil {
 			return nil, err
 		}
-		if paths[p] {
-			parts[p] = append(parts[p], declaration(kind, qual, sig, texts[p], start, end))
+		if paths[v.path] {
+			syms = append(syms, v)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// A type's methods are masked out of its text: a method's body is its own
+	// declaration's business, and its signature is compared as one.
+	bodies := map[string]map[int]bool{}
+	for _, v := range syms {
+		if v.kind != "function" && v.kind != "method" && v.kind != "constructor" {
+			continue
+		}
+		if bodies[v.path] == nil {
+			bodies[v.path] = map[int]bool{}
+		}
+		for i := v.start; i <= v.end; i++ {
+			bodies[v.path][i] = true
+		}
+	}
+	parts := map[string][]string{}
+	for _, v := range syms {
+		parts[v.path] = append(parts[v.path], declaration(v.kind, v.qual, v.sig, texts[v.path], v.start, v.end, bodies[v.path]))
 	}
 	for _, ds := range parts {
 		slices.Sort(ds)
 	}
-	return parts, rows.Err()
+	return parts, nil
 }
 
 // types are the declaration kinds a change of body is a change of the
@@ -197,9 +222,9 @@ var types = map[string]bool{"annotation": true, "class": true, "delegate": true,
 // declaration is a symbol's fingerprint: a type's text from its first to its
 // last line, the line numbers left out so moving it keeps it, or a function's
 // signature; the signature when the text is gone.
-func declaration(kind, qual, sig, content string, start, end int) string {
+func declaration(kind, qual, sig, content string, start, end int, skip map[int]bool) string {
 	if types[kind] && content != "" {
-		if body, ok := declarationText(content, start, end); ok {
+		if body, ok := declarationText(content, start, end, skip); ok {
 			sum := sha256.Sum256([]byte(body))
 			return kind + " " + qual + " sha256:" + hex.EncodeToString(sum[:])
 		}
@@ -208,13 +233,20 @@ func declaration(kind, qual, sig, content string, start, end int) string {
 }
 
 // declarationText is content's lines start to end, both counted from 1 and
-// included; false when the range is past them.
-func declarationText(content string, start, end int) (string, bool) {
+// included, the lines skip holds left out (a type's methods); false when the
+// range is past them.
+func declarationText(content string, start, end int, skip map[int]bool) (string, bool) {
 	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
 	if start < 1 || start > len(lines) || end < start {
 		return "", false
 	}
-	return strings.Join(lines[start-1:min(end, len(lines))], "\n"), true
+	var body []string
+	for i := start; i <= min(end, len(lines)); i++ {
+		if !skip[i] {
+			body = append(body, lines[i-1])
+		}
+	}
+	return strings.Join(body, "\n"), true
 }
 
 // scanPaths reads the paths that a query of one text column returned.
