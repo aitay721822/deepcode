@@ -126,7 +126,7 @@ func TestBench(t *testing.T) {
 		r.parallel = append(r.parallel, n)
 	}
 	rep := report{Started: time.Now().UTC().Format(time.RFC3339), Model: os.Getenv("DEEPCODE_CHAT_MODEL"),
-		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Temperature: os.Getenv("DEEPCODE_TEMPERATURE"), Deepcode: head(), Judged: true}
+		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Temperature: os.Getenv("DEEPCODE_TEMPERATURE"), ChatSchema: schema(), Deepcode: head(), Judged: true}
 	if r.ret.Embed != nil {
 		rep.EmbedModel = r.ret.Embed.ModelName
 	}
@@ -200,7 +200,7 @@ func chatModel(t *testing.T, measure func(ai.Usage)) *ai.OpenAI {
 	if model == "" {
 		return nil
 	}
-	llm := &ai.OpenAI{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model,
+	llm := &ai.OpenAI{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model, Schema: schema(),
 		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Measure: measure}
 	if s := os.Getenv("DEEPCODE_TEMPERATURE"); s != "" {
 		temp, err := strconv.ParseFloat(s, 64)
@@ -211,8 +211,8 @@ func chatModel(t *testing.T, measure func(ai.Usage)) *ai.OpenAI {
 	}
 	window, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_CHAT_CONTEXT"), "0")) // 0, unknown, when unset
 	ratio, err2 := strconv.ParseFloat(cmp.Or(os.Getenv("DEEPCODE_COMPACT_RATIO"), "0.8"), 64)
-	if err != nil || window < 0 || window > 0 && window <= llm.Room() || err2 != nil || !(ratio > 0 && ratio <= 1) { // NaN too
-		t.Fatalf("DEEPCODE_CHAT_CONTEXT %q, DEEPCODE_COMPACT_RATIO %q: want none or more than %d tokens, and a ratio above 0 and at most 1", os.Getenv("DEEPCODE_CHAT_CONTEXT"), os.Getenv("DEEPCODE_COMPACT_RATIO"), llm.Room())
+	if err != nil || window < 0 || window > 0 && window <= llm.Room() || err2 != nil || !(ratio > 0 && ratio <= 1) || llm.Schema != ai.SchemaServer && llm.Schema != ai.SchemaPrompt { // NaN too
+		t.Fatalf("DEEPCODE_CHAT_CONTEXT %q, DEEPCODE_COMPACT_RATIO %q, DEEPCODE_CHAT_SCHEMA %q: want none or more than %d tokens, a ratio above 0 and at most 1, and server or prompt", os.Getenv("DEEPCODE_CHAT_CONTEXT"), os.Getenv("DEEPCODE_COMPACT_RATIO"), llm.Schema, llm.Room())
 	}
 	llm.Window, llm.CompactRatio = window, ratio
 	return llm

@@ -442,7 +442,7 @@ func TestCodemap(t *testing.T) {
 		}
 	}
 	m := codemap.Request{Repo: "o/r", Commit: "abc", Question: "How is a Page rendered?", Language: "English"} // as Ask asks
-	if err := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", MaxTokens: 100, Window: (codemap.Fixed(m, harness.New(&ai.OpenAI{}, tokens).Prompt) + 2000) * 10 / 8}).Ask(ctx, Request{RepoID: 1, Question: m.Question, Codemap: true, UserID: 1}, func(string, any) {}); !errors.As(err, new(*harness.ErrSmall)) {
+	if err := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", MaxTokens: 100, Window: (codemap.Fixed(m, &ai.OpenAI{}, harness.New(&ai.OpenAI{}, tokens).Prompt) + 2000) * 10 / 8}).Ask(ctx, Request{RepoID: 1, Question: m.Question, Codemap: true, UserID: 1}, func(string, any) {}); !errors.As(err, new(*harness.ErrSmall)) {
 		t.Fatalf("a context without the retry's room: %v", err)
 	}
 }

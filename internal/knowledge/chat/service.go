@@ -47,7 +47,7 @@ var (
 	errBusy     = fmt.Errorf("同時最多只能產生 %d 個回答；請等其中一個完成後再提問", maxAsking)
 	errModel    = errors.New("語言模型沒有回應；請稍後再試")
 	errMap      = errors.New("語言模型沒有畫出有效的 Codemap；請再試一次，或改用一般問答")
-	errSchema   = errors.New("語言模型伺服器不支援 structured outputs（json_schema），無法畫出 Codemap；請管理員改用支援的端點")
+	errSchema   = errors.New("語言模型的回覆不是 Codemap 的 JSON，無法畫出 Codemap；請再試一次，或改用一般問答")
 	errContext  = errors.New("問題連同程式碼超出了語言模型的上下文；請管理員把 DEEPCODE_CHAT_CONTEXT 設為模型的上下文大小")
 )
 
@@ -181,7 +181,7 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	fit := harness.New(s.Chat, s.Tokens)
 	a := asking{conv: conv.id, fit: fit, fixed: fit.Prompt(prompt(repo, sha, nil, "", "", q, lang)), turns: turns, page: bg, rest: req.Deep && !req.Codemap, emit: emit}
 	if req.Codemap {
-		a.fixed = codemap.Fixed(m, fit.Prompt)
+		a.fixed = codemap.Fixed(m, s.Chat, fit.Prompt)
 	}
 	// The gathering's budget: the evidence's share of the room, the conversation
 	// fitted only to what the gathered evidence leaves of it.

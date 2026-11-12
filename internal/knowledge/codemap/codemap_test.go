@@ -121,7 +121,7 @@ func model(t *testing.T, replies ...string) (*ai.OpenAI, *[][]ai.Message) {
 // ai.ErrSchema; the count drawing hears runs on over both replies; the retry
 // is no larger than Fixed holds, a map past maxEcho filling it; an empty
 // trace list is the model's answer; the map is written out with a citation
-// per location.
+// per location. So under either ai.Schema setting.
 func TestDraw(t *testing.T) {
 	made := strings.Replace(good, "src/server/router.go", "nope.go", 1)
 	long := strings.Replace(made, `"title":"Auth"`, `"title":"x`+strings.Repeat("é", maxEcho)+`"`, 1) // 2 bytes each, after 11: cut inside one
@@ -141,31 +141,34 @@ func TestDraw(t *testing.T) {
 		{[]string{made, made}, 0, ErrInvalid, made},
 		{[]string{`{"title":"","description":"","traces":[]}`}, 0, nil, ""},
 	} {
-		m, asked := model(t, c.replies...)
-		var heard []int
-		got, err := Draw(context.Background(), m, req, func(n int) { heard = append(heard, n) })
-		total := 0
-		for _, r := range c.replies {
-			total += len(r)
-		}
-		if !errors.Is(err, c.err) || len(got.Traces) != c.traces || len(*asked) != len(c.replies) || heard[len(heard)-1] != total {
-			t.Errorf("%.30q: %+v %v after %d calls, heard %v", c.replies[0], got, err, len(*asked), heard)
-			continue
-		}
-		if len(*asked) < 2 {
-			continue
-		}
-		first, retry, spent := (*asked)[0], (*asked)[1], 0
-		for _, msg := range retry {
-			spent += utf8.RuneCountInString(msg.Content)
-		}
-		fixed := Fixed(req, func(p ai.Prompt) int { n, _ := p.Size(utf8.RuneCountInString); return n }) // in characters, at least as many as tokens
-		if spent > fixed || c.echo == ascii[:maxEcho]+"…" && fixed-spent != len("…")-1 {
-			t.Errorf("%.30q: the retry sent %d characters, Fixed %d", c.replies[0], spent, fixed)
-		}
-		if n := len(retry); n != len(first)+2 || retry[n-2] != (ai.Message{Role: "assistant", Content: c.echo}) ||
-			retry[n-1] != (ai.Message{Role: "user", Content: groundNote}) || retry[n-3].Content != first[len(first)-1].Content {
-			t.Errorf("%.30q: the retry ends %q", c.replies[0], retry[max(n-3, 0):])
+		for _, schema := range []string{ai.SchemaServer, ai.SchemaPrompt} {
+			m, asked := model(t, c.replies...)
+			m.Schema = schema
+			var heard []int
+			got, err := Draw(context.Background(), m, req, func(n int) { heard = append(heard, n) })
+			total := 0
+			for _, r := range c.replies {
+				total += len(r)
+			}
+			if !errors.Is(err, c.err) || len(got.Traces) != c.traces || len(*asked) != len(c.replies) || heard[len(heard)-1] != total {
+				t.Errorf("%.30q: %+v %v after %d calls, heard %v", c.replies[0], got, err, len(*asked), heard)
+				continue
+			}
+			if len(*asked) < 2 {
+				continue
+			}
+			first, retry, spent := (*asked)[0], (*asked)[1], 0
+			for _, msg := range retry {
+				spent += utf8.RuneCountInString(msg.Content)
+			}
+			fixed := Fixed(req, m, func(p ai.Prompt) int { n, _ := p.Size(utf8.RuneCountInString); return n }) // in characters, at least as many as tokens
+			if spent > fixed || c.echo == ascii[:maxEcho]+"…" && fixed-spent != len("…")-1 {
+				t.Errorf("%.30q: the retry sent %d characters, Fixed %d", c.replies[0], spent, fixed)
+			}
+			if n := len(retry); n != len(first)+2 || retry[n-2] != (ai.Message{Role: "assistant", Content: c.echo}) ||
+				retry[n-1] != (ai.Message{Role: "user", Content: groundNote}) || retry[n-3].Content != first[len(first)-1].Content {
+				t.Errorf("%.30q: the retry ends %q", c.replies[0], retry[max(n-3, 0):])
+			}
 		}
 	}
 	m, _ := model(t, good)

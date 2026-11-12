@@ -38,15 +38,16 @@ var defaults = map[string]any{
 	"chat_api_key":      "",
 	"chat_model":        "", // "" turns chat and the wiki off
 	"chat_api":          "completions",
-	"embed_base_url":    "",  // "" = chat_base_url
-	"embed_api_key":     "",  // "" = chat_api_key
-	"embed_model":       "",  // "" turns vector search off
-	"reasoning_effort":  "",  // "" leaves it to the server
-	"temperature":       nil, // unset leaves it to the server; a number, as 0.2, in the file
-	"max_output_tokens": 0,   // 0 leaves it to the server
-	"chat_context":      0,   // the model's context in tokens; 0: unknown till a server reports it
-	"compact_ratio":     0.8, // the share of chat_context a request fills before it is made smaller
-	"chat_tokenizer":    "",  // the chat model's tokenizer.json; "" counts its tokens by OpenAI's o200k_base
+	"chat_schema":       "server", // or prompt: a request's JSON schema in its system message, sending no response_format
+	"embed_base_url":    "",       // "" = chat_base_url
+	"embed_api_key":     "",       // "" = chat_api_key
+	"embed_model":       "",       // "" turns vector search off
+	"reasoning_effort":  "",       // "" leaves it to the server
+	"temperature":       nil,      // unset leaves it to the server; a number, as 0.2, in the file
+	"max_output_tokens": 0,        // 0 leaves it to the server
+	"chat_context":      0,        // the model's context in tokens; 0: unknown till a server reports it
+	"compact_ratio":     0.8,      // the share of chat_context a request fills before it is made smaller
+	"chat_tokenizer":    "",       // the chat model's tokenizer.json; "" counts its tokens by OpenAI's o200k_base
 	"llm_timeout":       5 * time.Minute,
 	"llm_rpm":           0, // 0 = unlimited
 
@@ -75,6 +76,10 @@ var efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 // apis are the APIs a chat model can be asked by: Chat Completions and the
 // Responses API (ai.Completions, ai.Responses).
 var apis = []string{"completions", "responses"}
+
+// schemas are where a request for JSON gives its schema: as response_format,
+// or in its system message (ai.SchemaServer, ai.SchemaPrompt).
+var schemas = []string{"server", "prompt"}
 
 // secrets are never shown in an error, which ends up in the log.
 var secrets = []string{"chat_api_key", "embed_api_key", "admin_password", "secret_key"}
@@ -116,6 +121,7 @@ func Load() (cfg app.Config, addr string, err error) {
 
 		ChatURL: chatURL, ChatKey: chatKey, ChatModel: p.str("chat_model"),
 		ChatAPI:         p.oneOf("chat_api", apis),
+		ChatSchema:      p.oneOf("chat_schema", schemas),
 		EmbedURL:        cmp.Or(p.url("embed_base_url"), chatURL),
 		EmbedKey:        cmp.Or(p.str("embed_api_key"), chatKey),
 		EmbedModel:      p.str("embed_model"),

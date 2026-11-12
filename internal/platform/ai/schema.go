@@ -11,20 +11,36 @@ import (
 	"github.com/invopop/jsonschema"
 )
 
-// ErrSchema: an answer asked for in a JSON schema (structured outputs) that is
-// not that JSON. A server that refuses the request fails with its own words,
-// as for any other request.
-var ErrSchema = errors.New("the chat endpoint must support structured outputs (json_schema)")
+// ErrSchema: an answer asked for in a JSON schema that is not that JSON. A
+// server that refuses the request fails with its own words, as for any other
+// request.
+var ErrSchema = errors.New("the model's answer is not the JSON its schema asks for")
+
+// Where a request for JSON gives its schema (OpenAI.Schema).
+const (
+	// SchemaServer sends it as response_format, OpenAI's structured outputs:
+	// the default.
+	SchemaServer = "server"
+	// SchemaPrompt writes it last in the request's system message and sends no
+	// response_format, for a server that holds the model to no schema anyway
+	// and sends an answer in one asks for only once it is whole (Strata).
+	SchemaPrompt = "prompt"
+)
+
+// SchemaLine opens the schema a request's system message holds under
+// SchemaPrompt.
+const SchemaLine = "Reply with only JSON matching this JSON schema:"
 
 // Format is a structured output: answers asked for in the JSON schema of a T
 // and read into a T.
 type Format[T any] struct{ schema }
 
-// schema is a JSON schema, under the name a request gives it, and resolved
-// to check answers by.
+// schema is a JSON schema, under the name a request gives it, as its JSON
+// text, and resolved to check answers by.
 type schema struct {
 	Name  string
 	JSON  map[string]any
+	text  string
 	check *checker.Resolved
 }
 
@@ -86,7 +102,7 @@ func compile(name string, data []byte) (schema, error) {
 	if err != nil {
 		return schema{}, err
 	}
-	s := schema{Name: name, JSON: make(map[string]any, len(raw)), check: check}
+	s := schema{Name: name, JSON: make(map[string]any, len(raw)), text: string(data), check: check}
 	for k, v := range raw {
 		s.JSON[k] = v
 	}
@@ -205,9 +221,14 @@ func (e *DecodeError) Unwrap() error { return e.Err }
 // outline, three objects deep; written a key a line, in none of 40.
 const indented = "Write the JSON indented, each key on a line of its own."
 
-// JSON is p as StreamJSON sends it, its instructions ending with indented:
-// what a request for JSON is sized by.
-func (p Prompt) JSON() Prompt {
+// Prompt is p as StreamJSON sends it to c for f's JSON, what such a request
+// is sized by: its instructions end, under SchemaPrompt, with SchemaLine and
+// f's schema, then with indented. The first request and a repair after it
+// hold the same instructions, so a prompt cache keeps them.
+func (f Format[T]) Prompt(c *OpenAI, p Prompt) Prompt {
+	if c.Schema == SchemaPrompt {
+		p.Static += "\n\n" + SchemaLine + "\n" + f.text
+	}
 	if p.Static == "" {
 		p.Static = indented
 	} else {
@@ -216,12 +237,17 @@ func (p Prompt) JSON() Prompt {
 	return p
 }
 
-// StreamJSON streams c's answer to p.JSON() in f's JSON, relaying its text as
-// it comes, and reads it into a T (Decode); reply is the answer as written. An
-// answer that is not f's JSON is an error wrapping ErrSchema; one cut at the
-// output budget says so instead.
+// StreamJSON streams c's answer to f.Prompt(c, p) in f's JSON, relaying its
+// text as it comes, and reads it into a T (Decode); reply is the answer as
+// written. Under SchemaPrompt it sends no response_format. An answer that is
+// not f's JSON is an error wrapping ErrSchema; one cut at the output budget
+// says so instead.
 func StreamJSON[T any](ctx context.Context, c *OpenAI, p Prompt, f Format[T], onDelta func(string)) (v T, reply string, err error) {
-	reply, spent, err := c.stream(ctx, p.JSON().messages(), &f.schema, onDelta)
+	s := &f.schema
+	if c.Schema == SchemaPrompt {
+		s = nil
+	}
+	reply, spent, err := c.stream(ctx, f.Prompt(c, p).messages(), s, onDelta)
 	if err != nil {
 		return v, reply, err
 	}

@@ -362,7 +362,7 @@ const summaryPrompt = `You sum up the earlier part of a conversation about a rep
 // a summary cut to its share or to maxSummary loses topics before them.
 func (f *Fit) summarize(ctx context.Context, prior string, messages []ai.Message) (string, error) {
 	p := ai.Prompt{Static: summaryPrompt}
-	room := f.Room() - f.tokens.Count(p.JSON().Static) - f.tokens.Count(prior) - 300 // the request's own lines, and the schema's
+	room := f.Room() - f.tokens.Count(summedFormat.Prompt(f.model, p).Static) - f.tokens.Count(prior) - 300 // the request's own lines, and the schema's
 	each := room / max(len(messages), 1)
 	if each < 60 {
 		return "", errors.New("the model's context has no room to sum up the conversation")

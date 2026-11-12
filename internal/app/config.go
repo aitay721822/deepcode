@@ -13,6 +13,7 @@ type Config struct {
 
 	ChatURL, ChatKey, ChatModel    string   // ChatModel "" turns chat and the wiki off
 	ChatAPI                        string   // ai.Completions or ai.Responses: how the chat model is asked
+	ChatSchema                     string   // ai.SchemaServer or ai.SchemaPrompt: where a request for JSON gives its schema
 	EmbedURL, EmbedKey, EmbedModel string   // EmbedModel "" turns vector search off
 	ReasoningEffort                string   // sent as reasoning_effort when set
 	Temperature                    *float64 // sent as temperature when set

@@ -174,9 +174,11 @@ func localRemote(t *testing.T) {
 }
 
 // TestProviders: the chat model is the one the settings name, with its
-// context and the share of it a request may fill; none without a model.
+// context, the share of it a request may fill and where a request for JSON
+// gives its schema; none without a model.
 func TestProviders(t *testing.T) {
-	if chatP, embedP := Providers(Config{ChatModel: "m", ChatContext: 524288, CompactRatio: 0.5}); chatP == nil || chatP.Window != 524288 || chatP.CompactRatio != 0.5 || embedP != nil {
+	if chatP, embedP := Providers(Config{ChatModel: "m", ChatContext: 524288, CompactRatio: 0.5, ChatSchema: "prompt"}); chatP == nil || chatP.Window != 524288 ||
+		chatP.CompactRatio != 0.5 || chatP.Schema != "prompt" || embedP != nil {
 		t.Errorf("%+v %+v", chatP, embedP)
 	}
 	if chatP, _ := Providers(Config{ChatContext: 524288}); chatP != nil {

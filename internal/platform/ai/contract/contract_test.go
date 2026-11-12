@@ -217,6 +217,64 @@ func TestFailedAnswer(t *testing.T) {
 	}
 }
 
+// TestPromptSchema: under ai.SchemaPrompt a request for JSON sends no
+// response_format, its system message holding the schema after
+// ai.SchemaLine, then the indented line; a reply that is not the JSON is
+// repaired once with the reply quoted under the same system message. Under
+// ai.SchemaServer, or none set, the schema is response_format's alone.
+func TestPromptSchema(t *testing.T) {
+	type reply struct {
+		A int `json:"a"`
+	}
+	f := ai.Schema[reply]("r")
+	type sent struct {
+		ResponseFormat json.RawMessage `json:"response_format"`
+		Messages       []ai.Message
+	}
+	for _, schema := range []string{"", ai.SchemaServer, ai.SchemaPrompt} {
+		var bodies []sent
+		replies := []string{`{"a":`, `{"a":7}`}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var b sent
+			json.NewDecoder(r.Body).Decode(&b)
+			bodies = append(bodies, b)
+			w.Header().Set("Content-Type", "text/event-stream")
+			chunk, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"index": 0, "delta": map[string]string{"content": replies[len(bodies)-1]}, "finish_reason": "stop"}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
+		}))
+		var counts Counts
+		turn := Turn[reply]{Kind: "k", Ask: JSON(&ai.OpenAI{BaseURL: srv.URL, ModelName: "m", Schema: schema}, f),
+			Check: func(reply) []Violation { return nil }, Note: func([]Violation) string { return "" }, Fix: func(*reply) {}}
+		v, err := Run(context.Background(), ai.Prompt{Static: "rules", Dynamic: "q"}, turn, &counts)
+		srv.Close()
+		if v.A != 7 || err != nil || len(bodies) != 2 {
+			t.Fatalf("%s: %+v %v after %d requests", schema, v, err, len(bodies))
+		}
+		first, repair := bodies[0].Messages, bodies[1].Messages
+		system := first[0].Content
+		want := "rules\nWrite the JSON indented, each key on a line of its own."
+		if schema == ai.SchemaPrompt {
+			text, _ := strings.CutPrefix(system, "rules\n\n"+ai.SchemaLine+"\n")
+			text, _ = strings.CutSuffix(text, "\nWrite the JSON indented, each key on a line of its own.")
+			var got, wantSchema any
+			b, _ := json.Marshal(f.JSON)
+			json.Unmarshal(b, &wantSchema)
+			if json.Unmarshal([]byte(text), &got) != nil || !reflect.DeepEqual(got, wantSchema) {
+				t.Errorf("prompt: the system message %q holds no schema", system)
+			}
+			want = system
+		}
+		for i, b := range bodies {
+			if (len(b.ResponseFormat) > 0) != (schema != ai.SchemaPrompt) || b.Messages[0].Content != want {
+				t.Errorf("%s request %d: response_format %s, system %q", schema, i, b.ResponseFormat, b.Messages[0].Content)
+			}
+		}
+		if n := len(repair); n != len(first)+2 || repair[n-2] != (ai.Message{Role: "assistant", Content: `{"a":`}) || !strings.HasPrefix(repair[n-1].Content, "Your reply is not the JSON of r") {
+			t.Errorf("%s: the repair ends %q", schema, repair[max(n-2, 0):])
+		}
+	}
+}
+
 // TestDynamic: a schema built at request time checks an answer as Schema's
 // do: its enum, integer range, required keys and no other key.
 func TestDynamic(t *testing.T) {

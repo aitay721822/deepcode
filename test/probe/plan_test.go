@@ -64,6 +64,7 @@ type planRun struct {
 	Run      int           `json:"run"`
 	Planning wiki.Planning `json:"planning"`
 	Prompt   int           `json:"promptTokens"`
+	Cached   int           `json:"cachedTokens"`
 	Output   int           `json:"outputTokens"`
 	Shape    shape.Shape   `json:"shape"`
 	Unnamed  int           `json:"unnamed"`
@@ -82,12 +83,13 @@ type planUnit struct {
 
 // TestPlan is Probe C: the planner alone on a bench repository's base
 // snapshot, no page written. It logs the plan's time, requests, prompt
-// tokens, contract counts, shape and, per code unit of cap 2 or more, the
-// pages planned against its cap. DEEPCODE_PROBE=C, DEEPCODE_PROBE_REPO (a
-// bench repository), DEEPCODE_PROBE_RUN (the run's number, from 1),
-// DEEPCODE_PROBE_DIR (the indexed snapshot, kept between runs),
+// (cached among them) and output tokens, contract counts, shape and, per code
+// unit of cap 2 or more, the pages planned against its cap. DEEPCODE_PROBE=C,
+// DEEPCODE_PROBE_REPO (a bench repository), DEEPCODE_PROBE_RUN (the run's
+// number, from 1), DEEPCODE_PROBE_DIR (the indexed snapshot, kept between runs),
 // DEEPCODE_EVAL_GIT holding the repository's bare clone, DEEPCODE_CHAT_* as
-// serve reads them; the model is asked by Completions.
+// serve reads them, DEEPCODE_CHAT_SCHEMA too; the model is asked by
+// Completions.
 func TestPlan(t *testing.T) {
 	if os.Getenv("DEEPCODE_PROBE") != "C" {
 		t.Skip("set DEEPCODE_PROBE=C to probe the planner on a bench repository")
@@ -119,7 +121,7 @@ func TestPlan(t *testing.T) {
 	model.BaseURL, model.Measure = refuseWrites(t, model.BaseURL), func(u ai.Usage) {
 		mu.Lock()
 		defer mu.Unlock()
-		res.Prompt, res.Output = res.Prompt+u.InTokens, res.Output+u.OutTokens
+		res.Prompt, res.Cached, res.Output = res.Prompt+u.InTokens, res.Cached+u.CachedTokens, res.Output+u.OutTokens
 	}
 	graphs := &graph.Graph{Store: &graphstore.Store{DB: db}}
 	store := &wikistore.Store{DB: db}
@@ -155,8 +157,9 @@ func TestPlan(t *testing.T) {
 const refusal = "the probe writes no page"
 
 // refuseWrites is a server in front of the chat server at target that passes
-// on the structured requests, the plan's, and refuses every other, a page's
-// write, which comes once the plan is stored.
+// on the structured requests, the plan's (a response_format, or under
+// ai.SchemaPrompt the schema in the prompt), and refuses every other, a
+// page's write, which comes once the plan is stored.
 func refuseWrites(t *testing.T, target string) string {
 	u, err := url.Parse(target)
 	if err != nil {
@@ -167,7 +170,7 @@ func refuseWrites(t *testing.T, target string) string {
 	pass.Director = func(r *http.Request) { direct(r); r.Host = u.Host }
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		if err != nil || !bytes.Contains(body, []byte(`"response_format"`)) {
+		if err != nil || !bytes.Contains(body, []byte(`"response_format"`)) && !bytes.Contains(body, []byte(ai.SchemaLine)) {
 			http.Error(w, `{"error":{"message":"`+refusal+`"}}`, http.StatusBadRequest)
 			return
 		}

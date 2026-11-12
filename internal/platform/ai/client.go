@@ -81,6 +81,7 @@ type OpenAI struct {
 	APIKey    string
 	ModelName string
 	API       string // Responses asks a chat model by the Responses API; else Completions
+	Schema    string // SchemaPrompt writes a request's JSON schema in its prompt; else SchemaServer
 	MaxTokens int    // 0 leaves the output limit to the server
 	// ReasoningEffort is sent as reasoning_effort when set ("none", "low", ...);
 	// empty leaves reasoning to the server's default.

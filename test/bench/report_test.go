@@ -26,10 +26,15 @@ type report struct {
 	Model           string   `json:"model"`
 	ReasoningEffort string   `json:"reasoningEffort"`
 	Temperature     string   `json:"temperature"`
+	ChatSchema      string   `json:"chatSchema,omitempty"` // where a request for JSON gave its schema (ai.SchemaServer, ai.SchemaPrompt); "": before the setting
 	EmbedModel      string   `json:"embedModel,omitempty"` // "": lexical search only
 	Judged          bool     `json:"judged,omitempty"`     // its selfTalk and language are the judge's (judge_test.go); an older run's selfTalk is a detector's
 	Repos           []result `json:"repos"`
 }
+
+// schema is where the bench's requests for JSON give their schema:
+// DEEPCODE_CHAT_SCHEMA, as serve reads chat_schema, else ai.SchemaServer.
+func schema() string { return cmp.Or(os.Getenv("DEEPCODE_CHAT_SCHEMA"), ai.SchemaServer) }
 
 type result struct {
 	Repo string `json:"repo"`

@@ -28,13 +28,14 @@ Rules:
 const groundNote = "None of those locations is a line the <source> blocks show: each needs a path as a source block names it, " +
 	"a line number shown there, and the code of that line copied exactly. Reply with the corrected JSON object only."
 
-// Fixed is what r's requests hold besides its history, background and
-// sources, as size counts a prompt sent for JSON (ai.Prompt.JSON): the first
-// request's own lines, and what a second one adds, groundNote and the map it
-// sends back, at most maxEcho bytes and "…", so at most as many tokens.
-func Fixed(r Request, size func(ai.Prompt) int) int {
+// Fixed is what r's requests to model hold besides its history, background
+// and sources, as size counts a prompt sent for the map's JSON
+// (ai.Format.Prompt): the first request's own lines, and what a second one
+// adds, groundNote and the map it sends back, at most maxEcho bytes and "…",
+// so at most as many tokens.
+func Fixed(r Request, model *ai.OpenAI, size func(ai.Prompt) int) int {
 	r.History, r.Background, r.Sources = nil, "", ""
-	return size(Prompt(r).After("", groundNote).JSON()) + maxEcho + len("…")
+	return size(format.Prompt(model, Prompt(r).After("", groundNote))) + maxEcho + len("…")
 }
 
 // Prompt is r's first request: the rules, the recent turns, then the

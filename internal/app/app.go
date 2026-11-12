@@ -155,7 +155,7 @@ func (a *App) Run(ctx context.Context) error {
 // retrieval eval and the bench embed with the same client (test/eval Embedder).
 func Providers(cfg Config) (chatP, embedP *ai.OpenAI) {
 	if cfg.ChatModel != "" {
-		chatP = &ai.OpenAI{BaseURL: cfg.ChatURL, APIKey: cfg.ChatKey, ModelName: cfg.ChatModel, API: cfg.ChatAPI,
+		chatP = &ai.OpenAI{BaseURL: cfg.ChatURL, APIKey: cfg.ChatKey, ModelName: cfg.ChatModel, API: cfg.ChatAPI, Schema: cfg.ChatSchema,
 			MaxTokens: cfg.MaxOutputTokens, ReasoningEffort: cfg.ReasoningEffort, Temperature: cfg.Temperature, Timeout: cfg.LLMTimeout, RPM: cfg.LLMRPM,
 			Window: cfg.ChatContext, CompactRatio: cfg.CompactRatio}
 	}
