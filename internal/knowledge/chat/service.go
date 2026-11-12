@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"slices"
 	"strings"
@@ -164,7 +165,7 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 		return err
 	}
 	past := harness.Messages(turns)
-	repo, sha, asked, lang := r.Owner+"/"+r.Name, conv.snap.CommitSHA, retrievalQuery(past, q), answerLanguage(q, past)
+	repo, sha, asked, lang := r.Owner+"/"+r.Name, conv.snap.CommitSHA, retrievalQuery(past, q), s.answerLanguage(ctx, q, past)
 	first, err := s.search(ctx, conv.snap.ID, repo, asked)
 	if err != nil {
 		return err
@@ -327,6 +328,22 @@ func (s *Service) search(ctx context.Context, snapshotID int64, repo, query stri
 	}
 	terms := strings.Fields(ai.StripThinking(reply)) // bounded: a rambling reply is not a search
 	return s.Retriever.Search(ctx, snapshotID, strings.Join(terms[:min(len(terms), 24)], " ")+"\n"+query, evidenceHits)
+}
+
+// answerLanguage is the language to answer question in, named last in the
+// prompt: as code tells it (languageOf), else as the model names it for the
+// sentence code cannot read; own when the model names none, logged.
+func (s *Service) answerLanguage(ctx context.Context, question string, history []ai.Message) string {
+	lang, ask := languageOf(question, history)
+	if ask == "" {
+		return lang
+	}
+	reply, err := s.Chat.Generate(ctx, languageRequest(ask))
+	if name := named(ai.StripThinking(reply)); err == nil && name != "" {
+		return name
+	}
+	log.Printf("chat: the model named no language for a question (%v, %d bytes): answering in its own", err, len(reply))
+	return own
 }
 
 // wikiPage is the written wiki page that shares the most words with the

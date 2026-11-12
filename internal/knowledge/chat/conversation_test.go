@@ -129,12 +129,15 @@ func TestRefitted(t *testing.T) {
 			gathered(w, "")
 			return
 		}
-		if asked, messages = append(asked, body.Messages[len(body.Messages)-1].Content), append(messages, len(body.Messages)); len(asked) == 1 {
+		reply := "It subscribes [a.ts:1-1]."
+		if body.Messages[0].Content == languagePrompt {
+			reply = "English"
+		} else if asked, messages = append(asked, body.Messages[len(body.Messages)-1].Content), append(messages, len(body.Messages)); len(asked) == 1 {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, `{"error":{"code":400,"message":"too long","type":"exceed_context_size_error","n_prompt_tokens":419430,"n_ctx":524288}}`) // the threshold: room for exactly what was sent
 			return
 		}
-		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": "It subscribes [a.ts:1-1]."}, "finish_reason": "stop"}}})
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
@@ -162,5 +165,105 @@ func TestRefitted(t *testing.T) {
 	s = service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", Window: 25000, MaxTokens: 100}) // a threshold of 20,000
 	if err := s.Ask(ctx, Request{RepoID: 1, ConversationID: 1, Question: "subscribe", UserID: 1}, func(string, any) {}); err != nil || len(asked) != 3 || messages[2] != 8 {
 		t.Errorf("a follow-up: %v, %d requests, %v messages", err, len(asked), messages)
+	}
+}
+
+// TestLanguage: code reads a language only from the script, quotes and code
+// aside: kana make it Japanese and Han Chinese, however much English code the
+// question names; two words or more of another script are a sentence for the
+// model to name; fewer tell nothing, and the conversation's questions before
+// it, newest first, go on, a question of one word left for the model at the
+// end. The model's reply is a name or none.
+func TestLanguage(t *testing.T) {
+	for q, want := range map[string]string{"Mount 如何運作？": chinese, "Mount はどう動きますか": "Japanese", "What is 路由?": chinese, // unquoted: the known limit
+		"為何 PaymentSucceededEventHandler 會觸發 InvoiceProjection": chinese, "src/app/server.go 的 Route 在哪裡": chinese,
+		"請解釋 the router matching algorithm in detail please": chinese, "這段為何失敗：```go\nfunc (r *Router) Mount() {}\n```": chinese} {
+		if lang, words := language(q); lang != want || words != 0 {
+			t.Errorf("%q: %q %d, want %q", q, lang, words, want)
+		}
+	}
+	for _, q := range []string{"How does Mount work?", "Wie funktionieren Middlewares in chi, und wie werden sie mit Use, With und Group verkettet?", // no word list
+		"Как работает Mount?", "마운트는 어떻게 동작하나요", "Is the café example in the docs current?", "Mount fails.", "Isn't Route mounted?", "Welche Middlewares?",
+		"What does the 「錯誤」 message in handler.go mean?", "What does `無法從目前程式碼確認` mean?", "What does \"錯誤\" mean?", "What does “錯誤” mean?",
+		"What does ‘錯誤’ mean?", "Why does this fail? ```go\n// 錯誤"} { // a fence left open runs to the end
+		if lang, words := language(q); lang != "" || words < 2 {
+			t.Errorf("%q: %q %d, want a sentence", q, lang, words)
+		}
+	}
+	for q, want := range map[string]int{"？": 0, "Route?": 1, "How?": 1, "Does chi.Mux.Use?": 1, "src/a/main.go?": 0, "x_on_y?": 0, "src/a/main.go:12 x_on_y?": 0,
+		"my-handler-func?": 0, "v2 http2?": 0, "---": 0, "- ？": 0, "src/a.go ...": 0, "... ---": 0} {
+		if lang, words := language(q); lang != "" || words != want {
+			t.Errorf("%q: %q %d, want %d words", q, lang, words, want)
+		}
+	}
+	zh := []ai.Message{{Role: "user", Content: "Mount 如何運作？"}, {Role: "assistant", Content: "It mounts a router."}}
+	for _, c := range []struct {
+		q         string
+		history   []ai.Message
+		lang, ask string
+	}{{"？", nil, own, ""}, {"x_on_y?", nil, own, ""}, {"Why?", nil, "", "Why?"}, {"Why?", []ai.Message{{Role: "user", Content: "Route?"}}, "", "Why?"}, // one word, nothing before tells
+		{"Route?", zh, chinese, ""}, {"Do we validate tokens?", zh, "", "Do we validate tokens?"}, {"Welche Middlewares?", zh, "", "Welche Middlewares?"},
+		{"x_on_y?", append(slices.Clone(zh), ai.Message{Role: "user", Content: "Route?"}), chinese, ""},                                  // past the questions that tell nothing
+		{"x_on_y?", append(slices.Clone(zh), ai.Message{Role: "user", Content: "Do we validate tokens?"}), "", "Do we validate tokens?"}, // the newest that tells
+		{"Route?", []ai.Message{{Role: "user", Content: "Как работает Mount?"}}, "", "Как работает Mount?"}, {"x_on_y?", []ai.Message{{Role: "user", Content: "Mount はどう動きますか"}}, "Japanese", ""}} {
+		if lang, ask := languageOf(c.q, c.history); lang != c.lang || ask != c.ask {
+			t.Errorf("%q after %d messages: %q %q, want %q %q", c.q, len(c.history), lang, ask, c.lang, c.ask)
+		}
+	}
+	for reply, want := range map[string]string{"German": "German", " German.\n": "German", "Brazilian Portuguese": "Brazilian Portuguese", "Chinese": chinese, "chinese": chinese,
+		"": "", "Written in plain German": "", "German (Deutsch)": "", "It subscribes [a.ts:1-1].": "", strings.Repeat("a", 31): ""} {
+		if got := named(reply); got != want {
+			t.Errorf("named(%q) = %q, want %q", reply, got, want)
+		}
+	}
+	if !strings.HasSuffix(prompt("go-chi/chi", "abc", nil, "", "", "Wie?", "German").Dynamic, "Question: Wie?\n\n"+namesLine+" Answer in German.") || uncited(chinese) == uncited("German") {
+		t.Error("the language line or the footer")
+	}
+}
+
+// TestAnswerLanguage: a language the script tells costs no request; a
+// sentence is named by the model in one, the question alone after the
+// language prompt, and a follow-up that tells nothing has the question before
+// it named, or its own word with nothing before; a reply that names none, or a
+// failed request, leaves the answer in the question's own.
+func TestAnswerLanguage(t *testing.T) {
+	var asked []ai.Message
+	reply, status := "German", http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []ai.Message `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		asked = append(asked, body.Messages...)
+		if w.WriteHeader(status); status == http.StatusOK {
+			chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
+			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
+		}
+	}))
+	defer srv.Close()
+	ctx, s := context.Background(), &Service{Chat: &ai.OpenAI{BaseURL: srv.URL, ModelName: "m"}}
+	if got := s.answerLanguage(ctx, "Mount 如何運作？", nil); got != chinese || len(asked) != 0 {
+		t.Errorf("Han: %q after %d messages sent", got, len(asked))
+	}
+	q := "Wie funktionieren Middlewares in chi?"
+	if got := s.answerLanguage(ctx, q, nil); got != "German" || len(asked) != 2 || asked[0].Content != languagePrompt || asked[1] != (ai.Message{Role: "user", Content: q}) {
+		t.Errorf("a sentence: %q, sent %+v", got, asked)
+	}
+	asked, reply = nil, "French"
+	if got := s.answerLanguage(ctx, "Route?", []ai.Message{{Role: "user", Content: "Est-ce que chi a un middleware pour CORS ?"}, {Role: "assistant", Content: "Oui."}}); got != "French" ||
+		len(asked) != 2 || asked[1].Content != "Est-ce que chi a un middleware pour CORS ?" {
+		t.Errorf("a follow-up: %q, sent %+v", got, asked)
+	}
+	asked, reply = nil, "English"
+	if got := s.answerLanguage(ctx, "Why?", nil); got != "English" || len(asked) != 2 || asked[1].Content != "Why?" {
+		t.Errorf("one word: %q, sent %+v", got, asked)
+	}
+	reply = "It subscribes [a.ts:1-1]."
+	if got := s.answerLanguage(ctx, q, nil); got != own {
+		t.Errorf("no name: %q", got)
+	}
+	status = http.StatusInternalServerError
+	if got := s.answerLanguage(ctx, q, nil); got != own {
+		t.Errorf("a failed request: %q", got)
 	}
 }

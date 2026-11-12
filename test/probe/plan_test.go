@@ -108,7 +108,7 @@ func TestPlan(t *testing.T) {
 		t.Fatal("the probe needs DEEPCODE_CHAT_MODEL")
 	}
 	ctx := context.Background()
-	db, snap := indexed(t, filepath.Join(dir, name), filepath.Join(os.Getenv("DEEPCODE_EVAL_GIT"), name+".git"), repo.owner, name, repo.base)
+	db, snap := indexed(t, filepath.Join(dir, name), filepath.Join(os.Getenv("DEEPCODE_EVAL_GIT"), name+".git"), repo.owner, name, repo.base, nil)
 	for _, reset := range []string{`DELETE FROM wiki_pages WHERE snapshot_id = ?`, `UPDATE snapshots SET wiki_status = 'none', wiki_labels = NULL WHERE id = ?`} {
 		if _, err := db.Exec(reset, snap); err != nil {
 			t.Fatal(err)
@@ -179,9 +179,9 @@ func refuseWrites(t *testing.T, target string) string {
 }
 
 // indexed is the base snapshot of the repository in the bare clone src at
-// sha, indexed as an index job does with cmd/deepcode's limits and no
-// vectors, into a database in work, which a later run reuses.
-func indexed(t *testing.T, work, src, owner, name, sha string) (*sql.DB, int64) {
+// sha, indexed as an index job does with cmd/deepcode's limits and, with
+// embed, vectors, into a database in work, which a later run reuses.
+func indexed(t *testing.T, work, src, owner, name, sha string, embed *ai.OpenAI) (*sql.DB, int64) {
 	ctx := context.Background()
 	if err := os.MkdirAll(work, 0o700); err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func indexed(t *testing.T, work, src, owner, name, sha string) (*sql.DB, int64) 
 	}
 	ix := &indexer.Indexer{Store: &indexstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}},
 		Git: &git.Client{Dir: work, AllowProtocol: "file"}, Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}, Events: bus,
-		Vectors: &vectorstore.SQLite{DB: db}, Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
+		Embed: embed, Vectors: &vectorstore.SQLite{DB: db}, Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
 	if err := ix.Run(ctx, 1, sha, jobs.Progress{}); err != nil {
 		t.Fatal(err)
 	}

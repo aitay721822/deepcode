@@ -1,11 +1,11 @@
 package chat
 
 import (
-	"cmp"
 	"fmt"
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"deepcode/internal/platform/ai"
 )
@@ -34,67 +34,83 @@ const (
 	own     = "the language the question is written in"
 )
 
-var (
-	// quotedRe is what a question quotes or holds as code: a UI string or a
-	// snippet says nothing of the language it is asked in.
-	quotedRe = regexp.MustCompile("(?s)```.*?(?:```|$)|`[^`]*`|「[^」]*」|“[^”]*”|‘[^’]*’|\"[^\"\n]*\"")
-	// englishRe is a word only an English question uses: identifiers and terms
-	// such as Router or handler say nothing of the language they are asked in.
-	englishRe = regexp.MustCompile(`(?i)^(?:the|a|an|is|isn|are|be|do|does|doesn|did|don|how|what|why|where|which|who|when|can|should|in|on|by|if|with|from|this|that|there|and|of|to|for|it|its|we|you|my|i)$`)
-)
+// quotedRe is what a question quotes or holds as code: a UI string or a
+// snippet says nothing of the language it is asked in.
+var quotedRe = regexp.MustCompile("(?s)```.*?(?:```|$)|`[^`]*`|「[^」]*」|“[^”]*”|‘[^’]*’|\"[^\"\n]*\"")
 
-// language names the language to answer question in, last in the prompt: a
-// model drifts to that of the sources, the wiki or its earlier answers. What
-// it quotes aside, any kana makes it Japanese and any Han Chinese, however
-// many identifiers, paths or traces it names in English; English words such as
-// "how" or "the" make it English; mostly another script, its own language. ""
-// when its words tell nothing ("Route?", "？"): the conversation's goes on.
+// language is what code reads of the language question is asked in: what it
+// quotes aside, any kana makes it Japanese and any Han Chinese, however many
+// identifiers, paths or traces it names in English. Else words counts its
+// words of another script, a language only the model reads (languageRequest):
+// no word list tells German from English.
 // ponytail: an English question naming Chinese text unquoted is answered in
-// Chinese; one in another Latin-script language is answered in English when
-// it shares a short English word ("in", "is"), else in the conversation's.
-func language(question string) string {
+// Chinese; a sentence in a script written without spaces (Thai, Lao, Khmer) is
+// one word, so after a turn in Chinese or Japanese it follows that turn.
+func language(question string) (lang string, words int) {
 	text := quotedRe.ReplaceAllString(question, " ")
 	switch {
 	case strings.ContainsFunc(text, isKana):
-		return "Japanese"
+		return "Japanese", 0
 	case strings.ContainsFunc(text, isHan):
-		return chinese
+		return chinese, 0
 	}
-	words, other, english := 0, 0, false
 	for _, w := range strings.FieldsFunc(text, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune("._/-", r)
 	}) {
-		if w = strings.TrimRight(w, ".-/"); strings.ContainsFunc(w, func(r rune) bool { return !unicode.IsLetter(r) }) {
-			continue // an identifier or path, as src/a/main.go or x_on_y: no word of any language
-		}
-		words++
-		if englishRe.MatchString(w) {
-			english = true
-		} else if strings.ContainsFunc(w, func(r rune) bool { return r > unicode.MaxASCII }) {
-			other++ // Hangul, Cyrillic, accented Latin…
+		if w = strings.TrimRight(w, ".-/"); w != "" && !strings.ContainsFunc(w, func(r rune) bool { return !unicode.IsLetter(r) }) {
+			words++ // not an identifier, path or dash, as src/a/main.go, x_on_y or ---: no word of any language
 		}
 	}
-	switch {
-	case 2*other > words:
-		return own
-	case english:
-		return "English"
-	case other > 0:
-		return own
-	}
-	return ""
+	return "", words
 }
 
-// answerLanguage is the language of question, or of the last question before
-// it that tells one.
-func answerLanguage(question string, history []ai.Message) string {
-	lang := language(question)
-	for i := len(history) - 1; lang == "" && i >= 0; i-- {
+// languageOf is the language to answer question in. Code reads question, then
+// the conversation's earlier questions, newest first: the first in kana or Han
+// gives it (lang); the first sentence, two words or more, is the model's to
+// name (ask). When none tells, a question of one word ("Why?") is the model's
+// to name too, and one of none ("？") gets own.
+func languageOf(question string, history []ai.Message) (lang, ask string) {
+	texts := []string{question}
+	for i := len(history) - 1; i >= 0; i-- {
 		if history[i].Role == "user" {
-			lang = language(history[i].Content)
+			texts = append(texts, history[i].Content)
 		}
 	}
-	return cmp.Or(lang, own)
+	for _, text := range texts {
+		if lang, words := language(text); lang != "" {
+			return lang, ""
+		} else if words > 1 {
+			return "", text
+		}
+	}
+	if _, words := language(question); words > 0 {
+		return "", question
+	}
+	return own, ""
+}
+
+const languagePrompt = "Name the language the user's question is written in, by its English name, and nothing else. Code, identifiers, file paths and quoted strings do not count. Chinese is Chinese, whatever its script."
+
+// languageRequest asks the model which language question is written in: it
+// writes the answer in the language the last line names, and drifts to Chinese
+// when that line names none (Probe L).
+func languageRequest(question string) ai.Prompt {
+	return ai.Prompt{Static: languagePrompt, Dynamic: question}
+}
+
+// named is the language a reply to languageRequest names: one to three words
+// of letters, at most 30 runes, a final "." aside; Chinese as written in
+// Taiwan. "" for any other reply.
+func named(reply string) string {
+	name := strings.TrimSuffix(strings.TrimSpace(reply), ".")
+	if n := len(strings.Fields(name)); n == 0 || n > 3 || utf8.RuneCountInString(name) > 30 ||
+		strings.ContainsFunc(name, func(r rune) bool { return !unicode.IsLetter(r) && r != ' ' }) {
+		return ""
+	}
+	if strings.EqualFold(name, "Chinese") {
+		return chinese
+	}
+	return name
 }
 
 // uncited closes an answer with no valid citation: in Chinese when lang, the
@@ -122,7 +138,7 @@ const namesLine = "Name in backticks the types, calls and annotations the answer
 
 // prompt assembles the rules, the recent turns, then the repository, a deep
 // answer's background block ("" for none), the code (sources), the question,
-// namesLine and the language line, in lang (answerLanguage).
+// namesLine and the language line, in lang (Service.answerLanguage).
 func prompt(repo, sha string, history []ai.Message, background, sources, question, lang string) ai.Prompt {
 	return ai.Prompt{Static: systemPrompt, Previous: history, Dynamic: fmt.Sprintf("Repository: %s at commit %s\n\n%sCode:\n\n%sQuestion: %s\n\n%s Answer in %s.",
 		repo, sha, background, sources, question, namesLine, lang)}

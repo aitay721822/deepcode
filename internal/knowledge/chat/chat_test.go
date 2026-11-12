@@ -121,8 +121,11 @@ func TestAnswers(t *testing.T) {
 				fmt.Fprint(w, `{"error":{"code":400,"message":"too long","type":"exceed_context_size_error","n_prompt_tokens":1000,"n_ctx":100000}}`)
 				return
 			}
-			asked = append(asked, fmt.Sprintf("an answer, with %d messages", len(body.Messages)))
+			_, lang, _ := strings.Cut(body.Messages[len(body.Messages)-1].Content, " Answer in ") // the language line, last
+			asked = append(asked, fmt.Sprintf("an answer in %s with %d messages", lang, len(body.Messages)))
 			reply = "<think>hidden</think>It subscribes [src/store.ts:1-2]."
+		} else if body.Messages[0].Content == languagePrompt {
+			asked, reply = append(asked, "its language"), "German"
 		} else {
 			asked = append(asked, "search terms")
 		}
@@ -151,7 +154,7 @@ func TestAnswers(t *testing.T) {
 	if m := ask(0, "zzzz qqqq"); m.Content != noEvidence || len(m.Citations) != 0 {
 		t.Fatalf("no evidence: %+v", m)
 	}
-	if want := []string{"an answer, with 2 messages", "an answer, with 4 messages", "search terms"}; !slices.Equal(asked, want) {
+	if want := []string{"its language", "an answer in German. with 2 messages", "its language", "an answer in German. with 4 messages", "its language", "search terms"}; !slices.Equal(asked, want) { // none in kana or Han
 		t.Fatalf("the model was asked for %q, want %q", asked, want)
 	}
 	refuse = 1 // with the counts: the context learned, the request fitted again and sent once more
@@ -221,8 +224,12 @@ func TestGathered(t *testing.T) {
 			gathered(w, map[bool]string{true: "registry"}[len(body.Messages) == 2])
 			return
 		}
-		answers, asked = append(answers, fmt.Sprint(body.Messages)), append(asked, fmt.Sprint(body.Messages[len(body.Messages)-1]["content"]))
-		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": "It subscribes [store.ts:1-1] into a registry [src/set.ts:1-1]."}, "finish_reason": "stop"}}})
+		reply := "English"
+		if body.Messages[0]["content"] != languagePrompt {
+			answers, asked = append(answers, fmt.Sprint(body.Messages)), append(asked, fmt.Sprint(body.Messages[len(body.Messages)-1]["content"]))
+			reply = "It subscribes [store.ts:1-1] into a registry [src/set.ts:1-1]."
+		}
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
@@ -380,42 +387,6 @@ func TestEvidenceEvent(t *testing.T) {
 	if b, _ := json.Marshal(evidenceEvent(got, got.Hits, 9, evidence.Limit{Chars: math.MaxInt}, parts, fit)); !strings.Contains(string(b), `"dropped":[]`) || !strings.Contains(string(b), all) ||
 		!strings.Contains(string(b), `"evicted":[]`) || !strings.Contains(string(b), `"refused":[]`) || !strings.Contains(string(b), `"chars":{"rendered":9}`) {
 		t.Errorf("nothing left out: %s", b)
-	}
-}
-
-// TestLanguage: the prompt names the question's language last, whatever the
-// sources are written in: Han makes it Chinese however much English code it
-// names, quoted strings say nothing, English words make it English, and a
-// question whose words tell nothing follows the last that did.
-func TestLanguage(t *testing.T) {
-	for q, want := range map[string]string{"How does Mount work?": "English", "Mount 如何運作？": chinese,
-		"Mount はどう動きますか": "Japanese", "Как работает Mount?": own, "마운트는 어떻게 동작하나요": own, "？": own,
-		"Wie funktioniert der Router?": own, "Is the café example in the docs current?": "English",
-		"What does the 「錯誤」 message in handler.go mean?": "English", "What does `無法從目前程式碼確認` mean?": "English",
-		"What is 路由?": chinese, // unquoted: the known limit
-		"為何 PaymentSucceededEventHandler 會觸發 InvoiceProjection": chinese, "src/app/server.go 的 Route 在哪裡": chinese,
-		"請看這個錯誤 panic: runtime error: index out of range [3] with length 3 goroutine 1 running main.go 怎麼修":      chinese,
-		"請解釋 the router matching algorithm in detail please":                                                     chinese,
-		"這段為何失敗：```go\nfunc (r *Router) Mount(pattern string, h http.Handler) { r.mux.Handle(pattern, h) }\n```": chinese,
-	} {
-		if got := prompt("go-chi/chi", "abc", nil, "", "", q, answerLanguage(q, nil)).Dynamic; !strings.HasSuffix(got, "Question: "+q+"\n\n"+namesLine+" Answer in "+want+".") {
-			t.Errorf("%q: %q", q, got)
-		}
-	}
-	history := []ai.Message{{Role: "user", Content: "Mount 如何運作？"}, {Role: "assistant", Content: "It mounts a router."}}
-	for _, q := range []string{"？", "Route?", "src/a/main.go?", "x_on_y?"} {
-		if p := prompt("go-chi/chi", "abc", history, "", "", q, answerLanguage(q, history)); p.Static != systemPrompt || len(p.Previous) != 2 || p.Previous[0] != history[0] ||
-			!strings.HasSuffix(p.Dynamic, "Answer in "+chinese+".") {
-			t.Errorf("a follow-up whose words tell nothing: %q", p)
-		}
-	}
-	for _, q := range []string{"Do we validate tokens?", "Isn't Route mounted?"} { // English, though the conversation was not
-		if got := answerLanguage(q, history); got != "English" {
-			t.Errorf("%q: %s", q, got)
-		}
-	}
-	if uncited(answerLanguage("Route?", history)) != uncited(chinese) || uncited("English") == uncited(chinese) {
-		t.Error("the footer is not in the answer's language")
 	}
 }
 
