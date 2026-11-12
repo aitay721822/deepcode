@@ -161,6 +161,24 @@ func Build(units, chosen, files []string, src Source, most int) Skeleton {
 	return unique(out)
 }
 
+// Anchors are the lines s's headings rest on, those that have one, in the
+// order Build keeps headings: every level-2 one's, then the level-3 ones', each
+// in s's order. A page's search reads them first, in this order, and its
+// evidence keeps them in it until the budget ends (evidence.Format), so a page
+// whose evidence cannot show them all loses level-3 headings first, not the
+// heading of a file after another's level-3 ones.
+func (s Skeleton) Anchors() []retrieval.Anchor {
+	var out []retrieval.Anchor
+	for _, three := range []bool{false, true} {
+		for _, h := range s {
+			if h.Anchor.Path != "" && (h.Level == 3) == three {
+				out = append(out, h.Anchor)
+			}
+		}
+	}
+	return out
+}
+
 // Others are the paths no heading of s covers, files first, each once: of
 // files, one no heading is of, nor of its guide or README, nor of the guide
 // that shows it (home, the docs aside's Home), nor of an example folder

@@ -55,7 +55,7 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 	if err != nil {
 		return "", nil, err
 	}
-	shared, own, err := g.sources(ctx, snap, p, head, inSection, pages, anchors(sk))
+	shared, own, err := g.sources(ctx, snap, p, head, inSection, pages, sk.Anchors())
 	if err != nil {
 		return "", nil, err
 	}
@@ -211,17 +211,6 @@ func (g *Generator) skeleton(ctx context.Context, snap int64, p page, head bool)
 	}
 	files := append(slices.Clone(p.Files.Chosen), p.Files.Placed...)
 	return skeleton.Build(p.Files.Units, p.Files.Chosen, files, skeleton.Source{Texts: texts, Decls: decls, Lines: lines}, pageHits), nil
-}
-
-// anchors are the lines sk's headings rest on, those that have one.
-func anchors(sk skeleton.Skeleton) []retrieval.Anchor {
-	var out []retrieval.Anchor
-	for _, h := range sk {
-		if h.Anchor.Path != "" {
-			out = append(out, h.Anchor)
-		}
-	}
-	return out
 }
 
 // sourced is sk without the headings whose line no source in used shows,

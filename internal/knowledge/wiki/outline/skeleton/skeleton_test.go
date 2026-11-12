@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"deepcode/internal/knowledge/evidence"
+	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/knowledge/wiki/store"
 )
 
@@ -108,6 +110,30 @@ func TestBuild(t *testing.T) {
 	}
 	if !strings.Contains(Listed(Build([]string{"docs/guide.md"}, nil, nil, src, 12), []string{"a.go", "b.go"}), "## Flux guide\n### Setup\n") {
 		t.Error("Listed does not list the headings at their levels")
+	}
+}
+
+// TestAnchors: the lines headings rest on, every level-2 one's before the
+// level-3 ones', each in the skeleton's order, none for a heading with no
+// path; so evidence that fits four of a page's six anchored chunks shows each
+// of its three files' level-2 heading, not the first file's level-3 ones.
+func TestAnchors(t *testing.T) {
+	s := Skeleton{{Name: "Stack", Level: 2}, {Name: "A", Level: 2, Unit: "a.go", Anchor: retrieval.Anchor{Path: "a.go", Line: 1}},
+		{Name: "A1", Level: 3, Unit: "a.go", Anchor: retrieval.Anchor{Path: "a.go", Line: 5}}, {Name: "A2", Level: 3, Unit: "a.go", Anchor: retrieval.Anchor{Path: "a.go", Line: 9}},
+		{Name: "Bare", Level: 2, Unit: "d.go"}, {Name: "B", Level: 2, Unit: "b.go", Anchor: retrieval.Anchor{Path: "b.go", Line: 1}},
+		{Name: "B1", Level: 3, Unit: "b.go", Anchor: retrieval.Anchor{Path: "b.go", Line: 3}}, {Name: "C", Level: 2, Unit: "c.go", Anchor: retrieval.Anchor{Path: "c.go"}}}
+	var got []string
+	var hits []retrieval.Hit
+	for _, a := range s.Anchors() {
+		got = append(got, fmt.Sprint(a.Path, ":", a.Line))
+		hits = append(hits, retrieval.Hit{Path: a.Path, StartLine: a.Line, EndLine: a.Line, Content: strings.Repeat("x", 100)})
+	}
+	if want := []string{"a.go:1", "b.go:1", "c.go:0", "a.go:5", "a.go:9", "b.go:3"}; !slices.Equal(got, want) {
+		t.Fatalf("Anchors = %q, want %q", got, want)
+	}
+	block := len(evidence.Block(hits[0]))
+	if _, used, _ := evidence.Format(hits, evidence.Limit{Chars: 4 * block}); len(used) != 4 || used[2].Path != "c.go" {
+		t.Errorf("evidence of four blocks shows %+v", used)
 	}
 }
 

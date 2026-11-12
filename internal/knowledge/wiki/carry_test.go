@@ -282,3 +282,29 @@ func TestRunCeilingCountsAsideHead(t *testing.T) {
 		t.Fatalf("under a ceiling of 10: %+v, %d pages", planned.Ceiling, len(pages))
 	}
 }
+
+// TestRunReadsAnchors: a page's search reads the chunk each of its headings
+// rests on, whether or not its words find it, every level-2 heading's before
+// the level-3 ones'; so evidence with room for two of three such chunks shows
+// the second chosen file's heading and leaves out the first's level-3 one.
+func TestRunReadsAnchors(t *testing.T) {
+	body := strings.Repeat("x", evidenceChars*2/5) // a chunk of 3 lines, two to the budget
+	chunk := func(path string, line int, symbol, head string) string {
+		return fmt.Sprintf(`(1, '%s', '%s', %d, %d, '%s' || char(10) || '%s' || char(10) || '}', '%[2]s')`, path, symbol, line, line+2, head, body)
+	}
+	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status, wiki_status, wiki_language) VALUES (1, 1, 'abc', 'ready', 'failed', 'English')`,
+		`INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`,
+		`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, 'a.go', 'go', 'h', 1, 6), (1, 'b.go', 'go', 'h', 1, 3)`,
+		`INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash) VALUES `+
+			chunk("a.go", 1, "Alpha", "type Alpha struct {")+", "+chunk("a.go", 4, "first", "func first() {")+", "+chunk("b.go", 1, "Beta", "type Beta struct {"),
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'a.go', 'Alpha', 'Alpha', 'struct', 1, 3),
+			(1, 'a.go', 'first', 'first', 'function', 4, 6), (1, 'b.go', 'Beta', 'Beta', 'struct', 1, 3)`,
+		`INSERT INTO wiki_pages(snapshot_id, slug, title, query, position, content, files) VALUES (1, '1-overview', 'Overview', '', 0, 'Written before.', NULL),
+			(1, '2-routing', 'Routing', 'router', 1, '', '{"chosen":["a.go","b.go"],"placed":[],"units":["./"]}')`)
+	var w Writing
+	pages, err := runWiki(t, db, &fakeModel{}, "abc", func(g *Generator) { g.Written = func(x Writing) { w = x } }).Store.Pages(context.Background(), 1)
+	if err != nil || len(pages) != 2 || !strings.Contains(pages[1].Content, "\n\n## Alpha\n\n") || !strings.Contains(pages[1].Content, "\n\n## Beta\n\n") ||
+		!slices.Equal(w.Headings, []string{"Alpha", "Beta"}) || !slices.Equal(w.Unsourced, []string{"first"}) {
+		t.Fatalf("written %+v; %+v %v", w, pages, err)
+	}
+}

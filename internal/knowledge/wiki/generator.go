@@ -441,7 +441,7 @@ func (g *Generator) touched(ctx context.Context, snap int64, p page, head bool, 
 	// section shares count where it cites them, so one changed file does not
 	// rewrite a whole section. A gained heading this evidence shows but write's,
 	// the section's first, leaves out costs one rewrite: the next base gives it.
-	_, hits, err := g.sources(ctx, snap, p, page{}, false, nil, anchors(sk))
+	_, hits, err := g.sources(ctx, snap, p, page{}, false, nil, sk.Anchors())
 	if err != nil {
 		return "", err
 	}
