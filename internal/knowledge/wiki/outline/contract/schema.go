@@ -38,14 +38,28 @@ type Planned struct {
 	Files []string `json:"files"`
 }
 
-// Labels are the fixed headings in the wiki's language.
+// Labels are the fixed headings in the wiki's language: the overview's
+// (Architecture, Structure, Stack) and the Other files list's.
 type Labels struct {
-	Stack      string `json:"stack"`
-	OtherFiles string `json:"otherFiles"`
+	Stack        string `json:"stack"`
+	OtherFiles   string `json:"otherFiles"`
+	Architecture string `json:"architecture"`
+	Structure    string `json:"structure"`
 }
 
 // English labels, the residual for an empty one.
-var English = Labels{Stack: "Technology stack", OtherFiles: "Other files"}
+var English = Labels{Stack: "Technology stack", OtherFiles: "Other files", Architecture: "Architecture", Structure: "Repository structure"}
+
+// label is one of Labels' and its English residual.
+type label struct {
+	at *string
+	en string
+}
+
+// each is l's labels.
+func (l *Labels) each() []label {
+	return []label{{&l.Stack, English.Stack}, {&l.OtherFiles, English.OtherFiles}, {&l.Architecture, English.Architecture}, {&l.Structure, English.Structure}}
+}
 
 // The replies: the outline's, by key ("1", "p1"); a section's, by unit key;
 // an aside's pages and each unit's page; a flat wiki's.
@@ -105,7 +119,7 @@ func planned(choices []string, b Bounds) map[string]any {
 	return Object(map[string]any{"title": str, "terms": array(str, 0, outline.MaxTerms, b), "files": array(file, 1, maxFiles, b)})
 }
 
-var labels = Object(map[string]any{"stack": str, "otherFiles": str})
+var labels = Object(map[string]any{"stack": str, "otherFiles": str, "architecture": str, "structure": str})
 
 // OutlineFormat asks for the overview, the labels and a head per key. Its
 // bounds hold no enum, so it is past the limits with or without them.

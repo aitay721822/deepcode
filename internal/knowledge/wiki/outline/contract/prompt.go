@@ -17,7 +17,7 @@ import (
 // the checks' and code's alone.
 const (
 	OutlinePrompt = `You plan the outline of a technical wiki for a code repository. Reply with the JSON the schema asks for.
-"overview" is the page introducing the whole repository. "labels" are two headings written in the wiki's language: "stack" says "Technology stack" and "otherFiles" says "Other files".
+"overview" is the page introducing the whole repository. "labels" are four headings written in the wiki's language: "stack" says "Technology stack", "otherFiles" says "Other files", "architecture" says "Architecture" and "structure" says "Repository structure".
 "pages" holds an entry for each key listed below, a section of the wiki or a page at its top: a title naming what that part of the code does, not just its folder, and search terms: identifiers, file names and concepts from it, the most telling first.`
 
 	SectionPrompt = `You plan the pages of one section of a technical wiki for a code repository. Reply with the JSON the schema asks for: for each unit key it names, the pages planned under that unit, each with a title, search terms (identifiers, file names and concepts, the most telling first) and the files it is about, chosen from that unit's files as listed.
@@ -27,7 +27,7 @@ A page covers one subsystem, workflow or feature a reader looks up, named plainl
 Group the units by the feature, workflow or tool they serve: a page covers what a reader looks up, and gives a unit a page of its own only when it is a subject of its own.`
 
 	FlatPrompt = `You plan a concise technical wiki for a small code repository. Reply with the JSON the schema asks for.
-"overview" is the page introducing the whole repository. "labels" are two headings written in the wiki's language: "stack" says "Technology stack" and "otherFiles" says "Other files".
+"overview" is the page introducing the whole repository. "labels" are four headings written in the wiki's language: "stack" says "Technology stack", "otherFiles" says "Other files", "architecture" says "Architecture" and "structure" says "Repository structure".
 "units" holds, for each unit key listed, the pages planned under that unit, each with a title, search terms (identifiers, file names and concepts, the most telling first) and the files it is about, chosen from that unit's files as listed. A page covers one subsystem, workflow or feature a reader looks up, named plainly in its title; small files serving one purpose share a page, and no two pages share a subject.`
 )
 

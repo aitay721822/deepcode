@@ -40,8 +40,10 @@ type PageFiles struct {
 
 // Labels are a wiki's fixed headings in its language.
 type Labels struct {
-	Stack      string `json:"stack"`
-	OtherFiles string `json:"otherFiles"`
+	Stack        string `json:"stack"`
+	OtherFiles   string `json:"otherFiles"`
+	Architecture string `json:"architecture"`
+	Structure    string `json:"structure"`
 }
 
 // NewPage is a page to store for a snapshot: planned, with no content yet, or

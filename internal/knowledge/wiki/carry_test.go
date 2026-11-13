@@ -167,7 +167,7 @@ func TestRunCarriesPages(t *testing.T) {
 // skeleton; one whose guide did not change, only lost a section, or gained
 // one past the lines its evidence shows (an unsourced heading), is kept, and
 // so is one lacking a heading its plan gave it at base too (left out). The
-// overview, whose one heading is the wiki's label, never is.
+// overview, whose headings are the wiki's labels, never is.
 func TestRunTouchesSkeleton(t *testing.T) {
 	guide := "# G\n\n## Setup\n\n```go\nx\n```\n"
 	for name, c := range map[string]struct{ next, drop, why string }{
@@ -197,11 +197,26 @@ func TestRunTouchesSkeleton(t *testing.T) {
 	}
 }
 
+// TestOverviewSkeleton: the overview is held to its architecture, the
+// repository's structure and its stack, under the wiki's labels, English for
+// one the wiki lacks.
+func TestOverviewSkeleton(t *testing.T) {
+	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status, wiki_status, wiki_language, wiki_labels) VALUES (1, 1, 'abc', 'ready', 'ready', 'Deutsch', '{"stack":"Technik","architecture":"Aufbau"}')`)
+	sk, err := generator(db, nil).skeleton(context.Background(), 1, page{}, false)
+	var names []string
+	for _, h := range sk {
+		names = append(names, fmt.Sprint(h.Level, " ", h.Name, h.Anchor.Path))
+	}
+	if err != nil || !slices.Equal(names, []string{"2 Aufbau", "2 Repository structure", "2 Technik"}) {
+		t.Errorf("overview headings %q, %v", names, err)
+	}
+}
+
 // TestRunFollowsImports: a page is written again when a file it cites
 // imports a changed declaration, not when only a body changed; a change that
 // adds a section's worth of code other code imports is planned anew, the plan
-// seeing the imports between directories and the overview told the diagram
-// is drawn.
+// and the overview seeing the imports between directories and the overview
+// told the diagram is drawn.
 func TestRunFollowsImports(t *testing.T) {
 	common := map[string]string{"a.go": "alpha", "b.go": "beta", "d.go": "delta", "e.go": "epsilon", "h.go": "core helper", "tools/t.go": "tooling"} // a planned overview searches "core"
 	next := maps.Clone(common)
@@ -234,7 +249,8 @@ func TestRunFollowsImports(t *testing.T) {
 			if cites, _ := runWiki(t, db, model, "next").Store.Citations(context.Background(), 6); len(model.plans) != c.plans || len(model.writes) != c.writes || model.first != "" && len(cites) != 4 {
 				t.Fatalf("%d plans and %d pages written, citing %v; want %d and %d", len(model.plans), len(model.writes), cites, c.plans, c.writes)
 			}
-			if drawn := c.writes > 0 && strings.Contains(model.writes[0], drawnNote); c.plans > 0 && (!strings.Contains(model.plans[0], "./ → tools/gen/ (1)") || !drawn) ||
+			drawn := c.writes > 0 && strings.Contains(model.writes[0], drawnNote) && strings.Contains(model.writes[0], "./ → tools/gen/ (1)")
+			if c.plans > 0 && (!strings.Contains(model.plans[0], "./ → tools/gen/ (1)") || !drawn) ||
 				c.plans == 0 && c.writes == 1 && drawn {
 				t.Fatalf("plan requests %q\nwrite requests %q", model.plans, model.writes)
 			}

@@ -431,7 +431,7 @@ func (g *Generator) touched(ctx context.Context, snap int64, p page, head bool, 
 		return "cites", nil
 	}
 	var sk skeleton.Skeleton
-	if p.Position != 0 { // the overview's one heading is fixed, in the wiki's language
+	if p.Position != 0 { // the overview's headings are fixed, in the wiki's language
 		var err error
 		if sk, err = g.skeleton(ctx, snap, p, head); err != nil {
 			return "", err

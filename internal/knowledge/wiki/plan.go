@@ -7,7 +7,6 @@ import (
 	"maps"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -413,58 +412,15 @@ func (g *Generator) declared(ctx context.Context, snap int64) (map[string][]stri
 	return out, err
 }
 
-// layout summarises the snapshot for planning: directory sizes two levels
-// deep, root files, the imports between those directories, the README and
+// layout summarises the snapshot for planning: its tree, the README and
 // root manifests.
 func (g *Generator) layout(ctx context.Context, snap int64) (string, error) {
-	paths, err := g.Store.Paths(ctx, snap)
+	tree, err := g.tree(ctx, snap)
 	if err != nil {
 		return "", err
 	}
-	counts := map[string]int{}
-	var rootFiles []string
-	for _, p := range paths {
-		parts := strings.Split(p, "/")
-		if len(parts) == 1 {
-			rootFiles = append(rootFiles, p)
-			continue
-		}
-		counts[parts[0]+"/"]++
-		if len(parts) > 2 {
-			counts[parts[0]+"/"+parts[1]+"/"]++
-		}
-	}
-	dirs := make([]string, 0, len(counts))
-	for d := range counts {
-		dirs = append(dirs, d)
-	}
-	sort.Strings(dirs)
 	var b strings.Builder
-	b.WriteString("Directories (indexed file counts):\n")
-	for i, d := range dirs {
-		if i == 150 {
-			b.WriteString("  …\n")
-			break
-		}
-		indent := strings.Repeat("  ", strings.Count(d, "/"))
-		fmt.Fprintf(&b, "%s%s (%d)\n", indent, d, counts[d])
-	}
-	fmt.Fprintf(&b, "\nRoot files: %s\n", strings.Join(rootFiles, ", "))
-	deps, err := g.Graph.DirEdges(ctx, snap, 2)
-	if err != nil {
-		return "", err
-	}
-	if len(deps) > 0 {
-		b.WriteString("\nImports between directories (how many imports, most first):\n")
-		for i, e := range deps {
-			if i == 40 {
-				b.WriteString("  …\n")
-				break
-			}
-			fmt.Fprintf(&b, "  %s/ → %s/ (%d)\n", e.From, e.To, e.Count)
-		}
-	}
-
+	b.WriteString(tree)
 	files, err := g.Store.RootFiles(ctx, snap)
 	if err != nil {
 		return "", err

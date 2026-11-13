@@ -64,7 +64,7 @@ func TestPlanRoundTrip(t *testing.T) {
 	}
 	s := &Store{DB: db}
 	files := PageFiles{Chosen: []string{"a.go"}, Placed: []string{"b.go"}, Units: []string{"./"}}
-	labels := Labels{Stack: "Technologie", OtherFiles: "Weitere Dateien"}
+	labels := Labels{Stack: "Technologie", OtherFiles: "Weitere Dateien", Architecture: "Aufbau", Structure: "Struktur"}
 	if err := s.Add(ctx, 1, "Deutsch", labels, []NewPage{{Slug: "1", Title: "Ü", Parent: -1}, {Slug: "2", Title: "A", Parent: 0, Files: files}}); err != nil {
 		t.Fatal(err)
 	}

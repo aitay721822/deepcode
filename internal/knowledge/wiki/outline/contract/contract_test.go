@@ -89,7 +89,7 @@ func TestMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 	const a, b = `{"title":"X","terms":["t"],"files":["a/x.go"]}`, `{"title":"Z","terms":[],"files":["b/z.go"]}`
-	const ov, lb = `"overview":{"title":"O","terms":[]},"labels":{"stack":"S","otherFiles":"F"}`, `{"title":"P","terms":[]}`
+	const ov, lb = `"overview":{"title":"O","terms":[]},"labels":{"stack":"S","otherFiles":"F","architecture":"A","structure":"R"}`, `{"title":"P","terms":[]}`
 	for _, c := range []struct {
 		kind, text, rule string
 	}{
@@ -117,11 +117,12 @@ func TestMirror(t *testing.T) {
 		{"flat", `{` + ov + `,"units":{"a/":[{"title":"X","terms":[],"files":["b/z.go"]}],"b/":[` + b + `]}}`, "flat.file"},
 		{"flat", `{` + ov + `,"units":{"a/":[{"title":"X","terms":[],"files":[]}],"b/":[` + b + `]}}`, "flat.files"},
 		{"flat", `{"overview":{"title":"O","terms":[]},"units":{"a/":[` + a + `],"b/":[` + b + `]}}`, "outline.label"},
-		{"flat", `{"labels":{"stack":"S","otherFiles":"F"},"units":{"a/":[` + a + `],"b/":[` + b + `]}}`, "outline.title+terms.missing"},
+		{"flat", `{"labels":{"stack":"S","otherFiles":"F","architecture":"A","structure":"R"},"units":{"a/":[` + a + `],"b/":[` + b + `]}}`, "outline.title+terms.missing"},
 		{"outline", `{` + ov + `,"pages":{"1":` + lb + `,"p1":` + lb + `}}`, ""},
 		{"outline", `{` + ov + `,"pages":{"1":` + lb + `}}`, "outline.missing"},
 		{"outline", `{` + ov + `,"pages":{"1":` + lb + `,"p1":{"title":"P"}}}`, "terms.missing"},
-		{"outline", `{"overview":{"title":"O","terms":[` + thirteen + `]},"labels":{"stack":"S","otherFiles":"F"},"pages":{"1":` + lb + `,"p1":` + lb + `}}`, "terms.over"},
+		{"outline", `{"overview":{"title":"O","terms":[]},"labels":{"stack":"S","otherFiles":"F","architecture":"A"},"pages":{"1":` + lb + `,"p1":` + lb + `}}`, "outline.label"},
+		{"outline", `{"overview":{"title":"O","terms":[` + thirteen + `]},"labels":{"stack":"S","otherFiles":"F","architecture":"A","structure":"R"},"pages":{"1":` + lb + `,"p1":` + lb + `}}`, "terms.over"},
 	} {
 		var schemaErr error
 		var named []string
@@ -432,7 +433,7 @@ func TestTitles(t *testing.T) {
 }
 
 // TestHeads: an outline's head left out or untitled takes its part's name, an
-// empty overview title "Overview", an empty label English's.
+// empty overview title "Overview", an empty label English's; labels clean to one line.
 func TestHeads(t *testing.T) {
 	r := OutlineReply{Pages: map[string]Head{"1": {Title: " ", Terms: []string{}}}, Labels: Labels{Stack: "Stack"}}
 	turn := Outline(nil, []string{"1", "p1"}, map[string]string{"1": "Core", "p1": "Root folder"})
@@ -440,7 +441,8 @@ func TestHeads(t *testing.T) {
 		t.Errorf("check %v", got)
 	}
 	turn.Fix(&r)
-	if r.Overview.Title != "Overview" || r.Pages["1"].Title != "Core" || r.Pages["p1"].Title != "Root folder" || r.Labels != (Labels{"Stack", English.OtherFiles}) {
+	if r.Overview.Title != "Overview" || r.Pages["1"].Title != "Core" || r.Pages["p1"].Title != "Root folder" || r.Labels != (Labels{Stack: "Stack", OtherFiles: English.OtherFiles, Architecture: English.Architecture, Structure: English.Structure}) ||
+		(Labels{"Tech\n stack", " O", "A\tB", "R "}).Clean() != (Labels{"Tech stack", "O", "A B", "R"}) {
 		t.Errorf("fixed %+v", r)
 	}
 }

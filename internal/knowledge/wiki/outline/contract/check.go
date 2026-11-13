@@ -59,7 +59,12 @@ func (h Head) Page() outline.Page {
 }
 
 // Clean is l, each label on one line and clipped.
-func (l Labels) Clean() Labels { return Labels{Stack: title(l.Stack), OtherFiles: title(l.OtherFiles)} }
+func (l Labels) Clean() Labels {
+	for _, e := range l.each() {
+		*e.at = title(*e.at)
+	}
+	return l
+}
 
 // Note asks for the repair, naming each violation code does not fix alone.
 func Note(vs []Violation) string {
@@ -142,8 +147,8 @@ func checkOutline(overview Head, l Labels, pages map[string]Head, keys []string)
 		}
 		vs = append(vs, terms(k, h.Terms)...)
 	}
-	if strings.TrimSpace(l.Stack) == "" || strings.TrimSpace(l.OtherFiles) == "" {
-		vs = append(vs, Violation{Rule: "outline.label", Where: "labels", Detail: "labels.stack and labels.otherFiles must each hold a heading"})
+	if slices.ContainsFunc(l.each(), func(e label) bool { return strings.TrimSpace(*e.at) == "" }) {
+		vs = append(vs, Violation{Rule: "outline.label", Where: "labels", Detail: "labels.stack, labels.otherFiles, labels.architecture and labels.structure must each hold a heading"})
 	}
 	return vs
 }
@@ -161,11 +166,10 @@ func fixHeads(overview Head, l Labels, pages *map[string]Head, keys []string, na
 			(*pages)[k] = Head{Title: names[k], Terms: h.Terms}
 		}
 	}
-	if strings.TrimSpace(l.Stack) == "" {
-		l.Stack = English.Stack
-	}
-	if strings.TrimSpace(l.OtherFiles) == "" {
-		l.OtherFiles = English.OtherFiles
+	for _, e := range l.each() {
+		if strings.TrimSpace(*e.at) == "" {
+			*e.at = e.en
+		}
 	}
 	return overview, l
 }

@@ -103,7 +103,7 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"data": data})
 		return
 	}
-	reply := `{"overview":{"title":"Overview","terms":["main","server"]},"labels":{"stack":"Technology stack","otherFiles":"Other files"},` +
+	reply := `{"overview":{"title":"Overview","terms":["main","server"]},"labels":{"stack":"Technology stack","otherFiles":"Other files","architecture":"Architecture","structure":"Repository structure"},` +
 		`"units":{"./":[{"title":"Server","terms":["Server","Handle"],"files":["main.go"]}],"web/":[{"title":"Web App","terms":["App","start","helper"],"files":["web/app.ts"]}],` +
 		`"tooling":[{"title":"Build and tooling","terms":["README"],"files":["README.md"]}]}}`
 	if strings.Contains(body.Messages[0].Content, "Turn its question into") {

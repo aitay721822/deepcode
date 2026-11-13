@@ -81,13 +81,14 @@ func kind(u string) (string, string) {
 // guide by its title (outline.Title), else its name, with a level-3 heading
 // for each of up to maxChildren of its sections that show code; an example by
 // its folder's name; a folder of tests by its path's last two parts, the
-// root's "tests"), then one for each README recipe, then each chosen file's
-// (subjects). A name one file gives twice (a guide's section named as the
-// guide) is headed once. As page search reads at most most anchors, it keeps
-// most level-2 headings, each with its own, the chosen files' the first left
-// out; then, of the level-3 ones, those in order that the level-2 headings'
-// anchors leave room for. Headings of one name from different files each add
-// their path.
+// root's "tests", with a level-3 heading for each of up to maxChildren of its
+// code files, the largest first, when it holds two or more), then one for
+// each README recipe, then each chosen file's (subjects). A name one file
+// gives twice (a guide's section named as the guide) is headed once. As page
+// search reads at most most anchors, it keeps most level-2 headings, each
+// with its own, the chosen files' the first left out; then, of the level-3
+// ones, those in order that the level-2 headings' anchors leave room for.
+// Headings of one name from different files each add their path.
 func Build(units, chosen, files []string, src Source, most int) Skeleton {
 	var asides, recipes, out Skeleton
 	for _, u := range units {
@@ -113,8 +114,20 @@ func Build(units, chosen, files []string, src Source, most int) Skeleton {
 			if dir == "." {
 				name = analyzer.Tests
 			}
-			asides = append(asides, Heading{Name: name, Level: 2, Unit: u,
-				Anchor: largest(files, src.Lines, func(f string) bool { return path.Dir(f) == dir })})
+			in := func(f string) bool { return path.Dir(f) == dir }
+			asides = append(asides, Heading{Name: name, Level: 2, Unit: u, Anchor: largest(files, src.Lines, in)})
+			var code []string
+			for _, f := range files {
+				if in(f) && place.Code(f) {
+					code = append(code, f)
+				}
+			}
+			if len(code) > 1 {
+				slices.SortStableFunc(code, func(a, b string) int { return src.Lines[b] - src.Lines[a] })
+				for _, f := range code[:min(maxChildren, len(code))] {
+					asides = append(asides, Heading{Name: bare(f), Level: 3, Unit: u, Anchor: retrieval.Anchor{Path: f}})
+				}
+			}
 		case recipe:
 			_, title, _ := strings.Cut(u, "#")
 			h := Heading{Name: title, Level: 2, Unit: u}

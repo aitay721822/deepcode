@@ -29,12 +29,13 @@ func show(s Skeleton) []string {
 // TestBuild: a page's headings are its guides' (title, then up to four
 // sections that show code at level 3), examples' (the folder's name, its
 // largest file), tests' (the folder's last two parts, its largest file of its
-// own, the root's "tests"), recipes' (at their README line, none when the
-// README lacks one), then its chosen files' subjects (TestSubjects); a code
-// unit has none. A name one file gives twice is headed once. Past twelve
-// level-2 headings, the anchors page search reads, the chosen files' go
-// first, each with its children; after that, names another file shares take
-// their paths.
+// own, the root's "tests"; at level 3, up to four of its code files, the
+// largest first, when it holds two or more), recipes' (at their README line,
+// none when the README lacks one), then its chosen files' subjects
+// (TestSubjects); a code unit has none. A name one file gives twice is headed
+// once. Past twelve level-2 headings, the anchors page search reads, the
+// chosen files' go first, each with its children; after that, names another
+// file shares take their paths.
 func TestBuild(t *testing.T) {
 	src := Source{
 		Texts: map[string]string{"docs/guide.md": guide, "docs/plain.md": "intro\n\n## Alpha\n\n```\nb\n```\n",
@@ -44,9 +45,10 @@ func TestBuild(t *testing.T) {
 			"src/b.go": {{Name: "Router", Kind: "type", Line: 5}}, "src/c.go": {{Name: "serve", Kind: "function", Line: 7}},
 			"src/d.go": {{Name: "Big", Kind: "struct", Line: 1, End: 20}, {Name: "run", Kind: "function", Line: 30, End: 40}}},
 		Lines: map[string]int{"examples/rest/main.go": 10, "examples/rest/big.go": 50, "internal/pkg/a_test.go": 5, "internal/pkg/b_test.go": 30,
-			"internal/pkg/sub/c_test.go": 100, "x_test.go": 4},
+			"internal/pkg/sub/c_test.go": 100, "x_test.go": 4, "t/a_test.go": 10, "t/b_test.go": 40, "t/c_test.go": 20, "t/d_test.go": 30, "t/e_test.go": 5, "t/data.json": 500},
 	}
-	files := []string{"examples/rest/main.go", "examples/rest/big.go", "internal/pkg/a_test.go", "internal/pkg/b_test.go", "internal/pkg/sub/c_test.go", "x_test.go"}
+	files := []string{"examples/rest/main.go", "examples/rest/big.go", "internal/pkg/a_test.go", "internal/pkg/b_test.go", "internal/pkg/sub/c_test.go", "x_test.go",
+		"t/a_test.go", "t/b_test.go", "t/c_test.go", "t/d_test.go", "t/e_test.go", "t/data.json"}
 	var tests, named []string // folders of tests a/ to k/ with no files, and their headings
 	for c := 'a'; c <= 'k'; c++ {
 		tests, named = append(tests, string(c)+"/ (tests)"), append(named, "2 "+string(c)+" @:0")
@@ -58,8 +60,10 @@ func TestBuild(t *testing.T) {
 	}{
 		{"every kind", []string{"docs/guide.md", "examples/rest/", "internal/pkg/ (tests)", "README.md#Transient updates", "src/"}, []string{"src/a.go", "src/Program.cs", "src/b.go"},
 			[]string{"2 Flux guide @docs/guide.md:1", "3 Setup @docs/guide.md:5", "3 Prose @docs/guide.md:11", "3 Usage @docs/guide.md:21", "3 More @docs/guide.md:31",
-				"2 rest @examples/rest/big.go:0", "2 internal/pkg @internal/pkg/b_test.go:0", "2 Transient updates @README.md:7", "2 Router (src/a.go) @src/a.go:10",
-				"3 helper @src/a.go:3", "2 Program @src/Program.cs:0", "2 Router (src/b.go) @src/b.go:5"}},
+				"2 rest @examples/rest/big.go:0", "2 internal/pkg @internal/pkg/b_test.go:0", "3 b_test @internal/pkg/b_test.go:0", "2 Transient updates @README.md:7",
+				"2 Router (src/a.go) @src/a.go:10", "2 Program @src/Program.cs:0", "2 Router (src/b.go) @src/b.go:5"}},
+		{"tests list their largest code files", []string{"t/ (tests)"}, nil,
+			[]string{"2 t @t/data.json:0", "3 b_test @t/b_test.go:0", "3 d_test @t/d_test.go:0", "3 c_test @t/c_test.go:0", "3 a_test @t/a_test.go:0"}},
 		{"unique names", []string{"./"}, []string{"src/a.go", "src/b.go", "src/c.go", "src/Program.cs"},
 			[]string{"2 Router (src/a.go) @src/a.go:10", "3 helper @src/a.go:3", "2 Router (src/b.go) @src/b.go:5", "2 serve @src/c.go:7", "2 Program @src/Program.cs:0"}},
 		{"one name twice in a file", []string{"docs/dup.md"}, nil, []string{"2 Usage @docs/dup.md:1", "3 Example @docs/dup.md:9"}},

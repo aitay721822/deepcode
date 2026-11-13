@@ -19,8 +19,12 @@ import (
 )
 
 // drawnNote tells the model writing the overview that the page already shows
-// a diagram, drawn from the import graph.
-const drawnNote = "This page is the overview, and a diagram of the imports between the repository's directories is shown with it: draw no diagram of your own.\n\n"
+// a diagram, drawn from the import graph; treeNote gives it the layout its
+// architecture and structure rest on.
+const (
+	drawnNote = "This page is the overview, and a diagram of the imports between the repository's directories is shown with it: draw no diagram of your own.\n\n"
+	treeNote  = "The repository's layout, as indexed, for the overview's architecture and structure:\n\n%s\n"
+)
 
 // Writing is how writing a page went: the headings it was held to, those
 // left out before writing as no source of theirs fit (skeleton.unsourced),
@@ -37,12 +41,12 @@ type Writing struct {
 }
 
 // write drafts page p, one of pages, from its sources, held to its skeleton:
-// the overview to the stack heading, a section's page to none, any other to
-// the headings its plan gives (skeleton.Build). A heading none of whose
-// source fits the evidence is left out first. The page is written as
-// Markdown, which streams into the job's output. Each heading missing, empty
-// or citing nothing that checks out is asked for again once; a page with no
-// skeleton, when it cites nothing.
+// the overview to its fixed headings, given the layout (tree), a section's
+// page to none, any other to the headings its plan gives (skeleton.Build). A
+// heading none of whose source fits the evidence is left out first. The page
+// is written as Markdown, which streams into the job's output. Each heading
+// missing, empty or citing nothing that checks out is asked for again once;
+// a page with no skeleton, when it cites nothing.
 //
 // The prompt runs from what every call shares to what only this page has, so
 // the model server's prompt cache reads the start once: the rules, the wiki's
@@ -77,11 +81,18 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 	}
 	overview := ""
 	if p.Position == 0 {
-		if d, err := g.Graph.Diagram(ctx, snap); err != nil {
+		d, err := g.Graph.Diagram(ctx, snap)
+		if err != nil {
 			return "", nil, err
-		} else if d != "" {
+		}
+		tree, err := g.tree(ctx, snap)
+		if err != nil {
+			return "", nil, err
+		}
+		if d != "" {
 			overview = drawnNote
 		}
+		overview += fmt.Sprintf(treeNote, tree)
 	}
 	titles, parts, section := make([]string, len(pages)), []string{}, ""
 	for i, q := range pages {
@@ -186,13 +197,19 @@ func (g *Generator) otherFiles(ctx context.Context, snap int64, src source, p pa
 // maxDeclared is the most declarations the Other files list names a file by.
 const maxDeclared = 3
 
-// skeleton is the headings page p is held to: the overview's, the stack's
-// under the wiki's label; a section's page (head), and a page planned before
-// pages had files, none; any other's, those its plan gives.
+// skeleton is the headings page p is held to: the overview's, its
+// architecture, the repository's structure and its stack, under the wiki's
+// labels, English for one it lacks (planned before it); a section's page
+// (head), and a page planned before pages had files, none; any other's,
+// those its plan gives.
 func (g *Generator) skeleton(ctx context.Context, snap int64, p page, head bool) (skeleton.Skeleton, error) {
 	if p.Position == 0 {
-		labels, err := g.Store.Labels(ctx, snap)
-		return skeleton.Skeleton{{Name: cmp.Or(labels.Stack, contract.English.Stack), Level: 2}}, err
+		l, err := g.Store.Labels(ctx, snap)
+		var sk skeleton.Skeleton
+		for _, name := range []string{cmp.Or(l.Architecture, contract.English.Architecture), cmp.Or(l.Structure, contract.English.Structure), cmp.Or(l.Stack, contract.English.Stack)} {
+			sk = append(sk, skeleton.Heading{Name: name, Level: 2})
+		}
+		return sk, err
 	}
 	if head || p.Files == nil {
 		return nil, nil
@@ -319,4 +336,58 @@ func dedupe(hits []retrieval.Hit) []retrieval.Hit {
 		}
 	}
 	return out
+}
+
+// tree is the snapshot's directories two levels deep with their file counts,
+// its root files and the imports between those directories: the layout the
+// plan and the overview read.
+func (g *Generator) tree(ctx context.Context, snap int64) (string, error) {
+	paths, err := g.Store.Paths(ctx, snap)
+	if err != nil {
+		return "", err
+	}
+	counts := map[string]int{}
+	var rootFiles []string
+	for _, p := range paths {
+		parts := strings.Split(p, "/")
+		if len(parts) == 1 {
+			rootFiles = append(rootFiles, p)
+			continue
+		}
+		counts[parts[0]+"/"]++
+		if len(parts) > 2 {
+			counts[parts[0]+"/"+parts[1]+"/"]++
+		}
+	}
+	dirs := make([]string, 0, len(counts))
+	for d := range counts {
+		dirs = append(dirs, d)
+	}
+	slices.Sort(dirs)
+	var b strings.Builder
+	b.WriteString("Directories (indexed file counts):\n")
+	for i, d := range dirs {
+		if i == 150 {
+			b.WriteString("  …\n")
+			break
+		}
+		indent := strings.Repeat("  ", strings.Count(d, "/"))
+		fmt.Fprintf(&b, "%s%s (%d)\n", indent, d, counts[d])
+	}
+	fmt.Fprintf(&b, "\nRoot files: %s\n", strings.Join(rootFiles, ", "))
+	deps, err := g.Graph.DirEdges(ctx, snap, 2)
+	if err != nil {
+		return "", err
+	}
+	if len(deps) > 0 {
+		b.WriteString("\nImports between directories (how many imports, most first):\n")
+		for i, e := range deps {
+			if i == 40 {
+				b.WriteString("  …\n")
+				break
+			}
+			fmt.Fprintf(&b, "  %s/ → %s/ (%d)\n", e.From, e.To, e.Count)
+		}
+	}
+	return b.String(), nil
 }
