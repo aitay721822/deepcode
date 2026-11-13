@@ -309,18 +309,22 @@ func (g *Generator) sectioned(ctx context.Context, about, layout string, code []
 }
 
 // part plans one part's pages, its files placed on them. A top-level code
-// page is the outline's head holding its unit's files; an aside of one page,
-// the head holding the kind's. Code and tooling are planned by unit (the
-// section request, split within the limits); tests, examples and docs by
-// assigning their units to pages (the aside request), a section of more
-// units than one names in two levels (package aside).
+// page is the outline's head holding its unit's files, its code chosen
+// (place.Alone); an aside of one page, the head holding the kind's. Code and
+// tooling are planned by unit (the section request, split within the
+// limits); tests, examples and docs by assigning their units to pages (the
+// aside request), a section of more units than one names in two levels
+// (package aside).
 func (g *Generator) part(ctx context.Context, p contract.Part, head outline.Page, about string, titles []string, s structure, r *planRun) ([]outline.Page, error) {
 	u := p.Units[0]
 	asides := place.AsideUnits(p.Kind, u.Files, s.lines, u.Home)
 	switch {
 	case len(p.Units) == 1 && u.Cap == 1:
-		head.Placed = u.Files
-		if head.Units = []string{u.Key}; p.Kind != "" && p.Kind != analyzer.Tooling {
+		head.Placed, head.Units = u.Files, []string{u.Key}
+		switch {
+		case p.Kind == "":
+			head.Chosen, head.Placed = place.Alone(u.Files, s.lines)
+		case p.Kind != analyzer.Tooling:
 			head.Units = nil
 			for _, a := range asides {
 				head.Units = append(head.Units, a.Key)

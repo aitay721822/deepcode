@@ -31,9 +31,10 @@ func show(s Skeleton) []string {
 // largest file), tests' (the folder's last two parts, its largest file of its
 // own, the root's "tests"), recipes' (at their README line, none when the
 // README lacks one), then its chosen files' subjects (TestSubjects); a code
-// unit has none. A name one file gives twice is headed once. Past six level-2
-// headings, the chosen files' go first, each with its children; after that,
-// names another file shares take their paths.
+// unit has none. A name one file gives twice is headed once. Past twelve
+// level-2 headings, the anchors page search reads, the chosen files' go
+// first, each with its children; after that, names another file shares take
+// their paths.
 func TestBuild(t *testing.T) {
 	src := Source{
 		Texts: map[string]string{"docs/guide.md": guide, "docs/plain.md": "intro\n\n## Alpha\n\n```\nb\n```\n",
@@ -46,6 +47,10 @@ func TestBuild(t *testing.T) {
 			"internal/pkg/sub/c_test.go": 100, "x_test.go": 4},
 	}
 	files := []string{"examples/rest/main.go", "examples/rest/big.go", "internal/pkg/a_test.go", "internal/pkg/b_test.go", "internal/pkg/sub/c_test.go", "x_test.go"}
+	var tests, named []string // folders of tests a/ to k/ with no files, and their headings
+	for c := 'a'; c <= 'k'; c++ {
+		tests, named = append(tests, string(c)+"/ (tests)"), append(named, "2 "+string(c)+" @:0")
+	}
 	for _, c := range []struct {
 		name          string
 		units, chosen []string
@@ -53,17 +58,17 @@ func TestBuild(t *testing.T) {
 	}{
 		{"every kind", []string{"docs/guide.md", "examples/rest/", "internal/pkg/ (tests)", "README.md#Transient updates", "src/"}, []string{"src/a.go", "src/Program.cs", "src/b.go"},
 			[]string{"2 Flux guide @docs/guide.md:1", "3 Setup @docs/guide.md:5", "3 Prose @docs/guide.md:11", "3 Usage @docs/guide.md:21", "3 More @docs/guide.md:31",
-				"2 rest @examples/rest/big.go:0", "2 internal/pkg @internal/pkg/b_test.go:0", "2 Transient updates @README.md:7", "2 Router @src/a.go:10", "3 helper @src/a.go:3",
-				"2 Program @src/Program.cs:0"}},
+				"2 rest @examples/rest/big.go:0", "2 internal/pkg @internal/pkg/b_test.go:0", "2 Transient updates @README.md:7", "2 Router (src/a.go) @src/a.go:10",
+				"3 helper @src/a.go:3", "2 Program @src/Program.cs:0", "2 Router (src/b.go) @src/b.go:5"}},
 		{"unique names", []string{"./"}, []string{"src/a.go", "src/b.go", "src/c.go", "src/Program.cs"},
 			[]string{"2 Router (src/a.go) @src/a.go:10", "3 helper @src/a.go:3", "2 Router (src/b.go) @src/b.go:5", "2 serve @src/c.go:7", "2 Program @src/Program.cs:0"}},
 		{"one name twice in a file", []string{"docs/dup.md"}, nil, []string{"2 Usage @docs/dup.md:1", "3 Example @docs/dup.md:9"}},
 		{"untitled guide, root tests, example file, lost recipe", []string{"docs/plain.md", "./ (tests)", "examples/main.go", "README.md#Gone", "tooling"}, nil,
 			[]string{"2 plain @docs/plain.md:0", "3 Alpha @docs/plain.md:3", "2 tests @x_test.go:0", "2 main @examples/main.go:0", "2 Gone @:0"}},
-		{"seven asides", []string{"docs/plain.md", "a/ (tests)", "b/ (tests)", "c/ (tests)", "d/ (tests)", "e/ (tests)", "f/ (tests)"}, []string{"src/c.go"},
-			[]string{"2 plain @docs/plain.md:0", "3 Alpha @docs/plain.md:3", "2 a @:0", "2 b @:0", "2 c @:0", "2 d @:0", "2 e @:0"}},
-		{"a seventh file goes with its children", []string{"a/ (tests)", "b/ (tests)", "c/ (tests)", "d/ (tests)", "e/ (tests)"}, []string{"src/a.go", "src/d.go"},
-			[]string{"2 a @:0", "2 b @:0", "2 c @:0", "2 d @:0", "2 e @:0", "2 Router @src/a.go:10", "3 helper @src/a.go:3"}},
+		{"twelve asides", append([]string{"docs/plain.md"}, tests[:11]...), []string{"src/c.go"},
+			append([]string{"2 plain @docs/plain.md:0", "3 Alpha @docs/plain.md:3"}, named[:11]...)},
+		{"a thirteenth file goes with its children", tests[:11], []string{"src/a.go", "src/d.go"},
+			append(slices.Clone(named[:11]), "2 Router @src/a.go:10", "3 helper @src/a.go:3")},
 	} {
 		if got := show(Build(c.units, c.chosen, files, src, 12)); !slices.Equal(got, c.want) {
 			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)

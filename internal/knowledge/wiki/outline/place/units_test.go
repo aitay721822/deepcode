@@ -284,3 +284,13 @@ func TestCeiling(t *testing.T) {
 		}
 	}
 }
+
+// TestAlone: a code unit with one page chooses its code, the largest first,
+// equal ones in path order, and places the rest.
+func TestAlone(t *testing.T) {
+	chosen, placed := Alone([]string{"a/App.csproj", "a/AppHost.cs", "a/Extensions.cs", "a/appsettings.json", "a/Small.cs", "a/Tiny.cs"},
+		map[string]int{"a/AppHost.cs": 40, "a/Extensions.cs": 160, "a/Small.cs": 10, "a/Tiny.cs": 10, "a/appsettings.json": 900})
+	if !slices.Equal(chosen, []string{"a/Extensions.cs", "a/AppHost.cs", "a/Small.cs", "a/Tiny.cs"}) || !slices.Equal(placed, []string{"a/App.csproj", "a/appsettings.json"}) {
+		t.Errorf("chosen %q, placed %q", chosen, placed)
+	}
+}

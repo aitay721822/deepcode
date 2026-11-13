@@ -30,11 +30,8 @@ type Heading struct {
 // Skeleton is a page's headings, in order.
 type Skeleton []Heading
 
-// The most level-2 headings a page has, and level-3 ones under one.
-const (
-	maxHeads    = 6
-	maxChildren = 4
-)
+// maxChildren is the most level-3 headings under one level-2 heading.
+const maxChildren = 4
 
 // Source is what Build reads of the snapshot: the text of the guides and
 // READMEs a page's units name (Texts), its chosen files' declarations, and
@@ -86,11 +83,11 @@ func kind(u string) (string, string) {
 // its folder's name; a folder of tests by its path's last two parts, the
 // root's "tests"), then one for each README recipe, then each chosen file's
 // (subjects). A name one file gives twice (a guide's section named as the
-// guide) is headed once. It keeps maxHeads level-2 headings, each with its
-// own; the chosen files' are the first left out. Of those, it keeps at most
-// most headings with an anchor, as page search takes no more: every level-2
-// one, then the level-3 ones in order. Headings of one name from different
-// files each add their path.
+// guide) is headed once. As page search reads at most most anchors, it keeps
+// most level-2 headings, each with its own, the chosen files' the first left
+// out; then, of the level-3 ones, those in order that the level-2 headings'
+// anchors leave room for. Headings of one name from different files each add
+// their path.
 func Build(units, chosen, files []string, src Source, most int) Skeleton {
 	var asides, recipes, out Skeleton
 	for _, u := range units {
@@ -144,7 +141,7 @@ func Build(units, chosen, files []string, src Source, most int) Skeleton {
 		if h.Level == 2 {
 			heads++
 		}
-		return heads > maxHeads
+		return heads > most
 	})
 	room := most // what the level-2 headings' anchors leave the level-3 ones, which all have one
 	for _, h := range out {

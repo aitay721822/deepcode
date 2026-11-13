@@ -213,17 +213,17 @@ func draft(request string) string {
 
 // TestRunPlansSections: a repository too big to plan flat gets the overview,
 // each section under its head, each unit with pages of its own files (one the
-// first reply left out repaired), a unit alone at the top, then the docs,
-// the tests and the tooling, each of the last two one page at the top, as
-// its share of four code pages is one; every code file is on a page; a
-// section's page is written as its overview, a part as a part, and the nav
-// reads each part's section. Under a ceiling the plan keeps to it and says
-// what the structure wanted.
+// first reply left out repaired), a unit alone at the top, its code chosen,
+// then the docs, the tests and the tooling (its script not chosen), each of
+// the last two one page at the top, as its share of four code pages is one; every code file is on a
+// page; a section's page is written as its overview, a part as a part, and
+// the nav reads each part's section. Under a ceiling the plan keeps to it and
+// says what the structure wanted.
 func TestRunPlansSections(t *testing.T) {
 	stmts := []string{`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`, `INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`,
 		`INSERT INTO file_edges(snapshot_id, src, dst) VALUES (1, 'api/a1.go', 'store/s1.go'), (1, 'api/a2.go', 'store/s2.go'), (1, 'web/w1.go', 'api/a1.go'), (1, 'docs/d1.md', 'ex/x.go')`}
 	files := []string{"main.go", "go.mod", "docs/d1.md", "docs/d2.md", "api/a1.go", "api/a2.go", "api/a3.go", "api/a4.go", "store/s1.go", "store/s2.go",
-		"store/s3.go", "store/s4.go", "web/w1.go", "web/w2.go", "web/w3.go", "web/w4.go", "api/a1_test.go", "store/s1_test.go", ".github/ci.yml", "ex/x.go"} // ex/: d1.md's
+		"store/s3.go", "store/s4.go", "web/w1.go", "web/w2.go", "web/w3.go", "web/w4.go", "api/a1_test.go", "store/s1_test.go", ".github/ci.yml", ".github/release.js", "ex/x.go"} // ex/: d1.md's
 	for _, f := range files {
 		lines := map[bool]int{false: 100, true: 600}[strings.HasPrefix(f, "docs/")]
 		stmts = append(stmts, fmt.Sprintf(`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, '%s', 'go', 'h', 1, %d)`, f, lines))
@@ -252,12 +252,12 @@ func TestRunPlansSections(t *testing.T) {
 	if strings.Join(got, " ") != want || len(model.writes) != len(pages) || planned.Requests != 4 || !reflect.DeepEqual(planned.Contracts, counts) || planned.Seconds <= 0 {
 		t.Fatalf("pages %q, %d written; planned %+v", got, len(model.writes), planned)
 	}
-	if left := place.Unnamed(plan, files); len(left) > 0 || !slices.Equal(pages[5].Files.Placed, []string{"go.mod", "main.go"}) || !slices.Equal(pages[4].Files.Chosen, []string{"web/w1.go"}) ||
+	if left := place.Unnamed(plan, files); len(left) > 0 || !slices.Equal(pages[5].Files.Chosen, []string{"main.go"}) || !slices.Equal(pages[5].Files.Placed, []string{"go.mod"}) || !slices.Equal(pages[4].Files.Chosen, []string{"web/w1.go"}) ||
 		!slices.Equal(pages[6].Files.Units, []string{"docs/d1.md", "docs/d2.md"}) || !slices.Equal(pages[6].Files.Placed, []string{"docs/d1.md", "ex/x.go", "docs/d2.md"}) {
 		t.Fatalf("unplaced %v; top-level %+v; web %+v; docs %+v", left, pages[5].Files, pages[4].Files, pages[6].Files)
 	}
-	tests, tooling := [][]string{{"api/a1_test.go", "store/s1_test.go"}, {"api/" + place.TestsMark, "store/" + place.TestsMark}}, [][]string{{".github/ci.yml"}, {"tooling"}}
-	if f, g := pages[7].Files, pages[8].Files; !reflect.DeepEqual([][]string{f.Placed, f.Units}, tests) || !reflect.DeepEqual([][]string{g.Placed, g.Units}, tooling) {
+	tests, tooling := [][]string{{"api/a1_test.go", "store/s1_test.go"}, {"api/" + place.TestsMark, "store/" + place.TestsMark}}, [][]string{{".github/ci.yml", ".github/release.js"}, {"tooling"}}
+	if f, g := pages[7].Files, pages[8].Files; !reflect.DeepEqual([][]string{f.Placed, f.Units}, tests) || !reflect.DeepEqual([][]string{g.Placed, g.Units}, tooling) || len(g.Chosen) > 0 {
 		t.Fatalf("tests %+v, tooling %+v", pages[7].Files, pages[8].Files)
 	}
 	if !slices.ContainsFunc(model.writes, func(u string) bool {

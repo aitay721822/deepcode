@@ -65,6 +65,21 @@ func Code(f string) bool {
 	return ok && analyzer.HasGrammar(lang) && !analyzer.Config(f)
 }
 
+// Alone splits the files of a code unit with one page: its code chosen, the
+// largest first, as a page the model plans chooses files, so the page is
+// headed by what they declare (skeleton.Build); the rest placed.
+func Alone(files []string, lines map[string]int) (chosen, placed []string) {
+	for _, f := range files {
+		if Code(f) {
+			chosen = append(chosen, f)
+		} else {
+			placed = append(placed, f)
+		}
+	}
+	slices.SortStableFunc(chosen, func(a, b string) int { return lines[b] - lines[a] })
+	return chosen, placed
+}
+
 // Weigh is files' weight: each file's lines, at least 1 and at most
 // maxLines, a stylesheet, SQL or configuration file a quarter when quarter.
 func Weigh(files []string, lines map[string]int, quarter bool) float64 {
