@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/aitay721822/deepcode/actions/workflows/ci.yml/badge.svg)](https://github.com/aitay721822/deepcode/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/aitay721822/deepcode)](https://github.com/aitay721822/deepcode/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](#license)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
 
 <img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/tour.gif" alt="在 go-chi/chi 的 Wiki 頁提問：deepcode 先搜尋程式碼，再串流出附行號引用的答案，右側打開引用的原始碼" width="900">
 
@@ -100,24 +100,4 @@
 
 ## License
 
-MIT License
-
-Copyright (c) 2026 chungyu.lin
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+MIT，全文見 [LICENSE.md](LICENSE.md)。
