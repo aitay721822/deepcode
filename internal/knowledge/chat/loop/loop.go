@@ -145,7 +145,7 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 	}
 	first.Dynamic += s.follow(ctx, req.First.Hits, follows)
 	ex := g.Model.Exchange(first, tools)
-	told := len(s.res.Refused) > 0 // the model was told of a refusal
+	told := slices.ContainsFunc(s.res.Refused, asked) // the model was told of a refusal
 	for stalls := 0; s.res.Stop == ""; {
 		if s.res.Rounds == req.Rounds {
 			s.res.Stop = StopRounds
@@ -193,7 +193,7 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 		} else {
 			stalls++
 		}
-		full := len(s.res.Refused) > refused // the budget refused some of this reply's code
+		full := slices.ContainsFunc(s.res.Refused[refused:], asked) // the budget refused some of this reply's code
 		switch {
 		case done:
 			s.res.Stop = StopDone
@@ -267,7 +267,8 @@ func (s *state) request() ai.Prompt {
 // as they fit (admit), and reports whether any is new code: a range no range
 // read before holds, a chunk neither held nor within a range read. A chunk held
 // keeps the origin of the call that first found it. The note tells what the
-// call evicted and refused.
+// call evicted and refused, follow's refusals aside: the model never asked for
+// that code, so it has nothing to do about it.
 func (s *state) add(tool string, hits []retrieval.Hit) (grew bool, note string) {
 	s.calls++
 	evicted, refused := len(s.res.Evicted), len(s.res.Refused)
@@ -282,8 +283,14 @@ func (s *state) add(tool string, hits []retrieval.Hit) (grew bool, note string) 
 			grew = true
 		}
 	}
+	if tool == "follow" {
+		refused = len(s.res.Refused)
+	}
 	return grew, s.note(evicted, refused)
 }
+
+// asked reports whether o was code a call asked for: follow's finds were not.
+func asked(o Out) bool { return o.Tool != "follow" }
 
 // covered reports whether a range read holds all of h.
 func (s *state) covered(h retrieval.Hit) bool {

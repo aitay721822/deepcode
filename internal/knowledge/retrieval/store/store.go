@@ -84,6 +84,56 @@ func (s *Store) Chunks(ctx context.Context, ids []int64) ([]Hit, error) {
 	return hits, rows.Err()
 }
 
+// Read reads the chunks of ranked, in its order, up to limit hits, each hit on
+// a file's header (the licence, package and imports before its first
+// declaration) joined to the chunk declaring what follows it: alone the header
+// shows no code, yet its imports can win a search for what the code does
+// (OwnerRepository.java's JpaRepository), and the declaration may rank nowhere.
+// When both are ranked they are read as one hit, in the place of the first,
+// and a chunk joined is not read again; the places a join frees go to the
+// ranked chunks after, so limit hits are read while ranked has them. Those
+// past limit are read only as places fall free, as many as fell free.
+// ponytail: at search time, as joining them when chunking ranked the eval's
+// Java corpora lower; chunk headers apart if a corpus needs it.
+func (s *Store) Read(ctx context.Context, snapshotID int64, ranked []int64, limit int) ([]Hit, error) {
+	var out []Hit
+	read := map[int64]bool{} // chunks read, alone or joined
+	for next := 0; len(out) < limit && next < len(ranked); {
+		batch := ranked[next:min(len(ranked), next+limit-len(out))]
+		next += len(batch)
+		hits, err := s.Chunks(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		for _, h := range hits {
+			if read[h.ChunkID] {
+				continue
+			}
+			read[h.ChunkID] = true
+			if h.Symbol != "" || h.StartLine != 1 {
+				out = append(out, h)
+				continue
+			}
+			d, ok, err := s.Following(ctx, snapshotID, h.Path, h.EndLine+1)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				out = append(out, h)
+				continue
+			}
+			joined := Hit{ChunkID: h.ChunkID, Path: h.Path, Symbol: d.Symbol, StartLine: h.StartLine, EndLine: d.EndLine, Content: h.Content + "\n" + d.Content}
+			if i := slices.IndexFunc(out, func(o Hit) bool { return o.ChunkID == d.ChunkID }); i >= 0 {
+				out[i] = joined
+				continue
+			}
+			read[d.ChunkID] = true
+			out = append(out, joined)
+		}
+	}
+	return out, nil
+}
+
 // Following reads the chunk of the snapshot's file p that starts at line and
 // declares something, and whether there is one.
 func (s *Store) Following(ctx context.Context, snapshotID int64, p string, line int) (Hit, bool, error) {

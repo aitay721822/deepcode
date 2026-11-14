@@ -83,17 +83,14 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 			log.Printf("retrieval: vector search unavailable, using FTS5 and symbols only: %v", err)
 		}
 	}
-	ids := fusion.Sure(fusion.Fuse(fts, vec, sym, named), named[:firsts], head(limit))
-	near, err := r.near(ctx, snapshotID, query, ids)
+	ranked := fusion.Sure(fusion.Fuse(fts, vec, sym, named), named[:firsts], head(limit))
+	near, err := r.near(ctx, snapshotID, query, ranked)
 	if err != nil {
 		return res, err
 	}
-	ids, res.Graph = supplement(ids, near, limit)
-	res.FTS, res.Vector, res.Symbol, res.Named = len(fts), len(vec), len(sym), len(named)
-	if res.Hits, err = r.Store.Chunks(ctx, ids); err != nil {
-		return res, err
-	}
-	res.Hits, err = r.declared(ctx, snapshotID, res.Hits)
+	ids, graph := supplement(ranked, near, limit)
+	res.FTS, res.Vector, res.Symbol, res.Named, res.Graph = len(fts), len(vec), len(sym), len(named), graph
+	res.Hits, err = r.Store.Read(ctx, snapshotID, then(ids, ranked), limit)
 	return res, err
 }
 
@@ -161,45 +158,14 @@ func (r *Retriever) SearchPage(ctx context.Context, snapshotID int64, words stri
 		ids = append(ids, rest...)
 	}
 	res.FTS, res.Vector, res.Symbol, res.Named = len(fts), len(vec), len(sym), len(own)
-	if res.Hits, err = r.Store.Chunks(ctx, ids); err != nil {
-		return res, err
-	}
-	res.Hits, err = r.declared(ctx, snapshotID, res.Hits)
+	res.Hits, err = r.Store.Read(ctx, snapshotID, then(ids, fused), limit)
 	return res, err
 }
 
-// declared joins each hit on a file's header, the licence, package and
-// imports before its first declaration, to the chunk declaring it: alone the
-// header shows no code, yet its imports can win a search for what the code
-// does (OwnerRepository.java's JpaRepository), and the declaration may rank
-// nowhere. Both found are read as one, in the place of the first.
-// ponytail: at search time, as joining them when chunking ranked the eval's
-// Java corpora lower; chunk headers apart if a corpus needs it.
-func (r *Retriever) declared(ctx context.Context, snapshotID int64, hits []Hit) ([]Hit, error) {
-	drop := map[int]bool{}
-	for i, h := range hits {
-		if h.Symbol != "" || h.StartLine != 1 || drop[i] {
-			continue
-		}
-		next, ok, err := r.Store.Following(ctx, snapshotID, h.Path, h.EndLine+1)
-		if err != nil {
-			return nil, err
-		} else if !ok {
-			continue
-		}
-		at := i
-		if j := slices.IndexFunc(hits, func(o Hit) bool { return o.ChunkID == next.ChunkID }); j >= 0 {
-			at, drop[max(i, j)] = min(i, j), true
-		}
-		hits[at] = Hit{ChunkID: h.ChunkID, Path: h.Path, Symbol: next.Symbol, StartLine: h.StartLine, EndLine: next.EndLine, Content: h.Content + "\n" + next.Content}
-	}
-	out := hits[:0]
-	for i, h := range hits {
-		if !drop[i] {
-			out = append(out, h)
-		}
-	}
-	return out, nil
+// then is ids, then the ranked ids they lack, in rank order: the chunks read
+// in the places a header joined to its declaration frees (Store.Read).
+func then(ids, ranked []int64) []int64 {
+	return append(slices.Clip(ids), slices.DeleteFunc(slices.Clone(ranked), func(id int64) bool { return slices.Contains(ids, id) })...)
 }
 
 // near ranks, by the query's words, the chunks of the files that the files of

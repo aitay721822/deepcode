@@ -213,14 +213,41 @@ func TestFirstOverBudget(t *testing.T) {
 	}
 }
 
+// TestFollowRoom: follow's finds evict only follow's, the oldest call's first,
+// never what the first search, a search or a read found; a follow find with no
+// room left of follow's is refused, and the model is not told: it never asked
+// for that code. A call's finds that need room evict follow's first, then the
+// oldest call's.
+func TestFollowRoom(t *testing.T) {
+	S := len(evidence.Block(chunk(1)))
+	s := start(Gatherer{}, Request{First: retrieval.Result{Hits: chunks(1)}, Limits: Limits{Rounds: 4, Limit: evidence.Limit{Chars: 4 * S}}})
+	s.res.Rounds = 1
+	s.add("search_code", chunks(2))
+	s.add("read_file", []retrieval.Hit{{Path: "f03.go", StartLine: 1, EndLine: 1, Content: "x"}})
+	s.add("follow", chunks(4))
+	if s.add("follow", chunks(2)); s.held[2].Tool != "search_code" {
+		t.Errorf("a search's find, followed to, is held as follow's: %+v", s.held[2])
+	}
+	if _, note := s.add("follow", chunks(5, 6)); note != "To make room, these left the evidence: f04.go:1-1. A later call may find them again.\n" ||
+		!slices.Equal(outs(s.res.Evicted), []string{"f04.go:1-1 r2 follow follow"}) || !slices.Equal(outs(s.res.Refused), []string{"f06.go:1-1 r2 follow "}) {
+		t.Errorf("follow: told %q, evicted %q, refused %q", note, outs(s.res.Evicted), outs(s.res.Refused))
+	}
+	s.add("search_code", chunks(7))
+	s.add("users", chunks(8))
+	if got := shown(t, s); !slices.Equal(got, []string{"f03.go:1-1", "f02.go:1-1", "f08.go:1-1", "f07.go:1-1"}) ||
+		!slices.Equal(outs(s.res.Evicted[1:]), []string{"f05.go:1-1 r2 search_code follow", "f01.go:1-1 r2 users first"}) {
+		t.Errorf("a search's finds: evidence %q, evicted %q", got, outs(s.res.Evicted))
+	}
+}
+
 // TestFollowBudget: what follow finds (twinsFixture) goes through the budget
-// as a call's finds do. With room for two of the first three chunks, following
-// OrderShipped evicts the first search's hit, then following OrderClosed, the
-// third step, evicts OrderPaid's handler, and the first request says so.
-// With room for the first search's hit alone, OrderPaid's handler is refused,
-// and code refused is not followed further. That refusal, told in the first
-// request, is a refusal told: a reply that adds nothing, refused, ends the
-// gathering.
+// as a call's finds do, evicting only follow's. With room for the first
+// search's hit and two of the three steps' handlers, following OrderShipped
+// evicts OrderPaid's handler, the oldest follow find, not the first search's
+// hit, so OrderClosed's handler, the third step, fits too, and the first
+// request says what left. With room for the first search's hit alone,
+// OrderPaid's handler is refused, named nowhere, and not followed further; a
+// follow refused is no refusal told, so a reply then refused goes on.
 func TestFollowBudget(t *testing.T) {
 	ctx := context.Background()
 	srv, asked := model(t)
@@ -228,46 +255,67 @@ func TestFollowBudget(t *testing.T) {
 	worker, paid, ship := chunkAt(t, g, "src/Payment/Worker.cs"), chunkAt(t, g, "src/Ordering/Handlers/OrderPaidHandler.cs"), chunkAt(t, g, "src/Shipping/ShipHandler.cs")
 	req.First, req.Chars = retrieval.Result{Hits: []retrieval.Hit{worker}}, size([]retrieval.Hit{worker, paid, ship})-1
 	res := g.Gather(ctx, req, func(string, any) {})
-	if first := asked()[0][1]["content"].(string); !strings.HasSuffix(first, "Followed OrderShipped to: src/Shipping/ShipHandler.cs:1-1.\n"+
-		"To make room, these left the evidence: src/Payment/Worker.cs:1-1. A later call may find them again.\n"+
-		"Followed OrderClosed to: src/Ordering/CloseHandler.cs:1-1.\n"+
-		"To make room, these left the evidence: src/Ordering/Handlers/OrderPaidHandler.cs:1-1. A later call may find them again.\n") ||
-		!slices.Equal(outs(res.Evicted), []string{"src/Payment/Worker.cs:1-1 r1 follow first", "src/Ordering/Handlers/OrderPaidHandler.cs:1-1 r1 follow follow"}) ||
-		!slices.Equal(paths(res.Hits), []string{"src/Shipping/ShipHandler.cs:1-1", "src/Ordering/CloseHandler.cs:1-1"}) {
-		t.Errorf("first request %q, evicted %q, evidence %q", first, outs(res.Evicted), paths(res.Hits))
+	if first := asked()[0][1]["content"].(string); !strings.HasSuffix(first, "Followed OrderPaid to: src/Ordering/Handlers/OrderPaidHandler.cs:1-1, src/Payment/Worker.cs:1-1.\n"+
+		"Followed OrderShipped to: src/Shipping/ShipHandler.cs:1-1.\n"+
+		"To make room, these left the evidence: src/Ordering/Handlers/OrderPaidHandler.cs:1-1. A later call may find them again.\n"+
+		"Followed OrderClosed to: src/Ordering/CloseHandler.cs:1-1.\n") ||
+		!slices.Equal(outs(res.Evicted), []string{"src/Ordering/Handlers/OrderPaidHandler.cs:1-1 r1 follow follow"}) ||
+		!slices.Equal(paths(res.Hits), []string{"src/Payment/Worker.cs:1-1", "src/Shipping/ShipHandler.cs:1-1", "src/Ordering/CloseHandler.cs:1-1"}) || res.Origins[0].Tool != "first" {
+		t.Errorf("first request %q, evicted %q, evidence %q, origins %v", first, outs(res.Evicted), paths(res.Hits), res.Origins)
 	}
 
 	srv, asked = model(t, []call{{"read_file", `{"path":"src/Shipping/ShipHandler.cs","start_line":0,"end_line":0}`}})
 	g, req = twinsFixture(t, srv.URL)
 	req.First, req.Chars = retrieval.Result{Hits: []retrieval.Hit{worker}}, size([]retrieval.Hit{worker})
 	res = g.Gather(ctx, req, func(string, any) {})
-	if first := asked()[0][1]["content"].(string); !strings.Contains(first, "Followed OrderPaid to: src/Ordering/Handlers/OrderPaidHandler.cs:1-1, src/Payment/Worker.cs:1-1.\n"+
-		"Not added, over the evidence budget: src/Ordering/Handlers/OrderPaidHandler.cs:1-1 (") || res.Stop != StopBudget || res.Rounds != 1 ||
-		!maps.Equal(res.Calls, map[string]int{"read_file": 1, "follow": 1}) || !slices.Equal(paths(res.Hits), []string{"src/Payment/Worker.cs:1-1"}) {
-		t.Errorf("first request %q; stopped %q after %d rounds, calls %v, evidence %q", first, res.Stop, res.Rounds, res.Calls, paths(res.Hits))
+	if first := asked()[0][1]["content"].(string); !strings.HasSuffix(first, "Followed OrderPaid to: src/Payment/Worker.cs:1-1.\n") || strings.Contains(first, "Not added") ||
+		res.Stop != StopAnswered || res.Rounds != 2 || !maps.Equal(res.Calls, map[string]int{"read_file": 1, "follow": 1}) ||
+		!slices.Equal(outs(res.Refused), []string{"src/Ordering/Handlers/OrderPaidHandler.cs:1-1 r1 follow ", "src/Shipping/ShipHandler.cs:1-1 r2 read_file "}) ||
+		!slices.Equal(paths(res.Hits), []string{"src/Payment/Worker.cs:1-1"}) {
+		t.Errorf("first request %q; stopped %q after %d rounds, calls %v, refused %q, evidence %q", first, res.Stop, res.Rounds, res.Calls, outs(res.Refused), paths(res.Hits))
 	}
 }
 
-// TestFollowOut: code is followed no further than the type whose finds evict
-// it: with room for OrderPaid's handler alone, following OrderPaid evicts the
-// handler for Worker.cs, so OrderShipped, which the handler names next, is not
-// followed. A reply that adds nothing, whose follow is refused some of what it
-// finds, ends the gathering as its own refusal would: users finds
-// CloseHandler.cs, which the first request's third step found and the budget
-// held, and OrderArchived, which it names and no follow reached, has a second
-// user too big to fit; its first evicts the oldest calls' finds.
+// TestFollowOut: with room for OrderPaid's handler alone, found first,
+// following OrderPaid refuses Worker.cs rather than evict the handler, and
+// names only what the evidence holds; OrderShipped, which the handler names
+// next, is followed, its handler refused and named nowhere; a type followed is
+// not followed again, even one whose finds were all refused.
+//
+// Code is followed no further than the type whose finds evict it: when
+// OrderPaid's handler is a follow find, Worker.cs, found by following
+// OrderPaid, evicts it, and OrderShipped, which the handler names next, is not
+// followed.
+//
+// A reply that adds nothing, whose follow is refused some of what it finds,
+// goes on: users finds CloseHandler.cs, which the first request's third step
+// found, and OrderArchived, which it names and no follow reached, has a second
+// user too big to fit; its first evicts the oldest follow find, and the call's
+// result says so.
 func TestFollowOut(t *testing.T) {
 	ctx := context.Background()
-	srv, _ := model(t, []call{{"users", `{"name":"OrderClosed"}`}})
+	srv, asked := model(t, []call{{"users", `{"name":"OrderClosed"}`}})
 	g, req := twinsFixture(t, srv.URL)
 	worker, paid, ship, closer := chunkAt(t, g, "src/Payment/Worker.cs"), chunkAt(t, g, "src/Ordering/Handlers/OrderPaidHandler.cs"), chunkAt(t, g, "src/Shipping/ShipHandler.cs"), chunkAt(t, g, "src/Ordering/CloseHandler.cs")
+	types := map[string]bool{"OrderPaid": true, "OrderShipped": true, "OrderClosed": true, "OrderArchived": true}
 	req.First, req.Chars = retrieval.Result{Hits: []retrieval.Hit{paid}}, size([]retrieval.Hit{paid})
 	s := start(g, req)
-	s.messages = map[string]bool{"OrderPaid": true, "OrderShipped": true, "OrderClosed": true, "OrderArchived": true}
-	if note := s.follow(ctx, []retrieval.Hit{paid}, follows); note != "Followed OrderPaid to: src/Ordering/Handlers/OrderPaidHandler.cs:1-1, src/Payment/Worker.cs:1-1.\n"+
-		"To make room, these left the evidence: src/Ordering/Handlers/OrderPaidHandler.cs:1-1. A later call may find them again.\n" ||
-		!maps.Equal(s.res.Calls, map[string]int{"follow": 1}) || !slices.Equal(shown(t, s), []string{"src/Payment/Worker.cs:1-1"}) {
-		t.Errorf("told %q, calls %v, evidence %q", note, s.res.Calls, shown(t, s))
+	s.messages = types
+	if note := s.follow(ctx, []retrieval.Hit{paid}, follows); note != "Followed OrderPaid to: src/Ordering/Handlers/OrderPaidHandler.cs:1-1.\n" ||
+		!maps.Equal(s.res.Calls, map[string]int{"follow": 2}) || !slices.Equal(shown(t, s), []string{"src/Ordering/Handlers/OrderPaidHandler.cs:1-1"}) ||
+		!slices.Equal(outs(s.res.Refused), []string{"src/Payment/Worker.cs:1-1 r1 follow ", "src/Shipping/ShipHandler.cs:1-1 r1 follow "}) {
+		t.Errorf("told %q, calls %v, evidence %q, refused %q", note, s.res.Calls, shown(t, s), outs(s.res.Refused))
+	}
+	if note := s.follow(ctx, []retrieval.Hit{paid}, follows); note != "" || s.res.Calls["follow"] != 2 {
+		t.Errorf("followed again: told %q, calls %v", note, s.res.Calls)
+	}
+	req.First, req.Chars = retrieval.Result{}, size([]retrieval.Hit{paid})
+	s = start(g, req)
+	s.messages = types
+	s.add("follow", []retrieval.Hit{paid})
+	if note := s.follow(ctx, []retrieval.Hit{paid}, 1); note != "Followed OrderPaid to: src/Payment/Worker.cs:1-1.\n"+
+		"To make room, these left the evidence: src/Ordering/Handlers/OrderPaidHandler.cs:1-1. A later call may find them again.\n" || s.res.Calls["follow"] != 1 {
+		t.Errorf("told %q, calls %v", note, s.res.Calls)
 	}
 
 	audit := `public Task Handle(OrderArchived a) => audit.Log(a.OrderId, "` + strings.Repeat("x", 2000) + `");`
@@ -283,11 +331,12 @@ func TestFollowOut(t *testing.T) {
 	big := retrieval.Hit{ChunkID: -1, Path: "gen/big.cs", StartLine: 1, EndLine: 1, Content: strings.Repeat("x", 2000)}
 	req.First, req.Chars = retrieval.Result{Hits: []retrieval.Hit{worker, big}}, size([]retrieval.Hit{worker, paid, ship, closer})
 	res := g.Gather(ctx, req, func(string, any) {})
-	if res.Stop != StopBudget || res.Rounds != 1 || !maps.Equal(res.Calls, map[string]int{"users": 1, "follow": 4}) ||
-		!slices.Equal(outs(res.Evicted), []string{"src/Payment/Worker.cs:1-1 r2 follow first", "src/Ordering/Handlers/OrderPaidHandler.cs:1-1 r2 follow follow"}) ||
+	if got := results(asked())["r0c0"]; res.Stop != StopAnswered || res.Rounds != 2 || !maps.Equal(res.Calls, map[string]int{"users": 1, "follow": 4}) ||
+		!slices.Equal(outs(res.Evicted), []string{"src/Ordering/Handlers/OrderPaidHandler.cs:1-1 r2 follow follow"}) ||
 		!slices.Equal(outs(res.Refused), []string{"gen/big.cs:1-1 r1 first ", "src/Payment/Audit.cs:1-1 r2 follow "}) ||
-		!slices.Equal(paths(res.Hits), []string{"src/Shipping/ShipHandler.cs:1-1", "src/Ordering/CloseHandler.cs:1-1", "src/Payment/ArchiveHandler.cs:1-1"}) {
-		t.Errorf("stopped %q after %d rounds, calls %v, evicted %q, refused %q, evidence %q", res.Stop, res.Rounds, res.Calls, outs(res.Evicted), outs(res.Refused), paths(res.Hits))
+		!slices.Equal(paths(res.Hits), []string{"src/Payment/Worker.cs:1-1", "src/Shipping/ShipHandler.cs:1-1", "src/Ordering/CloseHandler.cs:1-1", "src/Payment/ArchiveHandler.cs:1-1"}) ||
+		!strings.Contains(got, "To make room, these left the evidence: src/Ordering/Handlers/OrderPaidHandler.cs:1-1.") || strings.Contains(got, "Audit.cs") {
+		t.Errorf("stopped %q after %d rounds, calls %v, evicted %q, refused %q, evidence %q, told %q", res.Stop, res.Rounds, res.Calls, outs(res.Evicted), outs(res.Refused), paths(res.Hits), got)
 	}
 }
 

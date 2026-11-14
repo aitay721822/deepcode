@@ -131,10 +131,11 @@ var ident = regexp.MustCompile(`[\p{L}_][\p{L}\p{N}_]*`)
 // (twins.Names) that the code of hits the evidence holds declares or names:
 // code refused, or evicted since, is not followed, nor is code past the type
 // whose finds evicted it. What it finds joins the evidence as users' finds do,
-// with the tool "follow"; then it follows from what it found, depth steps in
-// all. It returns what the model is told: each type followed, with the ranges
-// found, and what the budget evicted and refused for them. A type no code
-// uses, or whose users fail, tells nothing.
+// with the tool "follow", as far as the room follow's earlier finds leave
+// allows (admit); then it follows from what it found, depth steps in all. It
+// returns what the model is told: each type followed, with the ranges the
+// evidence holds of it, and what the budget evicted for them. A type no code
+// uses, whose users fail, or whose finds were all refused, tells nothing.
 func (s *state) follow(ctx context.Context, hits []retrieval.Hit, depth int) string {
 	var b strings.Builder
 	var next []retrieval.Hit
@@ -156,12 +157,17 @@ func (s *state) follow(ctx context.Context, hits []retrieval.Hit, depth int) str
 				continue
 			}
 			s.res.Graph += len(using)
-			at := make([]string, len(using))
-			for i, u := range using {
-				at[i] = fmt.Sprintf("%s:%d-%d", u.Path, u.StartLine, u.EndLine)
-			}
 			_, note := s.add("follow", using)
-			fmt.Fprintf(&b, "Followed %s to: %s.\n%s", n, strings.Join(at, ", "), note)
+			var at []string // what the evidence holds of it, the refused left out (no chunk of a call evicts another of it)
+			for _, u := range using {
+				if _, held := s.held[u.ChunkID]; held || s.covered(u) {
+					at = append(at, fmt.Sprintf("%s:%d-%d", u.Path, u.StartLine, u.EndLine))
+				}
+			}
+			if len(at) > 0 {
+				fmt.Fprintf(&b, "Followed %s to: %s.\n", n, strings.Join(at, ", "))
+			}
+			b.WriteString(note)
 			next = append(next, using...)
 		}
 	}

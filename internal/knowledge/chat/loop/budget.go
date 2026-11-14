@@ -31,10 +31,12 @@ type found struct {
 
 // admit adds h, found as f says, to the evidence when the evidence stays
 // within its Limit with it (cost, summed). When it would not, chunks that
-// other calls found are evicted until it does, in this order: by call, oldest
-// first, so the first search's go first, then within a call the lowest ranked
-// first. Ranges read are never evicted. When evicting all of them would not
-// make room, none is evicted and h is refused: it is not added.
+// other calls found are evicted until it does (evictable): follow's first,
+// then by call, oldest first, so the first search's go next, then within a
+// call the lowest ranked first. Ranges read are never evicted, and follow's
+// own finds evict only follow's: code nobody asked for is read beside what the
+// question and the model found, never instead of it. When evicting all it may
+// evict would not make room, none is evicted and h is refused: it is not added.
 func (s *state) admit(h retrieval.Hit, f found) bool {
 	undo := s.hold(h, f)
 	hits, _ := s.evidence()
@@ -45,7 +47,7 @@ func (s *state) admit(h retrieval.Hit, f found) bool {
 		return true
 	}
 	var out []retrieval.Hit
-	for _, c := range s.evictable(hits[len(s.reads):], f.call) {
+	for _, c := range s.evictable(hits[len(s.reads):], f) {
 		chars, tokens := s.cost(c)
 		if out, over, overTokens = append(out, c), over-chars, overTokens-tokens; fits() {
 			for _, c := range out {
@@ -82,13 +84,24 @@ func (s *state) group(tool string) *[]retrieval.Hit {
 	return &s.results
 }
 
-// evictable is the chunks of found, the evidence's past its reads, that a call
-// other than call found, in the order they are evicted.
-func (s *state) evictable(found []retrieval.Hit, call int) []retrieval.Hit {
-	out := slices.DeleteFunc(slices.Clone(found), func(h retrieval.Hit) bool { return s.held[h.ChunkID].call == call })
+// evictable is the chunks of hits, the evidence's past its reads, found by a
+// call other than by's (when by is a follow, only follow's finds), in the order
+// they are evicted: follow's first, then by call, oldest first, then within a
+// call the lowest ranked first.
+func (s *state) evictable(hits []retrieval.Hit, by found) []retrieval.Hit {
+	out := slices.DeleteFunc(slices.Clone(hits), func(h retrieval.Hit) bool {
+		f := s.held[h.ChunkID]
+		return f.call == by.call || by.Tool == "follow" && f.Tool != "follow"
+	})
+	tier := func(f found) int { // follow's finds, which nobody asked for, go first
+		if f.Tool == "follow" {
+			return 0
+		}
+		return 1
+	}
 	slices.SortStableFunc(out, func(a, b retrieval.Hit) int {
 		fa, fb := s.held[a.ChunkID], s.held[b.ChunkID]
-		return cmp.Or(cmp.Compare(fa.call, fb.call), cmp.Compare(fb.rank, fa.rank))
+		return cmp.Or(cmp.Compare(tier(fa), tier(fb)), cmp.Compare(fa.call, fb.call), cmp.Compare(fb.rank, fa.rank))
 	})
 	return out
 }
