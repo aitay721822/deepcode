@@ -21,6 +21,7 @@ import (
 	"deepcode/internal/app/server/httpx"
 	"deepcode/internal/knowledge/chat"
 	wikiview "deepcode/internal/knowledge/wiki/view"
+	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/repo/catalog"
 )
 
@@ -308,7 +309,7 @@ func (a *API) searchTool(ctx context.Context, req *mcp.CallToolRequest, in searc
 	if limit == 0 {
 		limit = 10
 	}
-	res, err := a.Retriever.Search(ctx, r.Snapshot.ID, q, min(max(limit, 1), 20))
+	res, err := a.Retriever.Search(usage.WithRepository(ctx, r.ID), r.Snapshot.ID, q, min(max(limit, 1), 20))
 	if err != nil {
 		return nil, nil, a.failed(err)
 	}

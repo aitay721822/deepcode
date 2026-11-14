@@ -8,6 +8,7 @@ import (
 
 	"deepcode/internal/knowledge/wiki"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/catalog"
@@ -30,17 +31,18 @@ type pipeline struct {
 	syncEvery time.Duration // 0: no polling
 }
 
-// handlers runs each job kind.
+// handlers runs each job kind, the model's tokens counted for the job's
+// repository.
 func (p pipeline) handlers() map[string]jobs.Handler {
 	return map[string]jobs.Handler{
 		jobs.KindIndex: func(ctx context.Context, job jobs.Job, progress jobs.Progress) error {
-			return retried(p.indexer.Run(ctx, job.RepoID, job.CommitSHA, progress))
+			return retried(p.indexer.Run(usage.WithRepository(ctx, job.RepoID), job.RepoID, job.CommitSHA, progress))
 		},
 		jobs.KindWiki: func(ctx context.Context, job jobs.Job, progress jobs.Progress) error {
 			if p.wiki == nil {
 				return jobs.Permanent(errors.New("no chat model is configured: set DEEPCODE_CHAT_MODEL"))
 			}
-			return retried(p.wiki.Run(ctx, job.RepoID, job.CommitSHA, progress))
+			return retried(p.wiki.Run(usage.WithRepository(ctx, job.RepoID), job.RepoID, job.CommitSHA, progress))
 		},
 	}
 }

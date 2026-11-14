@@ -23,6 +23,7 @@ import (
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/repo/catalog"
 	"deepcode/internal/repo/gitserver"
 )
@@ -143,6 +144,7 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	if s.Chat == nil {
 		return errNoModel
 	}
+	ctx = usage.WithRepository(ctx, req.RepoID) // the model's tokens are the repository's
 	r, err := s.Catalog.Get(ctx, req.RepoID)
 	if err != nil {
 		return err

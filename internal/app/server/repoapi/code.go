@@ -10,6 +10,7 @@ import (
 
 	"deepcode/internal/app/server/httpx"
 	"deepcode/internal/knowledge/retrieval"
+	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/repo/catalog"
 )
 
@@ -90,7 +91,7 @@ func (a *API) search(c *gin.Context) {
 		httpx.Fail(c, http.StatusBadRequest, "q 為必填")
 		return
 	}
-	res, err := a.Retriever.Search(c.Request.Context(), snap.ID, q, 20)
+	res, err := a.Retriever.Search(usage.WithRepository(c.Request.Context(), httpx.RepoID(c)), snap.ID, q, 20)
 	if err != nil {
 		httpx.InternalError(c, err)
 		return

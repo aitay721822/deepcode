@@ -211,6 +211,7 @@ func TestEndToEnd(t *testing.T) {
 		len(answer.Citations) != 1 || answer.Citations[0].Path != "main.go" {
 		t.Fatalf("answer: %+v", answer)
 	}
+	checkUsage(t, admin, repo.ID)
 	var conv struct {
 		ID int64 `json:"id"`
 	}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -14,6 +13,8 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
+
+	"deepcode/internal/platform/ai/usage"
 )
 
 var thinkRe = regexp.MustCompile(`(?s)<think>.*?</think>`)
@@ -49,12 +50,12 @@ func (c *OpenAI) Generate(ctx context.Context, p Prompt) (string, error) {
 	return c.Stream(ctx, p, nil)
 }
 
-// Usage is one answer's size: the characters sent and received, and the
-// tokens the server counted, 0 when it reports none. CachedTokens are the
-// input tokens the server read from its prompt cache: the prefix it had seen.
-type Usage struct {
-	InChars, OutChars, InTokens, OutTokens, CachedTokens int
-}
+// Usage is one answer's size, as package usage reads it from each API, and
+// Meter what OpenAI.Meter tells it to.
+type (
+	Usage = usage.Usage
+	Meter = usage.Meter
+)
 
 // Stream streams the model's answer to p, by the Responses API when API says
 // so and by Chat Completions otherwise, and relays its text as it comes.
@@ -71,18 +72,18 @@ func (c *OpenAI) stream(ctx context.Context, messages []Message, s *schema, onDe
 	defer cancel()
 	defer func() { err = cause(ctx, err) }() // before cancel, which would end ctx too
 	out := &answer{onDelta: onDelta}
-	var usage Usage
-	if c.Measure != nil {
+	var used Usage
+	if c.Meter != nil {
 		for _, m := range messages {
-			usage.InChars += utf8.RuneCountInString(m.Content)
+			used.InChars += utf8.RuneCountInString(m.Content)
 		}
-		defer func() { usage.OutChars = utf8.RuneCountInString(out.String()); c.Measure(usage) }()
+		defer func() { used.OutChars = utf8.RuneCountInString(out.String()); c.Meter.Record(ctx, c.ModelName, used) }()
 	}
 	stream := c.completions
 	if c.API == Responses {
 		stream = c.responses
 	}
-	spent, err = stream(ctx, messages, s, out, &usage)
+	spent, err = stream(ctx, messages, s, out, &used)
 	if err != nil {
 		return out.String(), spent, err
 	}
@@ -138,20 +139,13 @@ func (c *OpenAI) chatParams(messages []Message) openai.ChatCompletionNewParams {
 	return params
 }
 
-// deepSeekHits are the cached input tokens DeepSeek counts
-// (prompt_cache_hit_tokens), where OpenAI and llama.cpp count cached_tokens.
-func deepSeekHits(u openai.CompletionUsage) int {
-	n, _ := strconv.Atoi(u.JSON.ExtraFields["prompt_cache_hit_tokens"].Raw())
-	return n
-}
-
 // completions streams a Chat Completions answer (/chat/completions) into out,
-// and says whether it stopped at the output budget. An answer is whole only
-// once the server gave its finish reason: a stream that ends without one, even
-// with [DONE], was cut short.
-func (c *OpenAI) completions(ctx context.Context, messages []Message, s *schema, out *answer, usage *Usage) (spent bool, err error) {
+// adds its tokens to used, and says whether it stopped at the output budget.
+// An answer is whole only once the server gave its finish reason: a stream
+// that ends without one, even with [DONE], was cut short.
+func (c *OpenAI) completions(ctx context.Context, messages []Message, s *schema, out *answer, used *Usage) (spent bool, err error) {
 	params := c.chatParams(messages)
-	if c.Measure != nil {
+	if c.Meter != nil {
 		params.StreamOptions.IncludeUsage = openai.Bool(true)
 	}
 	if s != nil {
@@ -163,20 +157,18 @@ func (c *OpenAI) completions(ctx context.Context, messages []Message, s *schema,
 	stream := svc.NewStreaming(ctx, params, option.WithResponseInto(&res))
 	defer stream.Close()
 	var acc openai.ChatCompletionAccumulator
-	hit := 0 // DeepSeek's cached tokens, which the accumulator does not sum
 	for stream.Next() {
 		chunk := stream.Current()
 		acc.AddChunk(chunk)
-		hit = max(hit, deepSeekHits(chunk.Usage))
+		// Summed as the accumulator sums it, with the fields it does not know. A
+		// stream cut before its usage chunk counts no tokens: the server never said.
+		used.Add(usage.Chat(chunk.Usage))
 		for _, ch := range chunk.Choices {
 			if err := out.add(ch.Delta.Content); err != nil {
 				return false, err
 			}
 		}
 	}
-	u := acc.Usage
-	usage.InTokens, usage.OutTokens = int(u.PromptTokens), int(u.CompletionTokens)
-	usage.CachedTokens = max(hit, int(u.PromptTokensDetails.CachedTokens)) // OpenAI's, llama.cpp's
 	if err := stream.Err(); err != nil {
 		return false, c.fail("/chat/completions", res, err)
 	}
@@ -304,7 +296,7 @@ func (e *Exchange) Next(ctx context.Context) (text string, calls []ToolCall, err
 	ctx, cancel := e.c.withTimeout(ctx)
 	defer cancel()
 	defer func() { err = cause(ctx, err) }()
-	sent, usage := len(e.pieces), Usage{InChars: e.chars()}
+	sent, used := len(e.pieces), Usage{InChars: e.chars()}
 	defer func() {
 		if err == nil { // a refused request sent nothing the next one will not
 			e.sent = sent
@@ -316,18 +308,18 @@ func (e *Exchange) Next(ctx context.Context) (text string, calls []ToolCall, err
 				e.add(calls[i].Name + calls[i].Arguments)
 			}
 		}
-		usage.OutChars = utf8.RuneCountInString(text)
+		used.OutChars = utf8.RuneCountInString(text)
 		for _, call := range calls {
-			usage.OutChars += utf8.RuneCountInString(call.Arguments)
+			used.OutChars += utf8.RuneCountInString(call.Arguments)
 		}
-		if e.used = usage; e.c.Measure != nil {
-			e.c.Measure(usage)
+		if e.used = used; e.c.Meter != nil {
+			e.c.Meter.Record(ctx, e.c.ModelName, used)
 		}
 	}()
 	if e.c.API == Responses {
-		return e.c.respond(ctx, &e.resp, &usage)
+		return e.c.respond(ctx, &e.resp, &used)
 	}
-	return e.c.complete(ctx, &e.chat, &usage)
+	return e.c.complete(ctx, &e.chat, &used)
 }
 
 // Answer gives the model result as what call returned.
@@ -344,17 +336,15 @@ func (e *Exchange) Answer(call ToolCall, result string) {
 }
 
 // complete asks Chat Completions (/chat/completions) for the next reply of
-// params, and appends it to them.
-func (c *OpenAI) complete(ctx context.Context, params *openai.ChatCompletionNewParams, usage *Usage) (string, []ToolCall, error) {
+// params, appends it to them, and adds its tokens to used.
+func (c *OpenAI) complete(ctx context.Context, params *openai.ChatCompletionNewParams, used *Usage) (string, []ToolCall, error) {
 	var res *http.Response
 	svc := openai.NewChatCompletionService(c.options()...)
 	completion, err := svc.New(ctx, *params, option.WithResponseInto(&res))
 	if err != nil {
 		return "", nil, c.fail("/chat/completions", res, err)
 	}
-	u := completion.Usage
-	usage.InTokens, usage.OutTokens = int(u.PromptTokens), int(u.CompletionTokens)
-	usage.CachedTokens = max(deepSeekHits(u), int(u.PromptTokensDetails.CachedTokens))
+	used.Add(usage.Chat(completion.Usage))
 	switch {
 	case len(completion.Choices) == 0:
 		return "", nil, errors.New("the model sent no reply")

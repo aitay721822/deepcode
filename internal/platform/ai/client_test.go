@@ -9,13 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"deepcode/internal/platform/ai/usage"
 )
 
 // serve is a server writing body to every request, with status unless 0.
@@ -180,11 +181,11 @@ func TestFormat(t *testing.T) {
 func TestResponses(t *testing.T) {
 	ev := func(typ, rest string) string { return `data: {"type":"` + typ + `"` + rest + "}\n\n" }
 	delta := ev("response.output_text.delta", `,"delta":"hi"`)
-	usage := `,"usage":{"input_tokens":12,"output_tokens":3,"input_tokens_details":{"cached_tokens":8}}`
+	counts := `,"usage":{"input_tokens":12,"output_tokens":3,"input_tokens_details":{"cached_tokens":8}}`
 	for name, tc := range map[string]struct {
 		body, want, fails string
 	}{
-		"completed":  {delta + ev("response.completed", `,"response":{"status":"completed"`+usage+`}`), "hi", ""},
+		"completed":  {delta + ev("response.completed", `,"response":{"status":"completed"`+counts+`}`), "hi", ""},
 		"incomplete": {delta + ev("response.incomplete", `,"response":{"incomplete_details":{"reason":"max_output_tokens"}}`), "hi", ""},
 		"no answer":  {ev("response.incomplete", `,"response":{"incomplete_details":{"reason":"max_output_tokens"}}`), "", "whole output budget"},
 		"failed":     {delta + ev("response.failed", `,"response":{"error":{"code":"server_error","message":"it broke"}}`), "", "m /responses: it broke"},
@@ -199,7 +200,7 @@ func TestResponses(t *testing.T) {
 			w.Write([]byte(tc.body))
 		}))
 		var got []Usage
-		c := &OpenAI{BaseURL: srv.URL + "/v1", ModelName: "m", API: Responses, MaxTokens: 50, Measure: func(u Usage) { got = append(got, u) }}
+		c := &OpenAI{BaseURL: srv.URL + "/v1", ModelName: "m", API: Responses, MaxTokens: 50, Meter: usage.Func(func(_ context.Context, _ string, u Usage) { got = append(got, u) })}
 		answer, err := c.Generate(context.Background(), Prompt{Static: "be brief", Dynamic: "größe"})
 		srv.Close()
 		if answer != tc.want && tc.fails == "" || tc.fails != "" && (err == nil || !strings.Contains(err.Error(), tc.fails)) || tc.fails == "" && err != nil {
@@ -216,34 +217,31 @@ func TestResponses(t *testing.T) {
 	}
 }
 
-// TestMeasure: a measured answer asks for the server's token counts and reports them with its characters, the
-// reasoning not counted, the cached tokens the larger of OpenAI's and DeepSeek's counts; an unmeasured one asks
-// for none.
+// TestMeasure: a metered answer asks for the server's token counts and tells the Meter them with its characters,
+// the reasoning not counted, DeepSeek's cached tokens read (package usage), its model and its context's
+// repository; an unmetered one asks for none.
 func TestMeasure(t *testing.T) {
 	var asked atomic.Bool
-	var hit atomic.Int32 // DeepSeek's count; OpenAI's is 8
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		asked.Store(strings.Contains(string(body), `"include_usage":true`))
 		w.Write([]byte(`data: {"choices":[{"delta":{"reasoning_content":"hmm, "}}]}` + "\n\n" +
 			`data: {"choices":[{"delta":{"content":"héllo"},"finish_reason":"stop"}]}` + "\n\n" +
-			`data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"prompt_cache_hit_tokens":` + strconv.Itoa(int(hit.Load())) +
-			`,"prompt_tokens_details":{"cached_tokens":8}}}` + "\n\ndata: [DONE]\n\n"))
+			`data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"prompt_cache_hit_tokens":9,"prompt_tokens_details":{"cached_tokens":8}}}` +
+			"\n\ndata: [DONE]\n\n"))
 	}))
 	defer srv.Close()
-	var got []Usage
-	c := &OpenAI{BaseURL: srv.URL, ModelName: "m", Measure: func(u Usage) { got = append(got, u) }}
-	for _, cached := range []int32{9, 5} {
-		hit.Store(cached)
-		got = nil
-		if answer, err := c.Generate(context.Background(), Prompt{Dynamic: "größe"}); err != nil || answer != "héllo" {
-			t.Fatalf("%q %v", answer, err)
-		}
-		if !asked.Load() || len(got) != 1 || got[0] != (Usage{InChars: 5, OutChars: 5, InTokens: 12, OutTokens: 3, CachedTokens: int(max(cached, 8))}) {
-			t.Fatalf("asked %v, measured %+v", asked.Load(), got)
-		}
+	var got []string
+	c := &OpenAI{BaseURL: srv.URL, ModelName: "m", Meter: usage.Func(func(ctx context.Context, model string, u Usage) {
+		got = append(got, fmt.Sprint(usage.Repository(ctx), model, u))
+	})}
+	if answer, err := c.Generate(usage.WithRepository(context.Background(), 7), Prompt{Dynamic: "größe"}); err != nil || answer != "héllo" {
+		t.Fatalf("%q %v", answer, err)
 	}
-	c.Measure = nil
+	if want := fmt.Sprint(7, "m", Usage{InChars: 5, OutChars: 5, InTokens: 12, OutTokens: 3, CachedTokens: 9}); !asked.Load() || len(got) != 1 || got[0] != want {
+		t.Fatalf("asked %v, measured %q, want %q", asked.Load(), got, want)
+	}
+	c.Meter = nil
 	if _, err := c.Generate(context.Background(), Prompt{}); err != nil || asked.Load() {
 		t.Fatalf("unmeasured: asked %v, %v", asked.Load(), err)
 	}
@@ -269,8 +267,8 @@ func TestEmbedAnswerSize(t *testing.T) {
 	}
 }
 
-// TestEmbedOrder: vectors are placed by their index, whatever order the server lists them in; the key goes as a
-// bearer token; a refused request (4xx) is not tried again.
+// TestEmbedOrder: vectors are placed by their index, whatever order the server lists them in, and their tokens
+// metered; the key goes as a bearer token; a refused request (4xx) is not tried again.
 func TestEmbedOrder(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -280,12 +278,14 @@ func TestEmbedOrder(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"data":[{"index":1,"embedding":[2]},{"index":0,"embedding":[1]}]}`))
+		w.Write([]byte(`{"data":[{"index":1,"embedding":[2]},{"index":0,"embedding":[1]}],"usage":{"prompt_tokens":4,"total_tokens":4}}`))
 	}))
 	defer srv.Close()
-	vecs, err := (&OpenAI{BaseURL: srv.URL, APIKey: "k", ModelName: "m"}).Embed(context.Background(), []string{"a", "b"})
-	if err != nil || len(vecs) != 2 || vecs[0][0] != 1 || vecs[1][0] != 2 {
-		t.Fatalf("got %v %v", vecs, err)
+	var got []Usage
+	meter := usage.Func(func(_ context.Context, _ string, u Usage) { got = append(got, u) })
+	vecs, err := (&OpenAI{BaseURL: srv.URL, APIKey: "k", ModelName: "m", Meter: meter}).Embed(context.Background(), []string{"a", "b"})
+	if err != nil || len(vecs) != 2 || vecs[0][0] != 1 || vecs[1][0] != 2 || len(got) != 1 || got[0] != (Usage{InTokens: 4}) {
+		t.Fatalf("got %v %v, metered %+v", vecs, err, got)
 	}
 	if _, err := (&OpenAI{BaseURL: srv.URL, APIKey: "wrong", ModelName: "m"}).Embed(context.Background(), []string{"a"}); err == nil || calls.Load() != 2 {
 		t.Fatalf("a refused key: %v, after %d requests in all", err, calls.Load())
@@ -416,7 +416,7 @@ func TestExchange(t *testing.T) {
 			sent = append(sent, string(b))
 		}))
 		var measured []int
-		e := (&OpenAI{BaseURL: srv.URL, ModelName: "m", API: api, Measure: func(u Usage) { measured = append(measured, u.InChars, u.OutChars) }}).
+		e := (&OpenAI{BaseURL: srv.URL, ModelName: "m", API: api, Meter: usage.Func(func(_ context.Context, _ string, u Usage) { measured = append(measured, u.InChars, u.OutChars) })}).
 			Exchange(Prompt{Dynamic: "how?"}, []Tool{tool})
 		text, calls, err := e.Next(context.Background())
 		if err != nil || text != "looking" || len(calls) != 2 || calls[0] != (ToolCall{ID: "c1", Name: "search", Arguments: `{"query":"router"}`}) || calls[1] != (ToolCall{ID: "c1", Name: "done", Key: 1}) {

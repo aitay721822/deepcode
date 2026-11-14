@@ -59,7 +59,8 @@ import (
 	"deepcode/test/eval"
 )
 
-// meter sums the model's answers between two reads, and keeps each.
+// meter sums the model's answers between two reads, and keeps each: the chat
+// model's Meter.
 type meter struct {
 	mu    sync.Mutex
 	calls int
@@ -67,12 +68,11 @@ type meter struct {
 	each  []ai.Usage
 }
 
-func (m *meter) add(u ai.Usage) {
+func (m *meter) Record(_ context.Context, _ string, u ai.Usage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls++
-	m.u.InChars, m.u.OutChars, m.u.InTokens, m.u.OutTokens = m.u.InChars+u.InChars, m.u.OutChars+u.OutChars, m.u.InTokens+u.InTokens, m.u.OutTokens+u.OutTokens
-	m.u.CachedTokens += u.CachedTokens
+	m.u.Add(u)
 	m.each = append(m.each, u)
 }
 
@@ -178,7 +178,7 @@ func setup(t *testing.T, work string) *rig {
 	r.cat = &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: jobs.New(&jobstore.Store{DB: db}, bus, 2*time.Hour), Git: gitc, Servers: servers}
 	r.ix = &indexer.Indexer{Store: &indexstore.Store{DB: db}, Graph: graphs, Git: gitc, Servers: servers, Events: bus,
 		Embed: embed, Vectors: vectors, Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
-	if llm := chatModel(t, r.meter.add); llm != nil {
+	if llm := chatModel(t, r.meter); llm != nil {
 		pages, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), "0")) // 0, the default, when unset
 		counter, err2 := harness.LoadTokens(os.Getenv("DEEPCODE_CHAT_TOKENIZER"))     // OpenAI's o200k_base when unset, as serve counts
 		if err != nil || pages < 0 || err2 != nil {
@@ -195,13 +195,13 @@ func setup(t *testing.T, work string) *rig {
 
 // chatModel is the chat model the DEEPCODE_CHAT_* settings name, as serve
 // reads them, telling measure every answer's usage; nil without one.
-func chatModel(t *testing.T, measure func(ai.Usage)) *ai.OpenAI {
+func chatModel(t *testing.T, measure ai.Meter) *ai.OpenAI {
 	model := os.Getenv("DEEPCODE_CHAT_MODEL")
 	if model == "" {
 		return nil
 	}
 	llm := &ai.OpenAI{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model, Schema: schema(),
-		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Measure: measure}
+		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Meter: measure}
 	if s := os.Getenv("DEEPCODE_TEMPERATURE"); s != "" {
 		temp, err := strconv.ParseFloat(s, 64)
 		if err != nil || !(temp >= 0 && temp <= 2) { // NaN too

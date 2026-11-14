@@ -77,6 +77,9 @@ func checkAccess(t *testing.T, base string, admin *client, repoID string, adminC
 	if code := dev.get("/api/admin/jobs", &jobList); code != http.StatusOK || len(jobList) != 0 {
 		t.Fatalf("dev sees jobs of repositories it cannot read: %d %v", code, jobList)
 	}
+	if code := dev.get("/api/admin/usage", &jobList); code != http.StatusOK || len(jobList) != 0 {
+		t.Fatalf("dev sees the usage of repositories it cannot read: %d %v", code, jobList)
+	}
 
 	// Granted: readable, but asking and syncing need their own permissions on it,
 	// so the repository says dev may only read it.
@@ -92,6 +95,9 @@ func checkAccess(t *testing.T, base string, admin *client, repoID string, adminC
 	}
 	if dev.get("/api/admin/jobs", &jobList); len(jobList) != 2 {
 		t.Fatalf("dev sees %d jobs after the grant, want 2", len(jobList))
+	}
+	if dev.get("/api/admin/usage", &jobList); len(jobList) != 2 || jobList[0]["repoId"] != repoID || jobList[1]["repoId"] != repoID {
+		t.Fatalf("dev sees the usage %v after the grant, want the chat and embedding models' of %s", jobList, repoID)
 	}
 	if code := dev.get(repo+"/wiki", nil); code != http.StatusOK {
 		t.Fatalf("dev wiki: %d", code)

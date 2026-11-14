@@ -38,6 +38,8 @@ import (
 	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/usage"
+	usagestore "deepcode/internal/platform/ai/usage/store"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
@@ -79,6 +81,12 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 		return nil, err
 	}
 	chatP, embedP := Providers(cfg)
+	meter := &usage.Manager{Store: &usagestore.Store{DB: db}} // every model request's tokens, for the admin console
+	for _, m := range []*ai.OpenAI{chatP, embedP} {
+		if m != nil {
+			m.Meter = meter
+		}
+	}
 	var counter *harness.Tokens
 	if chatP != nil {
 		if counter, err = harness.LoadTokens(cfg.ChatTokenizer); err != nil {
@@ -120,7 +128,7 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 		&repoapi.API{Sessions: sessions, Tokens: tokens, Catalog: cat, Importer: &importer.Service{Catalog: cat}, Servers: servers, Queue: queue,
 			Retriever: retriever, Chat: conversations, Wiki: view.Reader{Store: wikis, Graph: graphs},
 			Webhooks: &hooks.API{Catalog: cat, Box: box}},
-		&adminapi.API{Sessions: sessions, Accounts: accounts, Roles: roles, Servers: servers, Catalog: cat, Queue: queue, Bus: bus},
+		&adminapi.API{Sessions: sessions, Accounts: accounts, Roles: roles, Servers: servers, Catalog: cat, Queue: queue, Bus: bus, Usage: meter},
 		gin.H{"status": "ok", "chatModel": cfg.ChatModel, "embeddingModel": cfg.EmbedModel},
 		ui, loopback, cfg.TrustedProxies)
 	if err != nil {

@@ -49,7 +49,8 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // fakeLLM is an OpenAI-compatible server: bag-of-words embeddings, a fixed
 // wiki plan, fixed search terms, and answers citing the first source in one
-// group with a made-up file.
+// group with a made-up file. Each chat reply counts replyUsage's tokens, the cached
+// ones as DeepSeek counts them; each embedding request its input's texts.
 type fakeLLM struct {
 	mu     sync.Mutex
 	chunks int // chunk texts embedded so far
@@ -75,6 +76,9 @@ func (f *fakeLLM) termRequests() int {
 	return f.terms
 }
 
+// replyUsage is the tokens each chat reply counts: 20 in, 8 of them cached, and 5 out.
+const replyUsage = `{"prompt_tokens":20,"completion_tokens":5,"prompt_cache_hit_tokens":8,"prompt_cache_miss_tokens":12}`
+
 var sourceRe = regexp.MustCompile(`<source path="([^"]+)" lines="(\d+)-(\d+)"`)
 
 func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +90,7 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&body)
 	if len(body.Tools) > 0 { // gathering an answer's evidence: the first search is enough
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"The first search is enough."}}]}`)
+		fmt.Fprint(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"The first search is enough."}}],"usage":`+replyUsage+`}`)
 		return
 	}
 	if r.URL.Path == "/v1/embeddings" {
@@ -100,7 +104,7 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			data[i] = map[string]any{"index": i, "embedding": bagOfWords(s)}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"data": data})
+		json.NewEncoder(w).Encode(map[string]any{"data": data, "usage": map[string]int{"prompt_tokens": len(body.Input), "total_tokens": len(body.Input)}})
 		return
 	}
 	reply := `{"overview":{"title":"Overview","terms":["main","server"]},"labels":{"stack":"Technology stack","otherFiles":"Other files","architecture":"Architecture","structure":"Repository structure"},` +
@@ -128,7 +132,7 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": part}}}})
 		fmt.Fprintf(w, "data: %s\n\n", b)
 	}
-	fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+	fmt.Fprint(w, `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\ndata: {\"choices\":[],\"usage\":"+replyUsage+"}\n\ndata: [DONE]\n\n")
 }
 
 func bagOfWords(s string) []float32 {

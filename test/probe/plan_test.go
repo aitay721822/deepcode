@@ -26,6 +26,7 @@ import (
 	"deepcode/internal/knowledge/wiki/outline/place"
 	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	jobstore "deepcode/internal/platform/jobs/store"
@@ -118,11 +119,11 @@ func TestPlan(t *testing.T) {
 	}
 	res := planRun{Repo: name, Run: run, DeepWiki: repo.deepwiki}
 	var mu sync.Mutex
-	model.BaseURL, model.Measure = refuseWrites(t, model.BaseURL), func(u ai.Usage) {
+	model.BaseURL, model.Meter = refuseWrites(t, model.BaseURL), usage.Func(func(_ context.Context, _ string, u ai.Usage) {
 		mu.Lock()
 		defer mu.Unlock()
 		res.Prompt, res.Cached, res.Output = res.Prompt+u.InTokens, res.Cached+u.CachedTokens, res.Output+u.OutTokens
-	}
+	})
 	graphs := &graph.Graph{Store: &graphstore.Store{DB: db}}
 	store := &wikistore.Store{DB: db}
 	g := &wiki.Generator{Store: store, Graph: graphs, Chat: model, Language: "English", Parallel: 1,

@@ -18,6 +18,7 @@ import (
 	"deepcode/cmd/deepcode/config"
 	"deepcode/internal/app"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/usage"
 	"deepcode/test/eval"
 )
 
@@ -83,7 +84,7 @@ func probe(t *testing.T, model *ai.OpenAI, c probeCase, rep int) {
 		p.Static = ""
 	}
 	var used ai.Usage // the prompt tokens show whether the server puts the schema in the prompt
-	model.Measure = func(u ai.Usage) { used = u }
+	model.Meter = usage.Func(func(_ context.Context, _ string, u ai.Usage) { used = u })
 	first, onDelta := timer()
 	_, reply, err := ai.StreamJSON(ctx, model, p, format, onDelta)
 	schemaFirst, schemaIn := first(), used.InTokens

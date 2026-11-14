@@ -13,6 +13,7 @@ import (
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/usage"
 )
 
 // chunk is a found chunk, id's: f<id>.go's first line, each the same size.
@@ -347,7 +348,7 @@ func TestContext(t *testing.T) {
 		g, req := fixture(t, srv.URL)
 		var sizes []int
 		g.Fit = harness.New(g.Model, tokens)
-		g.Model.MaxTokens, g.Model.Window, g.Model.Measure = 100, window, func(ai.Usage) { sizes = append(sizes, g.Fit.Sent) }
+		g.Model.MaxTokens, g.Model.Window, g.Model.Meter = 100, window, usage.Func(func(context.Context, string, ai.Usage) { sizes = append(sizes, g.Fit.Sent) })
 		var compact []string
 		res := g.Gather(context.Background(), req, func(event string, data any) {
 			if event == "compact" {

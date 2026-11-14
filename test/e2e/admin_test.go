@@ -17,8 +17,37 @@ import (
 
 	"deepcode/internal/app/server/repoapi/hooks"
 	"deepcode/internal/knowledge/wiki/view"
+	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/platform/jobs"
 )
+
+// checkUsage: the console sums the tokens of the repository's model requests per model, its wiki's and its
+// answer's: the chat model's input, its cached input as DeepSeek counts it, and its output; the embedding
+// model's input. The days asked for must be a number of days.
+func checkUsage(t *testing.T, admin *client, repoID string) {
+	t.Helper()
+	var totals []usage.Total
+	if code := admin.get("/api/admin/usage?days=30", &totals); code != http.StatusOK {
+		t.Fatalf("usage: %d", code)
+	}
+	byModel := map[string]usage.Total{}
+	for _, u := range totals {
+		if u.RepoPublicID == "" { // every request so far was one repository's: none may lose it
+			t.Fatalf("usage counted for no repository: %+v", totals)
+		}
+		if u.RepoPublicID == repoID && u.RepoOwner == "acme" && u.RepoName == "demo" {
+			byModel[u.Model] = u
+		}
+	}
+	chat, embed := byModel["fake-chat"], byModel["fake-embed"]
+	if chat.Calls < 5 || chat.Input != 20*chat.Calls || chat.Cached != 8*chat.Calls || chat.Output != 5*chat.Calls ||
+		embed.Calls == 0 || embed.Input < embed.Calls || embed.Cached != 0 || embed.Output != 0 || len(byModel) != 2 {
+		t.Fatalf("usage: %+v", totals)
+	}
+	if code := admin.get("/api/admin/usage?days=week", nil); code != http.StatusBadRequest {
+		t.Fatalf("usage of a week spelled out: %d", code)
+	}
+}
 
 // checkJobConsole: the console lists finished jobs, and a job's log holds its
 // work, the model's text streamed while each wiki page was written included.

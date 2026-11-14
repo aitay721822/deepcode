@@ -30,6 +30,8 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/ssestream"
+
+	"deepcode/internal/platform/ai/usage"
 )
 
 type Message struct {
@@ -91,11 +93,12 @@ type OpenAI struct {
 	Temperature     *float64      // sent as temperature when set; nil leaves it to the server
 	Timeout         time.Duration // per request, including the whole stream
 	RPM             int           // requests per minute, 0 = unlimited
-	// Measure, when set, is told every answer's Usage, failed ones too, and a
+	// Meter, when set, is told every request's Usage, failed ones too, and a
 	// Chat Completions server is asked for its token counts
 	// (stream_options.include_usage), which the Responses API always gives. The
-	// bench sets it; a server that rejects the option fails the request.
-	Measure func(Usage)
+	// server keeps a usage.Manager here, the bench its own; a server that
+	// rejects the option fails the request.
+	Meter usage.Meter
 	// Window is the model's context in tokens, 0 when not set (Context).
 	// CompactRatio is the share of it a request may fill before it is made
 	// smaller (package chat/harness); 0 means 0.8.
@@ -369,6 +372,9 @@ func (c *OpenAI) Embed(ctx context.Context, texts []string) (_ [][]float32, err 
 	}, option.WithResponseInto(&raw))
 	if err != nil {
 		return nil, c.fail("/embeddings", raw, err)
+	}
+	if c.Meter != nil {
+		c.Meter.Record(ctx, c.ModelName, usage.Embedding(res.Usage))
 	}
 	vecs := make([][]float32, len(texts))
 	for _, d := range res.Data {

@@ -12,6 +12,7 @@ import { JobDetail } from './jobs/JobDetail'
 import { JobsSection } from './jobs/JobsSection'
 import { RolesSection } from './roles/RolesSection'
 import { ServersSection } from './servers/ServersSection'
+import { UsageSection } from './usage/UsageSection'
 import { UsersSection } from './users/UsersSection'
 
 const sections: { path: string; label: string; permission: Permission; page: (id?: number) => ReactNode }[] = [
@@ -21,6 +22,7 @@ const sections: { path: string; label: string; permission: Permission; page: (id
     permission: 'jobs.view',
     page: (id) => (id ? <JobDetail id={id} /> : <JobsSection />),
   },
+  { path: 'usage', label: '用量', permission: 'jobs.view', page: () => <UsageSection /> },
   { path: 'users', label: '使用者', permission: 'users.manage', page: () => <UsersSection /> },
   { path: 'roles', label: '角色', permission: 'users.manage', page: () => <RolesSection /> },
   { path: 'servers', label: 'Git 伺服器', permission: 'servers.manage', page: () => <ServersSection /> },

@@ -2,6 +2,7 @@ package bench
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -373,10 +374,10 @@ func TestPace(t *testing.T) {
 // each in order, and starts again.
 func TestMeter(t *testing.T) {
 	var m meter
-	m.add(ai.Usage{InTokens: 5, OutTokens: 1})
+	m.Record(context.Background(), "m", ai.Usage{InTokens: 5, OutTokens: 1})
 	m.take()
-	m.add(ai.Usage{InTokens: 10, OutTokens: 2})
-	m.add(ai.Usage{InTokens: 20, OutTokens: 3, CachedTokens: 4})
+	m.Record(context.Background(), "m", ai.Usage{InTokens: 10, OutTokens: 2})
+	m.Record(context.Background(), "m", ai.Usage{InTokens: 20, OutTokens: 3, CachedTokens: 4})
 	if calls, u, each := m.take(); calls != 2 || u != (ai.Usage{InTokens: 30, OutTokens: 5, CachedTokens: 4}) ||
 		!slices.Equal(each, []ai.Usage{{InTokens: 10, OutTokens: 2}, {InTokens: 20, OutTokens: 3, CachedTokens: 4}}) {
 		t.Errorf("%d calls, %+v, each %+v", calls, u, each)
