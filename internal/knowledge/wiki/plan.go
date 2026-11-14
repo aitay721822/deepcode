@@ -72,6 +72,7 @@ func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, src so
 	if err != nil {
 		return nil, err
 	} else if carried {
+		progress.Saved() // a later attempt writes from the stored pages
 		return g.Store.Pages(ctx, snap)
 	}
 	progress.Logf("planning the wiki pages")
@@ -104,6 +105,7 @@ func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, src so
 	if err := g.store(ctx, snap, store.Labels(labels), stored); err != nil {
 		return nil, err
 	}
+	progress.Saved() // a later attempt writes from the stored plan
 	return g.Store.Pages(ctx, snap)
 }
 

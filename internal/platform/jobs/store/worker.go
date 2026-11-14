@@ -13,13 +13,17 @@ import (
 const runnable = `j.status = 'queued' AND j.run_after <= CURRENT_TIMESTAMP
 	AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.repository_id = j.repository_id AND r.status = 'running')`
 
-// Recover settles the jobs a previous process left running: queued again, or
-// failed once they have run maxAttempts times. It returns how many it settled.
+// Recover settles the jobs a previous process left running: queued again,
+// the attempt not counted when it stored work a later one skips, or failed
+// once maxAttempts attempts that stored none have run. It returns how many it
+// settled.
 func (s *Store) Recover(ctx context.Context, maxAttempts int) (int64, error) {
 	res, err := s.DB.ExecContext(ctx, `
-		UPDATE jobs SET updated_at = CURRENT_TIMESTAMP,
-			status = CASE WHEN attempts >= ?1 THEN 'failed' ELSE 'queued' END,
-			error = CASE WHEN attempts >= ?1 THEN 'the server stopped during the last attempt' ELSE error END
+		UPDATE jobs SET updated_at = CURRENT_TIMESTAMP, saved = 0,
+			status = CASE WHEN saved = 0 AND attempts >= ?1 THEN 'failed' ELSE 'queued' END,
+			error = CASE WHEN saved = 0 AND attempts >= ?1 THEN 'the server stopped during the last attempt' ELSE error END,
+			attempts = attempts - saved,
+			retries = CASE WHEN saved = 1 THEN 0 ELSE retries END
 		WHERE status = 'running'`, maxAttempts)
 	if err != nil {
 		return 0, err
@@ -39,7 +43,7 @@ func (s *Store) HasRunnable(ctx context.Context) (bool, error) {
 // when none is runnable.
 func (s *Store) Claim(ctx context.Context) (j Job, ok bool, err error) {
 	j, err = scanJob(s.DB.QueryRowContext(ctx, `
-		UPDATE jobs SET status = 'running', attempts = attempts + 1, error = '', updated_at = CURRENT_TIMESTAMP
+		UPDATE jobs SET status = 'running', attempts = attempts + 1, saved = 0, error = '', updated_at = CURRENT_TIMESTAMP
 		WHERE id = (SELECT j.id FROM jobs j WHERE `+runnable+` ORDER BY j.id LIMIT 1)
 		RETURNING `+jobColumns))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -66,10 +70,17 @@ func (s *Store) Fail(ctx context.Context, id int64, message string) error {
 	return err
 }
 
-// Retry queues job id again to run seconds from now, with message.
-func (s *Store) Retry(ctx context.Context, id int64, message string, seconds int) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE jobs SET status = 'queued', error = ?, run_after = datetime('now', ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		message, fmt.Sprintf("+%d seconds", seconds), id)
+// Retry queues job id again to run seconds from now, with message, its
+// attempts and retries set to those given.
+func (s *Store) Retry(ctx context.Context, id int64, message string, seconds, attempts, retries int) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE jobs SET status = 'queued', error = ?, run_after = datetime('now', ?), attempts = ?, retries = ?,
+		updated_at = CURRENT_TIMESTAMP WHERE id = ?`, message, fmt.Sprintf("+%d seconds", seconds), attempts, retries, id)
+	return err
+}
+
+// Saved records that job id's running attempt stored work a later one skips.
+func (s *Store) Saved(id int64) error {
+	_, err := s.DB.Exec(`UPDATE jobs SET saved = 1 WHERE id = ?`, id)
 	return err
 }
 

@@ -65,6 +65,8 @@ func command(ctx context.Context, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// run is git with args, talking to the remote auth names, if any: a failure
+// to talk to it is an ErrRefused or ErrUnavailable when git's words say which.
 func (g *Client) run(ctx context.Context, auth Remote, args ...string) ([]byte, error) {
 	cmd := command(ctx, args...)
 	cmd.Dir = g.Dir
@@ -83,7 +85,11 @@ func (g *Client) run(ctx context.Context, auth Remote, args ...string) ([]byte, 
 		// stderr carries the remote's own "remote:" lines: one line with no
 		// control characters, so it cannot forge lines in the server log.
 		msg := strings.Join(strings.FieldsFunc(stderr.String(), func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }), " ")
-		return nil, fmt.Errorf("git %s: %w: %s", args[0], err, msg)
+		err = fmt.Errorf("git %s: %w: %s", args[0], err, msg)
+		if auth.URL != "" {
+			err = classify(err, msg)
+		}
+		return nil, err
 	}
 	return stdout.buf.Bytes(), nil
 }
@@ -116,8 +122,9 @@ var repoLocal = []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJE
 
 // env never lets git prompt, allows only the configured protocols, gives up
 // on a transfer stalled for five minutes (a big repository's server may say
-// nothing while it packs), or until ctx's deadline if that comes first, and
-// leaves out deepcode's own settings (keys and passwords) and repoLocal. A
+// nothing while it packs), or until ctx's deadline if that comes first, has
+// git speak English, which classify reads, and leaves out deepcode's own
+// settings (keys and passwords) and repoLocal. A
 // remote's Authorization header travels as configuration in the environment,
 // not on the command line where other users could read it; it is scoped to the
 // remote's URL, and redirects from that URL are refused as specifically, so an
@@ -134,7 +141,7 @@ func (g *Client) env(ctx context.Context, auth Remote) []string {
 	if d, ok := ctx.Deadline(); ok {
 		stall = min(stall, time.Until(d)) // killing git at the deadline leaves its remote helper running until the transfer stalls
 	}
-	env = append(env, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=", "GCM_INTERACTIVE=never",
+	env = append(env, "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=", "GCM_INTERACTIVE=never", "LC_ALL=C",
 		"GIT_ALLOW_PROTOCOL="+g.AllowProtocol,
 		"GIT_HTTP_LOW_SPEED_LIMIT=1", fmt.Sprintf("GIT_HTTP_LOW_SPEED_TIME=%d", max(1, int(stall.Seconds())))) // a stalled transfer ends by itself, helper and all
 	if auth.Authorization == "" {

@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"deepcode/internal/knowledge/wiki"
+	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/catalog"
+	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/index/indexer"
 )
 
@@ -32,15 +34,28 @@ type pipeline struct {
 func (p pipeline) handlers() map[string]jobs.Handler {
 	return map[string]jobs.Handler{
 		jobs.KindIndex: func(ctx context.Context, job jobs.Job, progress jobs.Progress) error {
-			return p.indexer.Run(ctx, job.RepoID, job.CommitSHA, progress)
+			return retried(p.indexer.Run(ctx, job.RepoID, job.CommitSHA, progress))
 		},
 		jobs.KindWiki: func(ctx context.Context, job jobs.Job, progress jobs.Progress) error {
 			if p.wiki == nil {
 				return jobs.Permanent(errors.New("no chat model is configured: set DEEPCODE_CHAT_MODEL"))
 			}
-			return p.wiki.Run(ctx, job.RepoID, job.CommitSHA, progress)
+			return retried(p.wiki.Run(ctx, job.RepoID, job.CommitSHA, progress))
 		},
 	}
+}
+
+// retried is err as the queue retries it: a model or git server it could not
+// reach is tried again for about a day (jobs.Transient), one that refused the
+// key, model, repository or commit not again (jobs.Permanent).
+func retried(err error) error {
+	switch {
+	case errors.Is(err, ai.ErrRefused), errors.Is(err, git.ErrRefused):
+		return jobs.Permanent(err)
+	case errors.Is(err, ai.ErrUnavailable), errors.Is(err, git.ErrUnavailable):
+		return jobs.Transient(err)
+	}
+	return err
 }
 
 // subscribe queues the wiki of every published snapshot. Should the process

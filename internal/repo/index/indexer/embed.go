@@ -53,6 +53,7 @@ func (ix *Indexer) embed(ctx context.Context, snap int64, progress jobs.Progress
 		if err := ix.embedBatch(ctx, snap, model, ids); err != nil {
 			return err
 		}
+		progress.Saved() // a later attempt embeds only the chunks with no vector yet
 		progress.Stage("embed", i+len(ids), len(pending))
 	}
 	return nil

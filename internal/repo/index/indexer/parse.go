@@ -99,6 +99,9 @@ func (ix *Indexer) parse(ctx context.Context, dir, sha string, snap, prev int64,
 		if err := ix.write(ctx, snap, prev, parsed, copies); err != nil {
 			return err
 		}
+		if !redo && len(parsed)+len(copies) > 0 {
+			progress.Saved() // a later attempt skips these files; one with redo reads them all again
+		}
 		for _, p := range parsed {
 			delete(stale, p.path)
 		}

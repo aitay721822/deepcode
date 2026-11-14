@@ -5,6 +5,7 @@ package retrieval
 
 import (
 	"context"
+	"errors"
 	"log"
 	"slices"
 
@@ -103,7 +104,9 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 // files as given, never parsing names from words, so a path holding a space
 // is read whole. An anchor whose chunk is taken costs nothing more; one past
 // limit, or whose line no chunk holds, is left out, which the page's skeleton
-// sees in what its evidence shows.
+// sees in what its evidence shows. An embedding server it cannot reach fails
+// it (ai.ErrUnavailable), where Search goes on without vectors: a page is
+// stored, so it waits for the evidence a later try finds.
 func (r *Retriever) SearchPage(ctx context.Context, snapshotID int64, words string, files []string, anchors []Anchor, limit int) (Result, error) {
 	var res Result
 	fts, err := r.fts(ctx, snapshotID, words, nil, ftsLimit)
@@ -125,6 +128,9 @@ func (r *Retriever) SearchPage(ctx context.Context, snapshotID int64, words stri
 		if vec, err = r.vector(ctx, snapshotID, words); err != nil {
 			if ctx.Err() != nil {
 				return res, ctx.Err()
+			}
+			if errors.Is(err, ai.ErrUnavailable) { // a page is kept: written once the server is back, not from less evidence now
+				return res, err
 			}
 			log.Printf("retrieval: vector search unavailable, using FTS5 and symbols only: %v", err)
 		}

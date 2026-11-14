@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 
 	"deepcode/internal/platform/events"
 )
@@ -22,7 +23,8 @@ const (
 type Progress struct {
 	q      *Queue
 	id     int64
-	prefix string // starts each line of output
+	prefix string       // starts each line of output
+	saved  *atomic.Bool // the attempt stored work a later one skips (Saved)
 }
 
 // With is p with each line of output starting with prefix: the lines of one
@@ -41,6 +43,19 @@ func (p Progress) Stage(stage string, done, total int) {
 		log.Printf("jobs: progress #%d: %v", p.id, err)
 	}
 	p.q.changed(events.TopicJobUpdated, p.id)
+}
+
+// Saved records that the job stored work a later attempt skips, such as a
+// batch of files or vectors or a page, so this attempt does not count against
+// its attempts however it ends, a killed process included. Only the first
+// call writes.
+func (p Progress) Saved() {
+	if p.q == nil || p.saved != nil && p.saved.Swap(true) {
+		return
+	}
+	if err := p.q.Store.Saved(p.id); err != nil {
+		log.Printf("jobs: progress #%d: %v", p.id, err)
+	}
 }
 
 // Logf appends one line to the job's output.

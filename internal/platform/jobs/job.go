@@ -44,3 +44,12 @@ func (p permanent) Unwrap() error { return p.error }
 
 // Permanent marks an error that retrying cannot fix, such as a size limit.
 func Permanent(err error) error { return permanent{err} }
+
+type transient struct{ error }
+
+func (t transient) Unwrap() error { return t.error }
+
+// Transient marks an error from a server the job could not reach, or that
+// failed for now (a model server down, a git transfer cut): the job runs
+// again after a backoff, its attempts unspent, for about a day.
+func Transient(err error) error { return transient{err} }

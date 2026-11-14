@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"deepcode/internal/platform/events"
@@ -13,9 +14,11 @@ import (
 // sweepEvery is how often Sweep looks for runnable jobs nobody was woken for.
 var sweepEvery = 5 * time.Second
 
-// Recover settles the jobs a previous process left running: queued again, or
-// failed when that was their last attempt, so a job that kills the process
-// cannot loop forever.
+// Recover settles the jobs a previous process left running: queued again,
+// to resume from the work they stored, or failed when that was their last
+// attempt and it stored none, so a job that kills the process cannot loop
+// forever while one killed as it makes progress (a reboot, an operator's
+// kill) is never failed for it.
 // ponytail: one process owns the database, so recovery needs no leases; add
 // lease_until + heartbeats if a second process ever shares the file.
 // Call before any worker runs.
@@ -110,14 +113,17 @@ func (q *Queue) claim(ctx context.Context) (Job, bool) {
 	return j, true
 }
 
-// run executes one claimed job and records its outcome: success, a retry with
-// backoff, a permanent failure, or a hand-back when the process shuts down.
-// Then it prunes old jobs.
+// run executes one claimed job and records its outcome: success, a hand-back
+// when the process shuts down, a permanent failure, or a retry with backoff.
+// An attempt that stored work a later one skips (Progress.Saved) does not
+// count, nor does one cut by a server the job could not reach (Transient),
+// which is retried for about a day instead; so maxAttempts bounds only the
+// attempts that got nowhere. Then it prunes old jobs.
 func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 	jctx, cancel := context.WithTimeoutCause(ctx, q.Timeout, fmt.Errorf("the job ran past DEEPCODE_JOB_TIMEOUT (%s): %w", q.Timeout, context.DeadlineExceeded))
 	defer cancel()
 	start := time.Now()
-	progress := Progress{q: q, id: job.ID}
+	progress := Progress{q: q, id: job.ID, saved: new(atomic.Bool)}
 	progress.Logf("%s %.7s: attempt %d of %d", job.Kind, job.CommitSHA, job.Attempts, maxAttempts)
 	err := fmt.Errorf("no handler for job kind %q", job.Kind)
 	if h != nil {
@@ -128,6 +134,10 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 	}
 	// ctx may already be cancelled (shutdown), so finish the bookkeeping regardless.
 	bg := context.WithoutCancel(ctx)
+	attempts, retries := job.Attempts, job.Retries
+	if progress.saved.Load() {
+		attempts, retries = attempts-1, 0
+	}
 	switch {
 	case err == nil:
 		log.Printf("jobs: %s #%d (repository %d) succeeded in %s", job.Kind, job.ID, job.RepoID, time.Since(start).Round(time.Second))
@@ -138,21 +148,47 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 		// already committed is reused when it resumes.
 		progress.Logf("interrupted by shutdown; it resumes on the next start")
 		err = q.Store.HandBack(bg, job.ID)
-	case errors.As(err, new(permanent)) || job.Attempts >= maxAttempts:
-		log.Printf("jobs: %s #%d (repository %d) failed: %v", job.Kind, job.ID, job.RepoID, err)
-		progress.Logf("failed: %v", err)
-		err = q.Store.Fail(bg, job.ID, err.Error())
+	case errors.As(err, new(permanent)):
+		err = q.fail(bg, job, progress, err)
+	case errors.As(err, new(transient)):
+		if retries++; retries > maxRetries {
+			err = q.fail(bg, job, progress, fmt.Errorf("still failing after %d retries over about a day: %w", maxRetries, err))
+			break
+		}
+		backoff := transientBackoff(retries)
+		log.Printf("jobs: %s #%d (repository %d) could not reach a server (retry %d of %d in %s): %v", job.Kind, job.ID, job.RepoID, retries, maxRetries, backoff, err)
+		progress.Logf("a server could not be reached; the attempt does not count (retry %d of %d in %s): %v", retries, maxRetries, backoff, err)
+		err = q.Store.Retry(bg, job.ID, err.Error(), int(backoff.Seconds()), job.Attempts-1, retries)
+	case attempts >= maxAttempts:
+		err = q.fail(bg, job, progress, err)
 	default:
-		backoff := 30 << (job.Attempts - 1) // 30s, 60s, ...
+		backoff := 30 << max(attempts-1, 0) // 30s, 60s: 30s again after an attempt that stored work
 		log.Printf("jobs: %s #%d (repository %d) attempt %d failed, retrying in %ds: %v", job.Kind, job.ID, job.RepoID, job.Attempts, backoff, err)
 		progress.Logf("attempt failed, retrying in %ds: %v", backoff, err)
-		err = q.Store.Retry(bg, job.ID, err.Error(), backoff)
+		err = q.Store.Retry(bg, job.ID, err.Error(), backoff, attempts, retries)
 	}
 	if err != nil {
 		log.Printf("jobs: update #%d: %v", job.ID, err)
 	}
 	q.changed(events.TopicJobUpdated, job.ID)
 	q.prune(bg)
+}
+
+// fail marks job failed for good, with err.
+func (q *Queue) fail(ctx context.Context, job Job, progress Progress, err error) error {
+	log.Printf("jobs: %s #%d (repository %d) failed: %v", job.Kind, job.ID, job.RepoID, err)
+	progress.Logf("failed: %v", err)
+	return q.Store.Fail(ctx, job.ID, err.Error())
+}
+
+// maxRetries is how often a job cut by a server it could not reach runs again
+// before it fails: about a day, by transientBackoff.
+const maxRetries = 50
+
+// transientBackoff is the wait before retry n of a job cut by a server it
+// could not reach: 30s, doubling up to 30 minutes.
+func transientBackoff(n int) time.Duration {
+	return min(30*time.Second<<min(n-1, 6), 30*time.Minute)
 }
 
 // keepJobs is how long finished jobs and their output are kept.

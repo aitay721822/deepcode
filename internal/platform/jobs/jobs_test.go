@@ -290,13 +290,62 @@ func TestRecoverFailsLastAttempt(t *testing.T) {
 	b, _ := q.EnqueueIndex(ctx, 2, "b", "")
 	db.Exec(`UPDATE jobs SET status = 'running', attempts = 1 WHERE id = ?`, a.ID)
 	db.Exec(`UPDATE jobs SET status = 'running', attempts = 3 WHERE id = ?`, b.ID)
+	c, _ := q.EnqueueIndex(ctx, 1, "c", "") // killed on its last attempt, but after it stored work
+	db.Exec(`UPDATE jobs SET status = 'running', attempts = 3, saved = 1, retries = 4 WHERE id = ?`, c.ID)
 	if err := q.Recover(ctx); err != nil {
 		t.Fatal(err)
 	}
 	ga, _ := q.Get(ctx, a.ID)
 	gb, _ := q.Get(ctx, b.ID)
-	if ga.Status != "queued" || gb.Status != "failed" || gb.Error == "" {
-		t.Fatalf("recovered: %+v and %+v", ga, gb)
+	gc, _ := q.Get(ctx, c.ID)
+	if ga.Status != "queued" || gb.Status != "failed" || gb.Error == "" || gc.Status != "queued" || gc.Attempts != 2 || gc.Retries != 0 {
+		t.Fatalf("recovered: %+v, %+v and %+v", ga, gb, gc)
+	}
+}
+
+// TestUncountedAttempts: an attempt cut by a server the job could not reach
+// is not counted and runs again after a backoff doubling from 30s to 30m,
+// until the 50th retry fails the job; an attempt that stored work is not
+// counted either, however it ends, and starts the retries' count again.
+func TestUncountedAttempts(t *testing.T) {
+	q, db := setup(t)
+	ctx := context.Background()
+	run := func(h Handler) (j Job, wait int) {
+		t.Helper()
+		db.Exec(`UPDATE jobs SET run_after = CURRENT_TIMESTAMP`)
+		claimed, ok := q.claim(ctx)
+		if !ok {
+			t.Fatal("nothing to claim")
+		}
+		q.run(ctx, claimed, h)
+		j, _ = q.Get(ctx, claimed.ID)
+		db.QueryRow(`SELECT unixepoch(run_after) - unixepoch('now') FROM jobs WHERE id = ?`, j.ID).Scan(&wait)
+		return j, wait
+	}
+	down := func(context.Context, Job, Progress) error { return Transient(errors.New("connection refused")) }
+	saves := func(err error) Handler {
+		return func(_ context.Context, _ Job, p Progress) error { p.Saved(); p.Saved(); return err }
+	}
+	q.EnqueueIndex(ctx, 1, "sha", "")
+	for i, want := range []int{30, 60, 120, 240, 480, 960, 1800, 1800} {
+		if j, w := run(down); j.Status != "queued" || j.Attempts != 0 || j.Retries != i+1 || j.Error != "connection refused" || w < want-10 || w > want {
+			t.Fatalf("retry %d: %+v, runs again in %ds, want %ds", i+1, j, w, want)
+		}
+	}
+	if j, w := run(saves(Transient(errors.New("reset")))); j.Attempts != 0 || j.Retries != 1 || w > 30 {
+		t.Fatalf("an outage after stored work starts the count again: %+v, runs again in %ds", j, w)
+	}
+	for range maxAttempts + 1 {
+		if j, w := run(saves(errors.New("timeout"))); j.Status != "queued" || j.Attempts != 0 || j.Retries != 0 || w > 30 {
+			t.Fatalf("an attempt that stored work should not count: %+v, runs again in %ds", j, w)
+		}
+	}
+	db.Exec(`UPDATE jobs SET retries = ?`, maxRetries-1)
+	if j, _ := run(down); j.Status != "queued" || j.Retries != maxRetries {
+		t.Fatalf("the last retry: %+v", j)
+	}
+	if j, _ := run(down); j.Status != "failed" || !strings.HasPrefix(j.Error, "still failing after 50 retries over about a day: connection refused") {
+		t.Fatalf("past the last retry: %+v", j)
 	}
 }
 

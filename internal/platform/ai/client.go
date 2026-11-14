@@ -5,7 +5,8 @@
 // what this package adds is what the SDK leaves to its user: one order for
 // every request's messages (Prompt), request options (no OPENAI_* environment,
 // retries, RPM, body caps, store false on the Responses API), errors that
-// name the model and mask the key, timeouts that
+// name the model, mask the key and say whether a later try may get through
+// (ErrUnavailable, ErrRefused), timeouts that
 // name DEEPCODE_LLM_TIMEOUT, a Chat Completions stream with no finish reason
 // taken as cut, the 1 MB answer cap, DeepSeek's cached-token count, and
 // schemas, made from Go types or at request time within OpenAI's limits,
@@ -20,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -204,7 +206,9 @@ func (c *OpenAI) middleware(req *http.Request, next option.MiddlewareNext) (*htt
 // SDK's names the status alone, and for a message it cannot read as OpenAI's
 // ({"error":"model not loaded"}, as LM Studio sends) it is a JSON error with
 // neither. An error the server sends inside a stream is quoted as well. A
-// request refused as longer than the context is an ErrContext.
+// request refused as longer than the context is an ErrContext. One a later
+// try may get through is an ErrUnavailable, one refused for a wrong setting
+// an ErrRefused.
 func (c *OpenAI) fail(path string, res *http.Response, err error) error {
 	var api *openai.Error
 	var stream *ssestream.StreamError
@@ -220,15 +224,48 @@ func (c *OpenAI) fail(path string, res *http.Response, err error) error {
 		// the 2048 bytes quote keeps gets a key that crosses the cut whole, so it
 		// is masked too.
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 2048+int64(len(c.APIKey))))
+		refusal := fmt.Errorf("%s %s: %s", c.ModelName, path, res.Status)
 		if msg := c.quote(body); msg != "" {
-			return overflow(body, fmt.Errorf("%s %s: %s: %s", c.ModelName, path, res.Status, msg))
+			refusal = overflow(body, fmt.Errorf("%s %s: %s: %s", c.ModelName, path, res.Status, msg))
 		}
-		return fmt.Errorf("%s %s: %s", c.ModelName, path, res.Status)
+		switch s := res.StatusCode; {
+		case s == http.StatusRequestTimeout || s == http.StatusConflict || s == http.StatusTooManyRequests || s >= 500:
+			return kinded{refusal, ErrUnavailable}
+		case s == http.StatusUnauthorized || s == http.StatusForbidden || s == http.StatusNotFound:
+			return kinded{refusal, ErrRefused}
+		}
+		return refusal
 	case errors.As(err, &stream):
 		return overflow(stream.Event.Data, c.refused(path, stream.Message))
 	}
+	if broken(err) {
+		return kinded{fmt.Errorf("%s %s: %w", c.ModelName, path, err), ErrUnavailable}
+	}
 	return fmt.Errorf("%s %s: %w", c.ModelName, path, err)
 }
+
+// broken reports a request that got no whole answer for want of a working
+// connection: one that failed or broke off (a dial, read or write error, an
+// end midway, a stream's included), or timed out below the caller's context.
+// A certificate the client does not trust, or a malformed URL, is no such
+// failure: a later try meets it again.
+func broken(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var op *net.OpError
+	var ne net.Error
+	return errors.As(err, &op) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &ne) && ne.Timeout()
+}
+
+// ErrUnavailable: the server could not be reached, or failed for now: the
+// connection failed or broke off (broken), or it answered 408, 409, 429 or a
+// 5xx once the SDK's own retries were spent. A later try may get through.
+var ErrUnavailable = errors.New("the model server is unavailable")
+
+// ErrRefused: the server refused the key (401, 403) or has no such model or
+// path (404). A setting is wrong, which no retry fixes.
+var ErrRefused = errors.New("the model server refused the request")
 
 // ErrFailed: the server failed the answer it was giving (an error inside the
 // stream, a failed response) and sent none of its text, as Strata does when
@@ -236,15 +273,19 @@ func (c *OpenAI) fail(path string, res *http.Response, err error) error {
 // server's failure, not a feature the server lacks.
 var ErrFailed = errors.New("the server failed the answer")
 
-// answerFailed is a server's message that the answer failed (refused), an
-// ErrFailed.
-type answerFailed struct{ error }
+// kinded is an error that is also kind (errors.Is), its message its own.
+type kinded struct {
+	error
+	kind error
+}
 
-func (answerFailed) Is(target error) bool { return target == ErrFailed }
+func (k kinded) Is(target error) bool { return target == k.kind }
+func (k kinded) Unwrap() error        { return k.error }
 
-// refused is the error for a server's message that the answer failed, quoted.
+// refused is the error for a server's message that the answer failed, quoted:
+// an ErrFailed.
 func (c *OpenAI) refused(path, msg string) error {
-	return answerFailed{fmt.Errorf("%s %s: %s", c.ModelName, path, c.quote([]byte(cmp.Or(msg, "the answer failed, the server saying no more"))))}
+	return kinded{fmt.Errorf("%s %s: %s", c.ModelName, path, c.quote([]byte(cmp.Or(msg, "the answer failed, the server saying no more")))), ErrFailed}
 }
 
 // quote is a server's message fit for an error: the API key masked, since a

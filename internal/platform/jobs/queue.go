@@ -19,7 +19,8 @@ type Queue struct {
 	slots   chan struct{} // one per worker, held while it drains the queue
 }
 
-// maxAttempts is how often a job runs before it fails for good.
+// maxAttempts is how many attempts that stored no work (Progress.Saved) a job
+// runs before it fails for good.
 const maxAttempts = 3
 
 func New(st *store.Store, bus *events.Bus, timeout time.Duration) *Queue {

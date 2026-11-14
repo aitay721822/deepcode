@@ -26,8 +26,9 @@ type Job struct {
 	Kind      string `json:"kind"`
 	RepoID    int64  `json:"-"` // the row id; Listed carries the public one
 	CommitSHA string `json:"commitSha"`
-	Status    string `json:"status"` // one of the statuses above
-	Attempts  int    `json:"attempts"`
+	Status    string `json:"status"`   // one of the statuses above
+	Attempts  int    `json:"attempts"` // the runs that stored no work and were not cut by a server it could not reach
+	Retries   int    `json:"retries"`  // the runs in a row cut by a server it could not reach
 	Stage     string `json:"stage"`
 	Progress  int    `json:"progress"`
 	Total     int    `json:"total"`
@@ -56,7 +57,7 @@ func (j Job) Finished() bool { return j.Status == StatusSucceeded || j.Status ==
 
 var ErrNotFound = errors.New("找不到工作")
 
-const jobColumns = `id, kind, repository_id, commit_sha, status, attempts, stage, progress, total, error, created_at, updated_at`
+const jobColumns = `id, kind, repository_id, commit_sha, status, attempts, retries, stage, progress, total, error, created_at, updated_at`
 
 // listedColumns are jobColumns of jobs j plus the public id and name of its
 // repository r.
@@ -67,14 +68,14 @@ var listedColumns = "j." + strings.ReplaceAll(jobColumns, ", ", ", j.") + ", r.p
 
 func scanJob(row interface{ Scan(...any) error }) (Job, error) {
 	var j Job
-	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.CreatedAt, &j.UpdatedAt)
+	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Retries, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.CreatedAt, &j.UpdatedAt)
 	return j, err
 }
 
 func scanListed(row interface{ Scan(...any) error }) (Listed, error) {
 	var l Listed
 	j := &l.Job
-	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.CreatedAt, &j.UpdatedAt,
+	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Retries, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.CreatedAt, &j.UpdatedAt,
 		&l.RepoPublicID, &l.RepoOwner, &l.RepoName)
 	return l, err
 }
@@ -86,7 +87,7 @@ func (s *Store) Enqueue(ctx context.Context, kind string, repoID int64, sha, key
 	var id int64
 	err := s.DB.QueryRowContext(ctx, `
 		INSERT INTO jobs(kind, repository_id, commit_sha, idempotency_key) VALUES (?, ?, ?, ?)
-		ON CONFLICT(idempotency_key) DO UPDATE SET status = 'queued', attempts = 0, error = '',
+		ON CONFLICT(idempotency_key) DO UPDATE SET status = 'queued', attempts = 0, retries = 0, saved = 0, error = '',
 			stage = '', progress = 0, total = 0, run_after = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE jobs.status IN ('failed', 'succeeded')
 		RETURNING id`, kind, repoID, sha, key).Scan(&id)

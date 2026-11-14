@@ -151,6 +151,7 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 			if err := g.Store.Save(ctx, p.ID, content, cites); err != nil {
 				return err
 			}
+			progress.Saved() // a later attempt writes only the pages left
 			log.Logf("== saved with %d checked citations", len(cites))
 			mu.Lock()
 			defer mu.Unlock()

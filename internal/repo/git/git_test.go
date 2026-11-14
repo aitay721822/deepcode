@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -403,6 +405,36 @@ func TestValidBranch(t *testing.T) {
 	for _, bad := range []string{"", "-x", "a..b", "a b", "x.lock", "a~b", "a^b", "a:b", "a?b", "a[b", "a\\b", "a//b"} {
 		if g.ValidBranch(ctx, bad) {
 			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+// TestRemoteFailures: a fetch from a remote git cannot reach, or one that
+// answers a status a later try may pass, is ErrUnavailable; one refusing the
+// credentials, without the repository, or no longer holding the commit (a
+// force-push took it away) is ErrRefused. Each says so in git's own words.
+func TestRemoteFailures(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]error{"http://" + l.Addr().String() + "/r.git": ErrUnavailable}
+	l.Close()
+	for status, want := range map[int]error{503: ErrUnavailable, 429: ErrUnavailable, 401: ErrRefused, 403: ErrRefused, 404: ErrRefused} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
+		defer srv.Close()
+		cases[srv.URL+"/r.git"] = want
+	}
+	url, run := bare(t)
+	run("update-ref", "HEAD", run("commit-tree", run("mktree"), "-m", "first"))
+	cases[url] = ErrRefused
+	g := &Client{Dir: t.TempDir(), AllowProtocol: "http:file"}
+	id := int64(0)
+	for url, want := range cases {
+		id++
+		_, err := g.Fetch(context.Background(), id, Remote{URL: url}, strings.Repeat("1", 40))
+		if !errors.Is(err, want) || !strings.Contains(err.Error(), "fatal:") {
+			t.Errorf("%s: %v, want %v", url, err, want)
 		}
 	}
 }
