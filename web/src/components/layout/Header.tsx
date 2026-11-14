@@ -1,4 +1,5 @@
 import { Link } from '@tanstack/react-router'
+import { CodeXmlIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { Repo } from '../../types/repo/repo'
 import { ThemeToggle } from './ThemeToggle'
@@ -10,11 +11,14 @@ export function Header({ repo, children }: { repo?: Pick<Repo, 'id' | 'owner' | 
       <span aria-hidden="true" className="reg-mark -bottom-[5px] -left-[5px] hidden min-[1580px]:block" />
       <span aria-hidden="true" className="reg-mark -right-[5px] -bottom-[5px] hidden min-[1580px]:block" />
       <div className="flex min-w-0 items-center gap-2.5">
-        <Link to="/" className="group flex flex-none items-center gap-2 rounded-sm">
+        <Link to="/" className="flex flex-none items-center gap-2 rounded-sm">
+          {/* The site's mark, as on its tab icon and the sign-in card. */}
           <span
             aria-hidden="true"
-            className="size-2.5 bg-brand transition-transform duration-300 group-hover:rotate-45"
-          />
+            className="grid size-6 place-items-center rounded-md bg-primary text-primary-foreground"
+          >
+            <CodeXmlIcon className="size-3.5" />
+          </span>
           <span className="whitespace-nowrap">
             <span className="font-serif text-[23px] leading-none font-medium tracking-[-0.02em] italic">deep</span>
             <span className="ml-0.5 font-mono text-[15px] leading-none font-medium">code</span>

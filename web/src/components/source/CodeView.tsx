@@ -54,7 +54,7 @@ export function CodeView({
       <div className="relative flex min-w-max py-2 print:min-w-0">
         {startLine ? (
           <div
-            className="absolute inset-x-0 mt-2 bg-(--band) forced-colors:border-y print:hidden"
+            className="absolute inset-x-1.5 mt-2 rounded-md bg-(--band) forced-colors:border print:hidden"
             style={{ top: `${startLine - 1}lh`, height: `${end - startLine + 1}lh` }}
           />
         ) : null}

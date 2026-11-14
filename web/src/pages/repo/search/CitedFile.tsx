@@ -70,7 +70,7 @@ export const CitedFile = memo(function CitedFile({
       {error ? (
         <LoadError className="m-0 p-4" error={error} onRetry={reload}>
           <a
-            className="text-sm text-brand underline-offset-4 hover:underline"
+            className="text-sm text-brand underline underline-offset-4"
             href={sourceUrl(repo, conv.commitSha, citation.path, citation.startLine, citation.endLine)}
             target="_blank"
             rel="noreferrer"

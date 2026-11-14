@@ -73,6 +73,8 @@ async function draw(code: string) {
       suppressErrorRendering: true, // a syntax error throws; the caller shows the code instead
       theme: 'base',
       themeVariables: themeVariables(),
+      // Its boxes take the page's radius scale, as every other surface does (the SVG is inline: the tokens resolve).
+      themeCSS: '.node rect, .cluster rect, rect.actor, rect.note { rx: var(--radius-sm); ry: var(--radius-sm); }',
     })
     return (await mermaid.render(id, code)).svg
   })

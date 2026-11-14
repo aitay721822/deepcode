@@ -75,7 +75,7 @@ export function LoginPage({ next }: { next?: string }) {
       {signUpState?.open && (
         <p className="text-center text-sm text-muted-foreground">
           還沒有帳號？
-          <Link to="/signup" search={{ next }} className="text-brand underline-offset-4 hover:underline">
+          <Link to="/signup" search={{ next }} className="text-brand underline underline-offset-4">
             建立帳號
           </Link>
         </p>

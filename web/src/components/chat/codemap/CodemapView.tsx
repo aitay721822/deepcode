@@ -168,7 +168,7 @@ function TraceBlock({
             type="button"
             aria-expanded={guide}
             aria-controls={guideId}
-            className="inline-flex items-center gap-1 rounded-sm text-[13px] text-brand underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden"
+            className="inline-flex items-center gap-1 rounded-sm text-[13px] text-brand underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden"
             onClick={() => setGuide(!guide)}
           >
             <ChevronDownIcon className={cn('size-3.5 transition-transform', guide && 'rotate-180')} />

@@ -1,3 +1,4 @@
+import { CodeXmlIcon } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import type { ReactNode } from 'react'
 import { Card } from '../../components/ui/display/card'
@@ -8,21 +9,25 @@ import { Frame } from '../Frame'
 export function SessionCard({ title, heading, children }: { title: string; heading: ReactNode; children: ReactNode }) {
   return (
     <Frame title={title}>
-      <main className="relative isolate px-4 pt-[12dvh] pb-20">
-        {/* Graph paper, fading out around the card. */}
-        <div
-          aria-hidden="true"
-          className="dot-grid absolute inset-0 -z-10 [mask-image:radial-gradient(ellipse_at_50%_30%,black_10%,transparent_60%)]"
-        />
-        <motion.div className="mx-auto w-full max-w-[400px]" variants={hero} initial="hidden" animate="shown">
+      <main className="px-4 pt-[12dvh] pb-20">
+        <motion.div className="mx-auto w-full max-w-[380px]" variants={hero} initial="hidden" animate="shown">
           <motion.div variants={reveal}>
-            <Card className="gap-6 px-7 pt-8 pb-7 shadow-modal">
-              <h1
-                id="session-title"
-                className="text-center font-serif text-[32px] leading-tight font-normal tracking-[-0.02em]"
-              >
-                {heading}
-              </h1>
+            <Card className="gap-6 bg-popover px-7 pt-8 pb-7 shadow-raised">
+              <div className="grid justify-items-center gap-4">
+                {/* The site's mark, as on its tab icon. */}
+                <span
+                  aria-hidden="true"
+                  className="grid size-10 place-items-center rounded-lg bg-primary text-primary-foreground"
+                >
+                  <CodeXmlIcon className="size-5" />
+                </span>
+                <h1
+                  id="session-title"
+                  className="text-center font-serif text-[30px] leading-tight font-normal tracking-[-0.02em]"
+                >
+                  {heading}
+                </h1>
+              </div>
               {children}
             </Card>
           </motion.div>

@@ -14,97 +14,95 @@
 }
 
 /*
- * The look: an engineering manual in print. Warm paper (light) or deep ink (dark), hairline rules,
- * serif headings and prose, mono labels, and one signal orange for what is live, linked or cited.
+ * The look: minimal. Grey-white (light) or graphite black (dark), hairline rules, serif headings and prose,
+ * mono labels, and graphite as the one strong colour: buttons, links, citations, what is current.
  */
 
-/* Light: paper. */
+/* Light: grey-white. */
 :root {
   color-scheme: light;
   --radius: 0.625rem; /* lg; xs 4px, sm 6px, md 8px, xl 14px */
-  --background: #f4efe4;
-  --foreground: #1c1a16;
-  --card: #faf7f0;
-  --card-foreground: #1c1a16;
-  --popover: #fdfbf6;
-  --popover-foreground: #1c1a16;
-  --primary: #1c1a16; /* ink buttons */
-  --primary-foreground: #f8f4ea;
-  --secondary: #e9e3d6;
-  --secondary-foreground: #1c1a16;
-  --muted: #ebe5d8;
-  --muted-foreground: #5d574b;
-  --accent: #e8e1d2; /* hover, and the grey that marks the current or highlighted item */
-  --accent-foreground: #1c1a16;
-  --destructive: #c0283e;
+  --background: #f3f3f4;
+  --foreground: #1a1b1e;
+  --card: #f9f9fa;
+  --card-foreground: #1a1b1e;
+  --popover: #ffffff;
+  --popover-foreground: #1a1b1e;
+  --primary: #232428; /* graphite buttons */
+  --primary-foreground: #fafafa;
+  --secondary: #e7e7e9;
+  --secondary-foreground: #1a1b1e;
+  --muted: #eaeaec;
+  --muted-foreground: #5b5e65;
+  --accent: #e4e4e7; /* hover, and the grey that marks the current or highlighted item */
+  --accent-foreground: #1a1b1e;
+  --destructive: #c0283a;
   --destructive-foreground: #ffffff;
-  --border: #ddd4c3;
-  --input: #8f8673; /* control borders: 3:1 on paper, card and popover */
-  --ring: #b23c0c;
+  --border: #dcdde0;
+  --input: #85888f; /* control borders: 3:1 on the page, card and popover */
+  --ring: #232428;
   /* deepcode's own */
-  --brand: #b23c0c; /* signal: links, citations, the ask box, the current item */
-  --brand-foreground: #ffffff;
-  --faint: #8f8673; /* quiet marks: line and list numbers, list bullets, repo ids, the header slash */
-  --warning: #dd5a1e; /* work in progress: progress bars */
-  --success: #1a7042;
-  --code: #fcfaf5;
-  --chip: #ece6d9;
-  --band: rgb(178 60 12 / 0.1); /* cited lines */
-  --overlay: rgb(0 0 0 / 0.45); /* behind dialogs */
-  --grid: rgb(28 26 22 / 0.09); /* dot grid */
-  --hatch: rgb(178 60 12 / 0.16);
-  --grain: 0.08;
+  --brand: #232428; /* the strong colour: links, citations, the ask box, the current item */
+  --brand-foreground: #fafafa;
+  --faint: #85888f; /* quiet marks: line and list numbers, list bullets, repo ids, the header slash */
+  --warning: #232428; /* work in progress: progress bars */
+  --success: #1b6b44;
+  --code: #fcfcfc;
+  --chip: #e9e9eb;
+  --band: rgb(35 36 40 / 0.08); /* cited lines */
+  --overlay: rgb(0 0 0 / 0.4); /* behind dialogs */
+  --grid: rgb(26 27 30 / 0.08); /* dot grid */
+  --hatch: rgb(35 36 40 / 0.12);
   --add-card: repeating-linear-gradient(135deg, var(--hatch) 0 1px, transparent 1px 9px);
-  --syn-keyword: #b8400f;
-  --syn-string: #3d6b1e;
-  --syn-comment: #6b6455;
-  --syn-title: #8a5300;
-  --syn-number: #1d5f99;
-  --syn-type: #0f6d66;
+  --syn-keyword: #a2324f;
+  --syn-string: #3c6a2e;
+  --syn-comment: #5f636b;
+  --syn-title: #6b4796;
+  --syn-number: #2b5d8c;
+  --syn-type: #1f6a69;
 }
 
-/* Dark: ink, the default look on screen. A page prints with the paper tokens: pale text would print on
+/* Dark: graphite black, the default look on screen. A page prints with the light tokens: pale text would print on
    white paper. */
 @media screen {
   .dark {
     color-scheme: dark;
-    --background: #12110f;
-    --foreground: #ece6da;
-    --card: #181714;
-    --card-foreground: #ece6da;
-    --popover: #1c1a17;
-    --popover-foreground: #ece6da;
-    --primary: #ece6da;
-    --primary-foreground: #12110f;
-    --secondary: #211f1b;
-    --secondary-foreground: #ece6da;
-    --muted: #1e1c19;
-    --muted-foreground: #a59e90;
-    --accent: #2b2925;
-    --accent-foreground: #ece6da;
-    --destructive: #f4677a;
-    --destructive-foreground: #12110f;
-    --border: #2c2a25;
-    --input: #6e675b;
-    --ring: #ff7a3d;
-    --brand: #ff7a3d;
-    --brand-foreground: #12110f;
-    --faint: #77705f;
-    --warning: #ff7a3d;
-    --success: #5cc58a;
-    --code: #0d0c0b;
-    --chip: #1f1d1a;
-    --band: rgb(255 122 61 / 0.13);
-    --overlay: rgb(0 0 0 / 0.65);
-    --grid: rgb(236 230 218 / 0.08);
-    --hatch: rgb(255 122 61 / 0.18);
-    --grain: 0.06;
-    --syn-keyword: #ff8f61;
-    --syn-string: #a9cf8a;
-    --syn-comment: #968f81;
-    --syn-title: #e9c46a;
-    --syn-number: #7fb8e6;
-    --syn-type: #6cc6bd;
+    --background: #131416;
+    --foreground: #e6e7e9;
+    --card: #18191c;
+    --card-foreground: #e6e7e9;
+    --popover: #1c1d20;
+    --popover-foreground: #e6e7e9;
+    --primary: #e6e7e9;
+    --primary-foreground: #131416;
+    --secondary: #202125;
+    --secondary-foreground: #e6e7e9;
+    --muted: #1e1f22;
+    --muted-foreground: #a2a5ac;
+    --accent: #28292d;
+    --accent-foreground: #e6e7e9;
+    --destructive: #f0707e;
+    --destructive-foreground: #131416;
+    --border: #2a2b2f;
+    --input: #6d7078;
+    --ring: #e6e7e9;
+    --brand: #e6e7e9;
+    --brand-foreground: #131416;
+    --faint: #74777e;
+    --warning: #e6e7e9;
+    --success: #5ec48c;
+    --code: #0f1012;
+    --chip: #212226;
+    --band: rgb(230 231 233 / 0.08);
+    --overlay: rgb(0 0 0 / 0.6);
+    --grid: rgb(230 231 233 / 0.07);
+    --hatch: rgb(230 231 233 / 0.12);
+    --syn-keyword: #e899ad;
+    --syn-string: #a6c995;
+    --syn-comment: #8f939b;
+    --syn-title: #c2a6e8;
+    --syn-number: #8db6dd;
+    --syn-type: #7fc3be;
   }
 }
 
@@ -146,10 +144,11 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  /* Elevation: an input lifted off the page; menus and the ask box floating; dialogs above everything. */
-  --shadow-raised: 0 22px 44px -28px rgb(0 0 0 / 0.5);
-  --shadow-floating: 0 24px 60px -24px rgb(0 0 0 / 0.5);
-  --shadow-modal: 0 40px 100px -30px rgb(0 0 0 / 0.6);
+  /* Elevation, kept soft: an input or the sign-in card lifted off the page; menus and the ask box floating; dialogs
+     above everything. */
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.04), 0 12px 32px -20px rgb(0 0 0 / 0.16);
+  --shadow-floating: 0 2px 6px rgb(0 0 0 / 0.04), 0 20px 48px -24px rgb(0 0 0 / 0.22);
+  --shadow-modal: 0 2px 8px rgb(0 0 0 / 0.06), 0 32px 80px -32px rgb(0 0 0 / 0.32);
 }
 
 /* A small mono label in capitals: section names, metadata, table heads. */
@@ -193,17 +192,6 @@
     font-size: 15px;
     line-height: 1.5;
     font-synthesis-style: none; /* no fake italics for Chinese, whose faces have none */
-  }
-
-  /* Paper grain under everything: the page shows it, cards and code cover it. */
-  body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: -1;
-    pointer-events: none;
-    opacity: var(--grain);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
 
   h1,

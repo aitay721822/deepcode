@@ -33,7 +33,7 @@ export function FileView({
   const cut = path.lastIndexOf('/') + 1 // on a narrow screen the folders give way, the file name stays
   const link = commit && (
     <a
-      className="inline-flex items-center gap-1 text-[12.5px] whitespace-nowrap text-brand underline-offset-4 hover:underline"
+      className="inline-flex items-center gap-1 text-[12.5px] whitespace-nowrap text-brand underline underline-offset-4"
       href={sourceUrl(repo, commit, path, lines?.[0], lines?.[1])}
       target="_blank"
       rel="noreferrer"

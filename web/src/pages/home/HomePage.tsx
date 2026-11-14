@@ -74,7 +74,7 @@ export function HomePage() {
             variants={reveal}
             className="mx-auto mb-9 max-w-[780px] font-serif text-[clamp(2.15rem,5.6vw,3.7rem)] leading-[1.04] font-normal tracking-[-0.025em]"
           >
-            你想<em className="text-brand">讀懂</em>哪個 Repository？
+            你想<em className="text-muted-foreground">讀懂</em>哪個 Repository？
           </motion.h1>
           <motion.form
             variants={reveal}

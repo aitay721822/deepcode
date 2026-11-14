@@ -132,7 +132,7 @@ export function JobDetail({ id }: { id: number }) {
         <Meta term="建立於">{formatTime(j.createdAt)}</Meta>
         <Meta term="更新於">{formatTime(j.updatedAt)}</Meta>
         <Meta term="Repository">
-          <Link to="/repos/$id" params={{ id: j.repoId }} className="text-brand hover:underline">
+          <Link to="/repos/$id" params={{ id: j.repoId }} className="text-brand underline underline-offset-4">
             開啟 Repository
           </Link>
         </Meta>

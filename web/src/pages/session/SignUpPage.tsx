@@ -105,7 +105,7 @@ export function SignUpPage({ next }: { next?: string }) {
       {body}
       <p className="text-center text-sm text-muted-foreground">
         已經有帳號？
-        <Link to="/login" search={{ next }} className="text-brand underline-offset-4 hover:underline">
+        <Link to="/login" search={{ next }} className="text-brand underline underline-offset-4">
           登入
         </Link>
       </p>
