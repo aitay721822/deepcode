@@ -66,7 +66,7 @@ function Cached({ row }: { row: Counts }) {
   return (
     <>
       {tokens(row.cachedTokens)}
-      {row.inputTokens > 0 && (
+      {row.cachedTokens > 0 && row.inputTokens > 0 && (
         <span className="ml-1.5 text-muted-foreground">{Math.round((100 * row.cachedTokens) / row.inputTokens)}%</span>
       )}
     </>

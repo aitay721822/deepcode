@@ -3,6 +3,9 @@ export const shortSha = (sha: string) => sha.slice(0, 7)
 /** SQLite CURRENT_TIMESTAMP is UTC without a zone marker. */
 const parse = (sqlite: string) => new Date(`${sqlite.replace(' ', 'T')}Z`)
 
+/** Whether a SQLite time has come; a time that does not parse has not. */
+export const isPast = (sqlite: string) => parse(sqlite).getTime() <= Date.now()
+
 export function formatDate(sqlite: string) {
   const d = parse(sqlite)
   return Number.isNaN(d.getTime())

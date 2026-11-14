@@ -8,10 +8,12 @@ export type Job = {
   commitSha: string
   status: 'queued' | 'running' | 'succeeded' | 'failed'
   attempts: number
+  retries: number // the runs in a row cut by a server it could not reach
   stage: string
   progress: number
   total: number
   error: string
+  runAfter: string // when a queued job may start: after a retry's backoff
   createdAt: string
   updatedAt: string
 }

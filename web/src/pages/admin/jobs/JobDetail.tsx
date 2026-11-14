@@ -4,7 +4,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { getJob, watchJobOutput } from '../../../api/admin/jobs'
 import type { StreamState } from '../../../api/client'
 import { JobProgress } from '../../../components/repo/JobProgress'
-import { isActive } from '../../../components/repo/jobStage'
+import { isActive, retrying } from '../../../components/repo/jobStage'
 import { LoadError } from '../../../components/ui/feedback/load-error'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
 import { formatTime, shortSha } from '../../../lib/format'
@@ -110,6 +110,8 @@ export function JobDetail({ id }: { id: number }) {
           <code className="font-mono">{j.commitSha ? shortSha(j.commitSha) : '-'}</code>
         </Meta>
         <Meta term="嘗試次數">{j.attempts}</Meta>
+        {j.retries > 0 && <Meta term="連線重試">{j.retries} 次</Meta>}
+        {retrying(j) && <Meta term="下次嘗試">{formatTime(j.runAfter)}</Meta>}
         <Meta term="建立於">{formatTime(j.createdAt)}</Meta>
         <Meta term="更新於">{formatTime(j.updatedAt)}</Meta>
         <Meta term="Repository">

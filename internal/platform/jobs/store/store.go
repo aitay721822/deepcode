@@ -32,7 +32,8 @@ type Job struct {
 	Stage     string `json:"stage"`
 	Progress  int    `json:"progress"`
 	Total     int    `json:"total"`
-	Error     string `json:"error"` // in full: it may quote git, the model's API or paths, so the API hides it from users without jobs.view
+	Error     string `json:"error"`    // in full: it may quote git, the model's API or paths, so the API hides it from users without jobs.view
+	RunAfter  string `json:"runAfter"` // when a queued job may start: after the backoff of a retry
 	CreatedAt string `json:"createdAt"`
 	UpdatedAt string `json:"updatedAt"`
 }
@@ -57,7 +58,7 @@ func (j Job) Finished() bool { return j.Status == StatusSucceeded || j.Status ==
 
 var ErrNotFound = errors.New("找不到工作")
 
-const jobColumns = `id, kind, repository_id, commit_sha, status, attempts, retries, stage, progress, total, error, created_at, updated_at`
+const jobColumns = `id, kind, repository_id, commit_sha, status, attempts, retries, stage, progress, total, error, run_after, created_at, updated_at`
 
 // listedColumns are jobColumns of jobs j plus the public id and name of its
 // repository r.
@@ -68,14 +69,14 @@ var listedColumns = "j." + strings.ReplaceAll(jobColumns, ", ", ", j.") + ", r.p
 
 func scanJob(row interface{ Scan(...any) error }) (Job, error) {
 	var j Job
-	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Retries, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.CreatedAt, &j.UpdatedAt)
+	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Retries, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.RunAfter, &j.CreatedAt, &j.UpdatedAt)
 	return j, err
 }
 
 func scanListed(row interface{ Scan(...any) error }) (Listed, error) {
 	var l Listed
 	j := &l.Job
-	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Retries, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.CreatedAt, &j.UpdatedAt,
+	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Retries, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.RunAfter, &j.CreatedAt, &j.UpdatedAt,
 		&l.RepoPublicID, &l.RepoOwner, &l.RepoName)
 	return l, err
 }

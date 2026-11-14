@@ -2,7 +2,7 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { listJobs, watchJobs } from '../../../api/admin/jobs'
 import type { StreamState } from '../../../api/client'
-import { isActive, jobFraction, stageLabel } from '../../../components/repo/jobStage'
+import { isActive, jobFraction, stageText } from '../../../components/repo/jobStage'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/display/table'
 import { LoadError } from '../../../components/ui/feedback/load-error'
 import { Progress } from '../../../components/ui/feedback/progress'
@@ -34,9 +34,6 @@ function merge(loaded: JobRow[], live: Map<number, JobRow>) {
 
 const jobLink = (j: JobRow) =>
   ({ to: '/admin/{-$section}/{-$id}', params: { section: 'jobs', id: String(j.id) } }) as const
-
-const stageText = (j: JobRow) =>
-  j.status === 'failed' ? j.error || '失敗' : j.status === 'succeeded' ? '完成' : stageLabel(j)
 
 /** Recent jobs, kept live by the job event stream. */
 export function JobsSection() {

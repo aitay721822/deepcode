@@ -321,8 +321,11 @@ func TestUncountedAttempts(t *testing.T) {
 		}
 		q.run(ctx, claimed, h)
 		j, _ = q.Get(ctx, claimed.ID)
-		db.QueryRow(`SELECT unixepoch(run_after) - unixepoch('now') FROM jobs WHERE id = ?`, j.ID).Scan(&wait)
-		return j, wait
+		at, err := time.Parse(time.DateTime, j.RunAfter) // UTC, as SQLite writes it
+		if err != nil {
+			t.Fatalf("run after %q: %v", j.RunAfter, err)
+		}
+		return j, int(time.Until(at).Round(time.Second).Seconds())
 	}
 	down := func(context.Context, Job, Progress) error { return Transient(errors.New("connection refused")) }
 	saves := func(err error) Handler {

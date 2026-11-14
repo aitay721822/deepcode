@@ -5,7 +5,7 @@ import { Card } from '../ui/display/card'
 import { Progress } from '../ui/feedback/progress'
 import { Spinner } from '../ui/feedback/spinner'
 import { Status } from '../ui/feedback/status'
-import { isActive, jobFraction, STAGES, stageIndex } from './jobStage'
+import { isActive, jobFraction, retrying, retryText, STAGES, stageIndex } from './jobStage'
 
 const stepTone = {
   done: "text-muted-foreground before:text-success before:content-['✓']",
@@ -13,7 +13,10 @@ const stepTone = {
   todo: "text-muted-foreground before:content-['']",
 }
 
-/** A job's stages and progress; a failed one shows its error and, given retry, a Retry button and what came of it. */
+/**
+ * A job's stages and progress; one waiting to retry says why and when, with its last error; a failed one shows its
+ * error and, given retry, a Retry button and what came of it.
+ */
 export function JobProgress({
   job,
   title,
@@ -66,6 +69,12 @@ export function JobProgress({
             )
           })}
         </ul>
+        {retrying(job) && (
+          <div className="mt-1.5 space-y-1.5 text-sm [overflow-wrap:anywhere]">
+            <p>{retryText(job)}</p>
+            {job.error && <p className="text-muted-foreground">{job.error}</p>}
+          </div>
+        )}
         {failed && (
           <div className="flex items-start justify-between gap-3 text-sm">
             <div className="mt-1.5 space-y-1.5 [overflow-wrap:anywhere]">

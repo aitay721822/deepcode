@@ -10,12 +10,14 @@ import { NotFoundPage } from '../NotFoundPage'
 import { useSession } from '../session/session'
 import { JobDetail } from './jobs/JobDetail'
 import { JobsSection } from './jobs/JobsSection'
+import { ProjectsSection } from './overview/ProjectsSection'
+import { UsageSection } from './overview/UsageSection'
 import { RolesSection } from './roles/RolesSection'
 import { ServersSection } from './servers/ServersSection'
-import { UsageSection } from './usage/UsageSection'
 import { UsersSection } from './users/UsersSection'
 
 const sections: { path: string; label: string; permission: Permission; page: (id?: number) => ReactNode }[] = [
+  { path: 'projects', label: '專案', permission: 'jobs.view', page: () => <ProjectsSection /> },
   {
     path: 'jobs',
     label: '工作',
