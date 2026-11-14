@@ -53,19 +53,39 @@ func TestMeasure(t *testing.T) {
 	}
 }
 
-func TestSection(t *testing.T) {
+func TestCode(t *testing.T) {
+	paths := []string{"README.md", "docs/guide.md", "src/a_test.go", "tests/b.ts", ".github/workflows/ci.yml", "examples/e.go",
+		"src/Ordering.UnitTests/X.cs", "src/a.go", "lib/b.js", "src/main/java/x/Owner.java", "UserGuide.md"}
+	if got, want := Code(paths), []string{"src/a.go", "lib/b.js", "src/main/java/x/Owner.java"}; !slices.Equal(got, want) {
+		t.Fatalf("Code = %q, want %q", got, want)
+	}
+	if paths[0] != "README.md" || len(paths) != 11 {
+		t.Fatalf("Code changed the paths it was given: %q", paths)
+	}
+}
+
+func TestReport(t *testing.T) {
 	at := func(f string) bool { return f != "gone.go" }
 	even := Measure([]string{"a.go"}, []string{"a.go"}, at)
 	uneven := Measure([]string{"a.go", "b.go", "c.go", "d.go", "e.go"}, []string{"a.go", "b.go"}, at)
 	mid := Measure([]string{"a.go", "b.go", "gone.go"}, []string{"a.go", "x.go", "y.go"}, at)
 	failed := Measure([]string{"a.go"}, nil, at)
 	uncited := Measure(nil, []string{"a.go"}, at)
-	md := Section([]Row{{Repo: "chi", Question: "q1", Commit: "a54874f0", Overlap: &even}, {Repo: "chi", Question: "q2", Overlap: &uneven},
+	rows := []Row{{Repo: "chi", Question: "q1", Commit: "a54874f0", Overlap: &even}, {Repo: "chi", Question: "q2", Overlap: &uneven},
 		{Repo: "chi", Question: "q4", Overlap: &mid}, {Repo: "axum", Question: "q3"}, {Repo: "gson", Question: "q5", Failed: true, Overlap: &failed},
-		{Repo: "zustand", Question: "q6", Overlap: &uncited}})
+		{Repo: "zustand", Question: "q6", Overlap: &uncited}, {Repo: "axum", Question: "q7"}, {Repo: "gson", Question: "q9", Failed: true}}
+	if got, want := Score(rows), (Tally{Questions: 8, Even: 2, Missing: 3, Unmeasured: 1, Failed: 2, Measured: 4, Ratio: 0.45, Count: 0.7}); got != want {
+		t.Fatalf("Score = %+v, want %+v", got, want)
+	}
+	pairs := []Pair{{Run: "run1", Capture: "answers-1.json", Rows: rows}, {Run: "run1", Capture: "answers-2.json", Rows: []Row{{Repo: "chi", Question: "q1", Overlap: &even}, {Repo: "chi", Question: "q10", Overlap: &uneven}}}}
+	md := Report(pairs)
 	for _, want := range []string{
-		"2 of 6 questions even. Not even for want of a measure: 1 without a captured DeepWiki answer, 1 whose DeepWiki answer cites no file head holds. " +
-			"1 of deepcode's answers failed. Median ratio 0.45, median count 0.70 over the 4 measured.",
+		"cites at least 50% of the code files DeepWiki cites",
+		"| run1 | answers-1.json | 2 of 8 | 4 | 3 | 1 | 2 | 0.45 | 0.70 |",
+		"| run1 | answers-2.json | 1 of 2 | 2 | 0 | 0 | 0 | 0.70 | 0.70 |",
+		"G5 (run × capture pairs compared: 2): a mean of 1.50 even questions of 5.00 asked, against a bar of 4.07 (35 of the bench's 43, DeepWiki's agreement with itself less 2, scaled to the questions asked): not met.",
+		"The runs hold a sample of the bench's questions",
+		"## run1 against answers-1.json",
 		"| chi | q1 | a54874f0 | a.go | a.go | a.go | 1.00 | 1.00 | yes | – |",
 		"| chi | q2 | – | a.go, b.go, c.go, d.go, e.go | a.go, b.go | a.go, b.go | 0.40 | 0.40 | no | – |",
 		"| chi | q4 | – | a.go, b.go | a.go, x.go, y.go | a.go | 0.50 | 1.50 | yes | gone.go |",
@@ -74,8 +94,39 @@ func TestSection(t *testing.T) {
 		"| zustand | q6 | – | – | a.go | – | – | – | unmeasured | – |",
 	} {
 		if !strings.Contains(md, want) {
-			t.Errorf("the section lacks %q:\n%s", want, md)
+			t.Errorf("the report lacks %q:\n%s", want, md)
 		}
+	}
+	second := strings.Index(md, "## run1 against answers-2.json")
+	if q10 := strings.Index(md, "| chi | q10 | – | a.go, b.go, c.go, d.go, e.go | a.go, b.go | a.go, b.go | 0.40 | 0.40 | no | – |"); second < 0 || q10 < second {
+		t.Errorf("the second pair's questions are not under its own heading:\n%s", md)
+	}
+	// Need of every Questions, scaled: 35 of 43 meets the bar and 34 does not; a sample of 6 questions
+	// needs 5 even (5×43 ≥ 35×6), as 4 falls short.
+	run := func(evens, all int) []Pair {
+		rows := slices.Repeat([]Row{{Repo: "chi", Question: "q", Overlap: &even}}, evens)
+		rows = append(rows, slices.Repeat([]Row{{Repo: "chi", Question: "q", Overlap: &uneven}}, all-evens)...)
+		return []Pair{{Run: "r", Capture: "answers-1.json", Rows: rows}}
+	}
+	for _, c := range []struct {
+		evens, all int
+		met        bool
+	}{{Need, Questions, true}, {Need - 1, Questions, false}, {5, 6, true}, {4, 6, false}} {
+		if v := G5(run(c.evens, c.all)); v.Met != c.met || v.Mean != float64(c.evens) || v.Asked != float64(c.all) {
+			t.Errorf("%d even of %d: %+v, want met %v", c.evens, c.all, v, c.met)
+		}
+	}
+	whole := Report(run(Need, Questions))
+	if !strings.Contains(whole, "a mean of 35.00 even questions of 43.00 asked, against a bar of 35.00 (35 of the bench's 43") ||
+		!strings.Contains(whole, "): met.") || strings.Contains(whole, "a sample") {
+		t.Errorf("all the bench's questions at the bar:\n%s", whole)
+	}
+	if v := G5(nil); v != (Verdict{}) || !strings.Contains(Report(nil), "pairs compared: 0): a mean of 0.00 even questions of 0.00 asked, against a bar of 0.00") ||
+		strings.Contains(Report(nil), "a sample") {
+		t.Errorf("no comparison: %+v, or a bar met", v)
+	}
+	if v := G5([]Pair{{Run: "r", Capture: "answers-1.json"}}); v.Met {
+		t.Errorf("a run asking nothing meets G5: %+v", v)
 	}
 	if m := median([]float64{3, 1, 2}); m != 2 {
 		t.Errorf("the median of 3, 1 and 2 is %v", m)
@@ -103,6 +154,16 @@ func TestStore(t *testing.T) {
 	}
 	if _, ok := got.Find("o/c", "How?"); ok {
 		t.Fatal("found an answer for a repository asked nothing")
+	}
+	names := []string{"answers-10.json", "answers.json", "answers-2.json", "answers-01.json", "answers-1.json", "answers-x.json", "20261113T122057Z.md", "answers-3.json.bak"}
+	if got, want := Captures(names), []string{"answers-1.json", "answers-2.json", "answers-10.json"}; !slices.Equal(got, want) || names[0] != "answers-10.json" {
+		t.Fatalf("Captures = %q, want %q, the names given unchanged", got, want)
+	}
+	if got, err := Names([]string{filepath.Join("data", "bench", "runs", "20261114T010203Z.json"), "b.json"}); err != nil || !slices.Equal(got, []string{"20261114T010203Z", "b"}) {
+		t.Fatalf("Names = %q, %v", got, err)
+	}
+	if got, err := Names([]string{filepath.Join("x", "a.json"), filepath.Join("y", "a.json")}); err == nil {
+		t.Fatalf("two runs named a are named %q, without an error", got)
 	}
 }
 

@@ -1,7 +1,8 @@
 // Package rival holds DeepWiki's answers to the bench's questions and measures, question by question, how
-// far the files an answer of deepcode's cites overlap the files DeepWiki's answer cites: gate G5 of
-// v1.0.0, which counts cited files rather than asking a model which answer is better. DeepWiki's answers
-// are captured once (capture.go) into data/bench/deepwiki, which git ignores: they are DeepWiki's text.
+// far the code files an answer of deepcode's cites overlap the code files DeepWiki's answer cites: gate G5
+// of v1.0.0, which counts cited files rather than asking a model which answer is better. DeepWiki's
+// answers are captured (capture.go) into data/bench/deepwiki, which git ignores as they are DeepWiki's
+// text; two captures stay fixed as the gate's reference until one is taken again on purpose.
 package rival
 
 import (
@@ -15,7 +16,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+
+	"deepcode/internal/repo/index/analyzer"
 )
 
 // Ref is a range of a file that DeepWiki's answer cites, its lines counted from 1.
@@ -39,7 +43,7 @@ type Answer struct {
 	Read     []string `json:"read"`
 }
 
-// Capture is DeepWiki's answers, as data/bench/deepwiki/answers.json keeps them.
+// Capture is DeepWiki's answers, as data/bench/deepwiki/answers-<n>.json keeps capture n.
 type Capture struct {
 	Answers []Answer `json:"answers"`
 }
@@ -66,6 +70,31 @@ func (c Capture) Save(path string) error {
 		return err
 	}
 	return os.WriteFile(path, b, 0o600)
+}
+
+// captureName is a capture's file name, answers-<n>.json for capture n, numbered from 1.
+var captureName = regexp.MustCompile(`^answers-([1-9][0-9]*)\.json$`)
+
+// Captures is those of names that name a capture, in the order of their numbers.
+func Captures(names []string) []string {
+	out := slices.DeleteFunc(slices.Clone(names), func(n string) bool { return !captureName.MatchString(n) })
+	number := func(n string) int { i, _ := strconv.Atoi(captureName.FindStringSubmatch(n)[1]); return i }
+	slices.SortFunc(out, func(a, b string) int { return cmp.Compare(number(a), number(b)) })
+	return out
+}
+
+// Names is each run's name, its file's name less .json. Two runs of one name are an error, as the report
+// tells runs apart, and is named, by their names.
+func Names(runs []string) ([]string, error) {
+	var names []string
+	for _, r := range runs {
+		n := strings.TrimSuffix(filepath.Base(r), ".json")
+		if slices.Contains(names, n) {
+			return nil, fmt.Errorf("two runs are named %s: the report tells runs apart by their files' names", n)
+		}
+		names = append(names, n)
+	}
+	return names, nil
 }
 
 // Find is DeepWiki's answer to question about repo (owner/name).
@@ -107,11 +136,25 @@ func Cited(answer string) []string {
 	return out
 }
 
-// Bar is the provisional least Ratio of a question even with DeepWiki's answer: deepcode cites at least
-// half the files DeepWiki cites. Count is never below Ratio (the shared files are deepcode's too), so at
-// least half as many files follows; Count is shown, not held. The user sets the final bar once the stored
-// runs are measured.
+// Bar is the least Ratio of a question even with DeepWiki's answer: deepcode cites at least half the code
+// files DeepWiki cites. Count is never below Ratio (the shared files are deepcode's too), so at least half
+// as many follows; Count is shown, not held.
 const Bar = 0.5
+
+// Need is gate G5: the least mean number of even questions, over every run and capture compared, of the
+// bench's Questions. It is DeepWiki's agreement with itself, 37 of 43 on code files between two captures
+// (2026-11-14), less 2: deepcode citing about what DeepWiki cites, as the user set it.
+const Need = 35
+
+// Questions is the number of questions the bench asks over its repositories, those Need counts of.
+const Questions = 43
+
+// Code is those of paths that are code: tests, examples, docs, prose and hidden folders aside, as deepcode
+// itself ranks them down (analyzer.Secondary). DeepWiki cites READMEs, guides and tests far more often
+// than deepcode does, by habit rather than for what the code does.
+func Code(paths []string) []string {
+	return slices.DeleteFunc(slices.Clone(paths), analyzer.Secondary)
+}
 
 // Overlap compares the files two answers to one question cite.
 type Overlap struct {
@@ -161,36 +204,96 @@ type Row struct {
 	Overlap        *Overlap // nil: no answer of DeepWiki's to the question was captured
 }
 
-// Section is the comparison as Markdown: how many of rows' questions are even, why the others are not
-// measured, the median ratios of those measured, then a row a question.
-func Section(rows []Row) string {
-	var b strings.Builder
+// Tally is how one run's answers fare against one capture: of its questions, those even, those with no
+// captured answer, those whose DeepWiki answer cites no code file head holds, and deepcode's answers that
+// failed; Ratio and Count are the medians of the Measured questions.
+type Tally struct {
+	Questions, Even, Missing, Unmeasured, Failed, Measured int
+	Ratio, Count                                           float64
+}
+
+// Score tallies rows.
+func Score(rows []Row) Tally {
+	t := Tally{Questions: len(rows)}
 	var ratios, counts []float64
-	var even, missing, unmeasured, failed int
 	for _, r := range rows {
 		if r.Failed {
-			failed++
+			t.Failed++
 		}
 		switch o := r.Overlap; {
 		case o == nil:
-			missing++
+			t.Missing++
 		case !o.Measured():
-			unmeasured++
+			t.Unmeasured++
 		default:
 			ratios, counts = append(ratios, o.Ratio), append(counts, o.Count)
 			if o.Even() {
-				even++
+				t.Even++
 			}
 		}
 	}
-	fmt.Fprintf(&b, "## Against DeepWiki\n\nCited files: shared ÷ DeepWiki's (ratio) and deepcode's ÷ DeepWiki's (count), DeepWiki's counted only when head holds them. Even: a ratio of at least %.1f.\n\n", Bar)
-	fmt.Fprintf(&b, "%d of %d questions even. Not even for want of a measure: %d without a captured DeepWiki answer, %d whose DeepWiki answer cites no file head holds. %d of deepcode's answers failed. Median ratio %.2f, median count %.2f over the %d measured.\n\n",
-		even, len(rows), missing, unmeasured, failed, median(ratios), median(counts), len(ratios))
+	t.Measured, t.Ratio, t.Count = len(ratios), median(ratios), median(counts)
+	return t
+}
+
+// Pair is one run's answers against one capture of DeepWiki's, each named as its file is.
+type Pair struct {
+	Run, Capture string
+	Rows         []Row
+}
+
+// Verdict is gate G5 over the pairs compared: the mean numbers of even questions and of questions asked
+// per pair, the Bar Mean must reach (Need of every Questions, scaled to the questions asked, so a run
+// holding some of the bench's repositories is held to the same rate) and whether it does.
+type Verdict struct {
+	Mean, Asked, Bar float64
+	Met              bool
+}
+
+// G5 is the verdict over pairs; none, or none holding a question, is not met.
+func G5(pairs []Pair) Verdict {
+	even, all := 0, 0
+	for _, p := range pairs {
+		t := Score(p.Rows)
+		even, all = even+t.Even, all+t.Questions
+	}
+	if all == 0 {
+		return Verdict{}
+	}
+	n := float64(len(pairs))
+	return Verdict{Mean: float64(even) / n, Asked: float64(all) / n, Bar: float64(Need*all) / Questions / n, Met: even*Questions >= Need*all}
+}
+
+// Report is the comparison as Markdown: each pair's tally, the verdict G5, then each pair's questions, a
+// row each.
+func Report(pairs []Pair) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Against DeepWiki\n\nCode files only (analyzer.Secondary's tests, examples, docs and prose left out). A question is even when deepcode cites at least %.0f%% of the code files DeepWiki cites that head holds (ratio); count is deepcode's code files ÷ DeepWiki's. A question with no captured answer, or whose DeepWiki answer cites no code file head holds, is not even.\n\n", Bar*100)
+	b.WriteString("| Run | DeepWiki capture | Even | Measured | Not captured | Cites no code file | deepcode failed | Median ratio | Median count |\n|---|---|---|---|---|---|---|---|---|\n")
+	for _, p := range pairs {
+		t := Score(p.Rows)
+		fmt.Fprintf(&b, "| %s | %s | %d of %d | %d | %d | %d | %d | %.2f | %.2f |\n", p.Run, p.Capture, t.Even, t.Questions, t.Measured, t.Missing, t.Unmeasured, t.Failed, t.Ratio, t.Count)
+	}
+	v := G5(pairs)
+	fmt.Fprintf(&b, "\nG5 (run × capture pairs compared: %d): a mean of %.2f even questions of %.2f asked, against a bar of %.2f (%d of the bench's %d, DeepWiki's agreement with itself less 2, scaled to the questions asked): %s.\n",
+		len(pairs), v.Mean, v.Asked, v.Bar, Need, Questions, map[bool]string{true: "met", false: "not met"}[v.Met])
+	if v.Asked > 0 && v.Asked < Questions {
+		b.WriteString("The runs hold a sample of the bench's questions: the verdict speaks for the repositories they hold, not for the bench.\n")
+	}
+	for _, p := range pairs {
+		fmt.Fprintf(&b, "\n## %s against %s\n\n", p.Run, p.Capture)
+		table(&b, p.Rows)
+	}
+	return b.String()
+}
+
+// table writes rows as a Markdown table, a row a question.
+func table(b *strings.Builder, rows []Row) {
 	b.WriteString("| Repository | Question | DeepWiki read | DeepWiki | deepcode | Shared | Ratio | Count | Even | Gone |\n|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, r := range rows {
 		o, read := r.Overlap, cmp.Or(r.Commit, "–")
 		if o == nil {
-			fmt.Fprintf(&b, "| %s | %s | %s | not captured | | | | | | |\n", r.Repo, r.Question, read)
+			fmt.Fprintf(b, "| %s | %s | %s | not captured | | | | | | |\n", r.Repo, r.Question, read)
 			continue
 		}
 		mine := files(o.Deepcode)
@@ -201,9 +304,8 @@ func Section(rows []Row) string {
 		if o.Measured() {
 			ratio, count, even = fmt.Sprintf("%.2f", o.Ratio), fmt.Sprintf("%.2f", o.Count), map[bool]string{true: "yes", false: "no"}[o.Even()]
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", r.Repo, r.Question, read, files(o.DeepWiki), mine, files(o.Shared), ratio, count, even, files(o.Gone))
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", r.Repo, r.Question, read, files(o.DeepWiki), mine, files(o.Shared), ratio, count, even, files(o.Gone))
 	}
-	return b.String()
 }
 
 // files lists paths for a table cell.

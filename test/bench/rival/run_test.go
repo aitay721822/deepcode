@@ -1,10 +1,11 @@
 package rival
 
 // The capture and the measure, each run by hand: TestCapture asks DeepWiki over the network, TestCompare
-// reads a stored bench run and the bare clones the retrieval eval reads.
+// reads stored bench runs, the captures and the bare clones the retrieval eval reads.
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -67,15 +68,21 @@ func stored(t *testing.T) string {
 const perQuestion = 5 * time.Minute
 
 // TestCapture asks DeepWiki every question of a stored bench run, DEEPCODE_DEEPWIKI_CAPTURE=<its JSON>,
-// and keeps each answer in data/bench/deepwiki/answers.json as it comes. A question answered before is
-// not asked again, and the capture stops while a question still fits the test's -timeout, so running it
-// again goes on where it stopped.
+// and keeps each answer as it comes in capture DEEPCODE_DEEPWIKI_SET (1 when unset), the file
+// data/bench/deepwiki/answers-<set>.json. A question that capture answered before is not asked again, and
+// the capture stops while a question still fits the test's -timeout, so running it again goes on where it
+// stopped.
 func TestCapture(t *testing.T) {
 	path := os.Getenv("DEEPCODE_DEEPWIKI_CAPTURE")
 	if path == "" {
 		t.Skip("set DEEPCODE_DEEPWIKI_CAPTURE to a bench run's JSON to ask DeepWiki its questions (it calls DeepWiki)")
 	}
-	rn, file := readRun(t, path), filepath.Join(stored(t), "answers.json")
+	set := cmp.Or(os.Getenv("DEEPCODE_DEEPWIKI_SET"), "1")
+	name := "answers-" + set + ".json"
+	if !captureName.MatchString(name) {
+		t.Fatalf("DEEPCODE_DEEPWIKI_SET holds %q, which is no capture number (1, 2, ...)", set)
+	}
+	rn, file := readRun(t, path), filepath.Join(stored(t), name)
 	c, err := Load(file)
 	if err != nil {
 		t.Fatal(err)
@@ -113,54 +120,90 @@ func TestCapture(t *testing.T) {
 	}
 }
 
-// TestCompare compares the files each answer of a stored bench run, DEEPCODE_DEEPWIKI_MEASURE=<its
-// JSON>, cites with those DeepWiki's captured answer cites, one of DeepWiki's counting only when the
-// run's head holds it, as the bare clones in DEEPCODE_EVAL_GIT (<repo>.git, test/eval's) tell. It writes
-// the comparison as data/bench/deepwiki/<run>.md, and fails when a question has no captured answer, as
-// the comparison is then partial.
+// TestCompare compares the code files each answer of the stored bench runs DEEPCODE_DEEPWIKI_MEASURE
+// names (their JSON, separated as a PATH list is) cites with those every capture's answer cites
+// (data/bench/deepwiki/answers-<n>.json), one of DeepWiki's counting only when the run's head holds it, as
+// the bare clones in DEEPCODE_EVAL_GIT (<repo>.git, test/eval's) tell. It writes the comparison, gate G5's
+// verdict among it, as data/bench/deepwiki/<the runs' names, joined by +>.md, and fails when a question has
+// no captured answer, as the comparison is then partial; G5 not met is reported, not failed.
 func TestCompare(t *testing.T) {
-	path := os.Getenv("DEEPCODE_DEEPWIKI_MEASURE")
-	if path == "" {
-		t.Skip("set DEEPCODE_DEEPWIKI_MEASURE to a bench run's JSON to compare its citations with DeepWiki's")
+	runs := filepath.SplitList(os.Getenv("DEEPCODE_DEEPWIKI_MEASURE"))
+	if len(runs) == 0 {
+		t.Skip("set DEEPCODE_DEEPWIKI_MEASURE to bench runs' JSON to compare their citations with DeepWiki's")
 	}
 	clones := os.Getenv("DEEPCODE_EVAL_GIT")
 	if clones == "" {
 		t.Fatal("the measure reads the files at head from the bare clones in DEEPCODE_EVAL_GIT, as test/eval does")
 	}
-	rn, dir := readRun(t, path), stored(t)
-	c, err := Load(filepath.Join(dir, "answers.json"))
+	dir := stored(t)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(c.Answers) == 0 {
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	files := Captures(names)
+	if len(files) == 0 {
 		t.Fatal("no DeepWiki answers are captured: run TestCapture first")
 	}
-	var rows []Row
-	for _, r := range rn.Repos {
-		out, err := exec.Command("git", "--git-dir", filepath.Join(clones, r.Repo+".git"), "ls-tree", "-r", "-z", "--name-only", r.Head).Output()
-		if err != nil {
-			t.Fatalf("%s: the files at %.7s: %v", r.Repo, r.Head, err)
-		}
-		head := map[string]bool{}
-		for _, f := range bytes.Split(bytes.TrimSuffix(out, []byte{0}), []byte{0}) {
-			head[string(f)] = true
-		}
-		repo := github(t, r.URL)
-		for _, q := range r.Answers {
-			row := Row{Repo: r.Repo, Question: q.Question, Failed: q.Error != ""}
-			if ans, ok := c.Find(repo, q.Question); ok {
-				o := Measure(ans.Files(), Cited(q.Answer), func(f string) bool { return head[f] })
-				row.Overlap, row.Commit = &o, ans.Commit
-			} else {
-				t.Errorf("%s: no DeepWiki answer is captured for %q: run TestCapture to complete the capture", r.Repo, q.Question)
-			}
-			rows = append(rows, row)
+	captures := make([]Capture, len(files))
+	for i, f := range files {
+		if captures[i], err = Load(filepath.Join(dir, f)); err != nil {
+			t.Fatalf("%s: %v", f, err)
 		}
 	}
-	md := filepath.Join(dir, strings.TrimSuffix(filepath.Base(path), ".json")+".md")
-	section := Section(rows)
-	if err := os.WriteFile(md, []byte(section), 0o600); err != nil {
+	heads := map[string]map[string]bool{} // the files at each repository's head, by clone and commit
+	var pairs []Pair
+	stems, err := Names(runs)
+	if err != nil {
 		t.Fatal(err)
 	}
-	summary, _, _ := strings.Cut(strings.SplitN(section, "\n\n", 3)[2], "\n")
-	t.Logf("wrote %s: %s", md, summary)
+	for k, path := range runs {
+		rn := readRun(t, path)
+		for i, c := range captures {
+			p := Pair{Run: stems[k], Capture: files[i]}
+			for _, r := range rn.Repos {
+				head := atHead(t, heads, filepath.Join(clones, r.Repo+".git"), r.Head)
+				repo := github(t, r.URL)
+				for _, q := range r.Answers {
+					row := Row{Repo: r.Repo, Question: q.Question, Failed: q.Error != ""}
+					if ans, ok := c.Find(repo, q.Question); ok {
+						o := Measure(Code(ans.Files()), Code(Cited(q.Answer)), func(f string) bool { return head[f] })
+						row.Overlap, row.Commit = &o, ans.Commit
+					} else {
+						t.Errorf("%s has no DeepWiki answer for %s: %q: run TestCapture to complete it", p.Capture, r.Repo, q.Question)
+					}
+					p.Rows = append(p.Rows, row)
+				}
+			}
+			pairs = append(pairs, p)
+		}
+	}
+	md := filepath.Join(dir, strings.Join(stems, "+")+".md")
+	if err := os.WriteFile(md, []byte(Report(pairs)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v := G5(pairs)
+	t.Logf("wrote %s: a mean of %.2f even questions of %.2f asked, against G5's bar of %.2f: met %v", md, v.Mean, v.Asked, v.Bar, v.Met)
+}
+
+// atHead is the set of files the bare clone at git holds at commit head, read once into heads.
+func atHead(t *testing.T, heads map[string]map[string]bool, git, head string) map[string]bool {
+	t.Helper()
+	key := git + "@" + head
+	if files, ok := heads[key]; ok {
+		return files
+	}
+	out, err := exec.Command("git", "--git-dir", git, "ls-tree", "-r", "-z", "--name-only", head).Output()
+	if err != nil {
+		t.Fatalf("%s: the files at %.7s: %v", git, head, err)
+	}
+	files := map[string]bool{}
+	for _, f := range bytes.Split(bytes.TrimSuffix(out, []byte{0}), []byte{0}) {
+		files[string(f)] = true
+	}
+	heads[key] = files
+	return files
 }
