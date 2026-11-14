@@ -85,8 +85,8 @@ func (c *Catalog) add(ctx context.Context, srv gitserver.Server, url string, met
 
 // Sync queues what brings repository id up to date: an index job when the
 // remote HEAD moved, the embedding model changed or an older analyzer read
-// the published commit, otherwise a wiki job when the wiki is missing or
-// failed. A nil job means it is up to date. Unchanged files and vectors are
+// the published commit, otherwise a wiki job when the wiki is not ready. A
+// nil job means it is up to date. Unchanged files and vectors are
 // reused by the indexer.
 func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
 	pub, err := c.Store.Published(ctx, id)
@@ -111,7 +111,9 @@ func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
 	switch {
 	case head != pub.CommitSHA || pub.EmbeddingModel != c.EmbedModel || pub.Analyzer < analyzer.Version:
 		job, err = c.Queue.EnqueueIndex(ctx, id, head, c.EmbedModel)
-	case c.ChatModel != "" && (pub.WikiStatus == WikiNone || pub.WikiStatus == WikiFailed):
+	case c.ChatModel != "" && pub.WikiStatus != WikiReady:
+		// Generating too: a wiki job that ended after a restart (stopped, or failed by Recover) left it so; one
+		// still queued or running is returned as it is.
 		job, err = c.Queue.EnqueueWiki(ctx, id, head)
 	default:
 		return nil, nil

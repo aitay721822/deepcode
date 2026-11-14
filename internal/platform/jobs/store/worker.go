@@ -70,6 +70,16 @@ func (s *Store) Fail(ctx context.Context, id int64, message string) error {
 	return err
 }
 
+// Stop fails job id with message if it is queued, and reports whether it was.
+func (s *Store) Stop(ctx context.Context, id int64, message string) (bool, error) {
+	res, err := s.DB.ExecContext(ctx, `UPDATE jobs SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued'`, message, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // Retry queues job id again to run seconds from now, with message, its
 // attempts and retries set to those given.
 func (s *Store) Retry(ctx context.Context, id int64, message string, seconds, attempts, retries int) error {

@@ -1,6 +1,7 @@
 package repoapi
 
 import (
+	"cmp"
 	"net/http"
 	"slices"
 
@@ -112,6 +113,29 @@ func (a *API) job(c *gin.Context) {
 		jobView(c, &j)
 		c.JSON(http.StatusOK, j)
 	}
+}
+
+// stopJob stops job :id for a user who may sync its repository.
+func (a *API) stopJob(c *gin.Context) {
+	id, ok := httpx.PathID(c)
+	if !ok {
+		return
+	}
+	j, err := a.Queue.Get(c.Request.Context(), id)
+	if err != nil {
+		httpx.DomainError(c, err)
+		return
+	}
+	if !httpx.Readable(c, j.RepoID, jobs.ErrNotFound) || !httpx.Visible(c, role.RepoSync, j.RepoID) {
+		return
+	}
+	p := httpx.Principal(c)
+	if j, err = a.Queue.Stop(c.Request.Context(), id, cmp.Or(p.DisplayName, p.Username)); err != nil {
+		httpx.DomainError(c, err)
+		return
+	}
+	jobView(c, &j)
+	c.JSON(http.StatusOK, j)
 }
 
 // jobView hides a job's error from users who cannot open the job console:

@@ -351,6 +351,7 @@ func TestEndToEnd(t *testing.T) {
 	checkOAuth(t, admin)
 	ivy, tools := checkImportPolicy(t, srv.URL, admin, repo.ID)
 	checkJobErrors(t, db, admin, ivy, tools)
+	checkStop(t, db, admin, ivy, tools, repo.ID)
 	checkJobEvents(t, srv.URL, admin, repo.ID, tools, func() {
 		checkPrunedCommitReturns(t, db, admin, remote, repoPath, sha1, firstChunks)
 		if code := admin.post(fmt.Sprintf("/api/repos/%s/sync", tools), `{}`, nil); code != http.StatusAccepted {

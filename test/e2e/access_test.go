@@ -269,6 +269,35 @@ func checkJobErrors(t *testing.T, db *sql.DB, admin, reader *client, repoID stri
 	}
 }
 
+// checkStop: only a user who may sync a repository stops its jobs (one who
+// may not read it is told there is no such job); a queued job fails at once,
+// saying who stopped it, and a finished one has nothing to stop.
+func checkStop(t *testing.T, db *sql.DB, admin, reader *client, repoID, hiddenID string) {
+	t.Helper()
+	latest := func(repo string) (id int64) {
+		db.QueryRow(`SELECT max(id) FROM jobs WHERE repository_id = (SELECT id FROM repositories WHERE public_id = ?)`, repo).Scan(&id)
+		return id
+	}
+	id := latest(repoID)
+	if _, err := db.Exec(`UPDATE jobs SET status = 'queued', run_after = datetime('now', '+1 hour') WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	stop := fmt.Sprintf("/api/jobs/%d/stop", id)
+	if code := reader.post(stop, `{}`, nil); code != http.StatusForbidden {
+		t.Fatalf("a reader stops a job: %d", code)
+	}
+	if code := reader.post(fmt.Sprintf("/api/jobs/%d/stop", latest(hiddenID)), `{}`, nil); code != http.StatusNotFound {
+		t.Fatalf("a job of a hidden repository: %d", code)
+	}
+	var job jobs.Job
+	if code := admin.post(stop, `{}`, &job); code != http.StatusOK || job.Status != "failed" || job.Error != "已由 admin 停止" {
+		t.Fatalf("stop a queued job: %d %+v", code, job)
+	}
+	if code := admin.post(stop, `{}`, nil); code != http.StatusConflict {
+		t.Fatalf("stop a stopped job: %d", code)
+	}
+}
+
 // checkJobEvents: the live job list sends a jobs.view holder the changes of
 // jobs on the repositories they may read, and none of the others. during runs
 // a job on hidden, then one on visible.

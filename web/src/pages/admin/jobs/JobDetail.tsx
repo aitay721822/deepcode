@@ -1,15 +1,18 @@
 import { Link } from '@tanstack/react-router'
-import { ArrowLeftIcon } from 'lucide-react'
+import { ArrowLeftIcon, SquareIcon } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { getJob, watchJobOutput } from '../../../api/admin/jobs'
 import type { StreamState } from '../../../api/client'
 import { JobProgress } from '../../../components/repo/JobProgress'
 import { isActive, retrying } from '../../../components/repo/jobStage'
+import { Button } from '../../../components/ui/controls/button'
 import { LoadError } from '../../../components/ui/feedback/load-error'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
+import { Spinner } from '../../../components/ui/feedback/spinner'
 import { formatTime, shortSha } from '../../../lib/format'
 import { useApi } from '../../../lib/useApi'
 import type { JobRow, LogLine } from '../../../types/admin/jobs'
+import { useStop } from '../../repo/useSync'
 import { useSession } from '../../session/session'
 import { SectionHead } from '../SectionHead'
 import { JobConsole } from './JobConsole'
@@ -18,13 +21,14 @@ import { StreamNotice } from './StreamNotice'
 
 /** One job: what it is, its stages, and its output, followed live until it ends. */
 export function JobDetail({ id }: { id: number }) {
-  const { refresh } = useSession()
+  const { refresh, can } = useSession()
   const { data, error, status, reload } = useApi(`admin:job:${id}`, () => getJob(id))
   const [job, setJob] = useState<JobRow>()
   const [lines, setLines] = useState<LogLine[]>([])
   const last = useRef(0) // the last line shown: a stream, the first or a reconnected one, picks up after it
   const [stream, setStream] = useState<StreamState>()
   const [attempt, setAttempt] = useState(0) // a new attempt opens a new stream
+  const halt = useStop(job ?? data?.job) // the stream shows what came of it
   useEffect(() => {
     if (!data) return
     setJob(data.job)
@@ -101,8 +105,21 @@ export function JobDetail({ id }: { id: number }) {
     <section className="flex flex-col gap-4">
       {back}
       <SectionHead title={`${j.repoOwner}/${j.repoName}`} className="mb-0">
-        <StatusBadge status={j.status} />
+        <div className="flex items-center gap-3">
+          <StatusBadge status={j.status} />
+          {/* repo.sync on any repository: the server answers 403 when it is not this one's */}
+          {halt.active && can('repo.sync') && (
+            <Button variant="outline" size="sm" busy={halt.asked} onClick={halt.run}>
+              {halt.asked ? <Spinner /> : <SquareIcon />} 停止
+            </Button>
+          )}
+        </div>
       </SectionHead>
+      {halt.error && (
+        <p className="text-sm text-destructive" role="alert">
+          {halt.error}
+        </p>
+      )}
       <dl className="flex flex-wrap gap-x-8 gap-y-3 border-y border-dashed py-3.5 text-[13.5px]">
         <Meta term="工作">{j.id}</Meta>
         <Meta term="類型">{kindLabel(j.kind)}</Meta>

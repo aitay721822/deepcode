@@ -18,6 +18,9 @@ export const importRepo = (url: string, serverId?: number) =>
 /** Indexes the latest commit; upToDate means there is nothing new. */
 export const syncRepo = (repoId: string) => post<{ upToDate?: boolean; job?: Job }>(`/api/repos/${repoId}/sync`, {})
 
+/** Stops a queued or running job, which then fails, saying who stopped it; Sync runs it again. */
+export const stopJob = (id: number) => post<Job>(`/api/jobs/${id}/stop`, {})
+
 /** The remote's branches and the one the repository follows. */
 export const listBranches = (repoId: string) =>
   api<{ branches: string[]; trackedBranch: string; defaultBranch: string }>(`/api/repos/${repoId}/branches`)

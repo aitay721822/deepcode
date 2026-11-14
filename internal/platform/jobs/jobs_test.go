@@ -191,19 +191,33 @@ func TestLatestOf(t *testing.T) {
 	}
 }
 
-func TestShutdownHandsJobBack(t *testing.T) {
+// TestInterrupted: shutdown queues a running job again, its attempt unspent;
+// a stop fails a queued job at once and a running one as its handler returns
+// (before a shutdown too), saying who stopped it; a finished one has nothing to stop.
+func TestInterrupted(t *testing.T) {
 	q, _ := setup(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	bg := context.Background()
+	ctx, cancel := context.WithCancel(bg)
+	wait := func(ctx context.Context, _ Job, _ Progress) error { <-ctx.Done(); return ctx.Err() }
+	stopping := func(ctx context.Context, j Job, p Progress) error { q.Stop(bg, j.ID, "ann"); return wait(ctx, j, p) }
 	q.EnqueueIndex(ctx, 1, "long", "")
 	j, _ := q.claim(ctx)
-	q.run(ctx, j, func(ctx context.Context, _ Job, _ Progress) error {
-		cancel()
-		<-ctx.Done()
-		return ctx.Err()
-	})
-	got, _ := q.Get(context.Background(), j.ID)
-	if got.Status != "queued" || got.Attempts != 0 {
+	q.run(ctx, j, func(ctx context.Context, j Job, p Progress) error { cancel(); return wait(ctx, j, p) })
+	if got, _ := q.Get(bg, j.ID); got.Status != "queued" || got.Attempts != 0 {
 		t.Fatalf("interrupted job: %+v", got)
+	}
+	j, _ = q.claim(bg)
+	waiting, _ := q.EnqueueIndex(bg, 2, "waiting", "")
+	q.Stop(bg, waiting.ID, "ann")
+	q.run(bg, j, stopping)
+	ctx, cancel = context.WithCancel(bg) // and one stopped just before a shutdown
+	q.EnqueueIndex(bg, 1, "stopped at shutdown", "")
+	shut, _ := q.claim(ctx)
+	q.run(ctx, shut, func(ctx context.Context, j Job, p Progress) error { defer cancel(); return stopping(ctx, j, p) })
+	for _, id := range []int64{waiting.ID, j.ID, shut.ID} {
+		if got, err := q.Stop(bg, id, "bob"); !errors.Is(err, ErrFinished) || got.Status != "failed" || got.Error != "已由 ann 停止" {
+			t.Fatalf("stopped job: %+v %v", got, err)
+		}
 	}
 }
 

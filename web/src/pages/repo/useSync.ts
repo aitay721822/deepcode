@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
-import { syncRepo } from '../../api/repo/repos'
+import { stopJob, syncRepo } from '../../api/repo/repos'
+import { isActive } from '../../components/repo/jobStage'
+import type { Job } from '../../types/repo/repo'
 
 export type Sync = ReturnType<typeof useSync>
 
@@ -27,4 +29,34 @@ export function useSync(repoId: string, onDone: () => void) {
     }
   }
   return { busy, error, upToDate, run }
+}
+
+/**
+ * Stops job on request: a queued one at once, a running one once its current step gives way, so asked holds until
+ * the job has ended; error says why it could not be stopped (403, or 409 when it had ended anyway). onDone runs
+ * either way. Sync runs a stopped job again, from the work it stored.
+ */
+export function useStop(job: Job | null | undefined, onDone?: () => void) {
+  const [asked, setAsked] = useState(false)
+  const [error, setError] = useState('')
+  const active = isActive(job)
+  useEffect(() => {
+    if (active) return
+    setAsked(false) // a Sync queues the same job again
+    setError('')
+  }, [active])
+  async function run() {
+    if (!job) return
+    setAsked(true)
+    setError('')
+    try {
+      await stopJob(job.id)
+    } catch (e) {
+      setAsked(false)
+      setError((e as Error).message)
+    } finally {
+      onDone?.()
+    }
+  }
+  return { active, asked, error, run }
 }

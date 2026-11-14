@@ -136,4 +136,13 @@ func TestPoll(t *testing.T) {
 	if again := poll(); again != nil {
 		t.Fatalf("a failed commit the branch went back to polled again: %+v", again)
 	}
+
+	// A wiki left generating by a job that ended after a restart is written again; one queued is returned as it is.
+	run("update-ref", "refs/heads/main", third)
+	exec(`UPDATE snapshots SET embedding_model = 'fake-embed', wiki_status = 'generating' WHERE id = 2`)
+	c.ChatModel = "chat"
+	wiki, err := c.Sync(ctx, 1)
+	if again, _ := c.Sync(ctx, 1); err != nil || wiki == nil || wiki.Kind != jobs.KindWiki || again == nil || again.ID != wiki.ID {
+		t.Fatalf("Sync of a wiki left generating: %+v, then %+v, %v", wiki, again, err)
+	}
 }

@@ -53,3 +53,8 @@ func (t transient) Unwrap() error { return t.error }
 // failed for now (a model server down, a git transfer cut): the job runs
 // again after a backoff, its attempts unspent, for about a day.
 func Transient(err error) error { return transient{err} }
+
+// stopped is why a job a user stopped ended: it fails, saying who stopped it.
+type stopped struct{ by string }
+
+func (s stopped) Error() string { return "已由 " + s.by + " 停止" }

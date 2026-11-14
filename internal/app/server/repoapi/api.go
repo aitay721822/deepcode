@@ -58,6 +58,7 @@ func (a *API) Mount(r gin.IRouter) {
 		a.Webhooks.MountAdmin(r)
 	}
 	r.GET("/jobs/:id", a.job)
+	r.POST("/jobs/:id/stop", a.stopJob)
 
 	r.GET("/repos/:id/files", read, a.listFiles)
 	r.GET("/repos/:id/files/*path", read, a.getFile)

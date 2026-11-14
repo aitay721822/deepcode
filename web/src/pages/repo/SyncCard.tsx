@@ -1,17 +1,18 @@
-import { RefreshCwIcon } from 'lucide-react'
-import { isActive, stageCount, stageName } from '../../components/repo/jobStage'
+import { RefreshCwIcon, SquareIcon } from 'lucide-react'
+import { stageCount, stageName } from '../../components/repo/jobStage'
 import { Button } from '../../components/ui/controls/button'
 import { Card } from '../../components/ui/display/card'
 import { Spinner } from '../../components/ui/feedback/spinner'
 import { shortSha } from '../../lib/format'
 import { cn } from '../../lib/style/cn'
 import type { Repo } from '../../types/repo/repo'
-import { useSync } from './useSync'
+import { useStop, useSync } from './useSync'
 
 export function SyncCard({ repo, jobCard, onSynced }: { repo: Repo; jobCard: boolean; onSynced: () => void }) {
   const { busy, error, upToDate, run } = useSync(repo.id, onSynced)
   const job = repo.job
-  const active = isActive(job)
+  const stop = useStop(job, onSynced)
+  const active = stop.active
   // jobCard: the page shows the job in a card of its own, which already says why it failed.
   const failed = job?.status === 'failed' && !jobCard ? job.error : ''
   const note =
@@ -28,14 +29,21 @@ export function SyncCard({ repo, jobCard, onSynced }: { repo: Repo; jobCard: boo
         <span role="status">{note}</span>
         {count && ` ${count}`}
       </p>
-      {error && (
+      {(error || stop.error) && (
         <p className="mb-3 text-[13px] [overflow-wrap:anywhere] text-destructive" role="alert">
-          {error}
+          {error || stop.error}
         </p>
       )}
-      <Button variant="outline" size="sm" className="w-fit" busy={busy || active} onClick={run}>
-        {active || busy ? <Spinner /> : <RefreshCwIcon />} 同步
-      </Button>
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" busy={busy || active} onClick={run}>
+          {active || busy ? <Spinner /> : <RefreshCwIcon />} 同步
+        </Button>
+        {active && (
+          <Button variant="outline" size="sm" busy={stop.asked} onClick={stop.run}>
+            {stop.asked ? <Spinner /> : <SquareIcon />} 停止
+          </Button>
+        )}
+      </div>
     </Card>
   )
 }

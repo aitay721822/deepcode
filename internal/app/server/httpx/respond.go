@@ -49,7 +49,7 @@ var statuses = []struct {
 		token.ErrNotFound}, http.StatusNotFound},
 	{[]error{catalog.ErrInvalid, gitserver.ErrInvalid, role.ErrInvalid, account.ErrInvalid, token.ErrInvalid, oauth.ErrInvalid},
 		http.StatusBadRequest},
-	{[]error{gitserver.ErrConflict, role.ErrConflict, account.ErrConflict, gitserver.ErrSealed}, http.StatusConflict},
+	{[]error{gitserver.ErrConflict, role.ErrConflict, account.ErrConflict, gitserver.ErrSealed, jobs.ErrFinished}, http.StatusConflict},
 	{[]error{account.ErrBadLogin, session.ErrNoSession}, http.StatusUnauthorized},
 	{[]error{importer.ErrForbidden, session.ErrSignUpClosed}, http.StatusForbidden},
 	{[]error{session.ErrThrottled, session.ErrSignUpLimit}, http.StatusTooManyRequests},

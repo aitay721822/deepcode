@@ -100,8 +100,11 @@ func (q *Queue) drain(ctx context.Context, handlers map[string]Handler) {
 	}
 }
 
-// claim atomically marks the oldest runnable job as running.
+// claim atomically marks the oldest runnable job as running, and keeps a
+// context under ctx for run to run it in, which Stop cancels.
 func (q *Queue) claim(ctx context.Context) (Job, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	j, ok, err := q.Store.Claim(ctx)
 	if err != nil && ctx.Err() == nil {
 		log.Printf("jobs: claim: %v", err)
@@ -109,8 +112,42 @@ func (q *Queue) claim(ctx context.Context) (Job, bool) {
 	if !ok {
 		return Job{}, false
 	}
+	if q.running == nil {
+		q.running = map[int64]runningJob{}
+	}
+	jctx, stop := context.WithCancelCause(ctx)
+	q.running[j.ID] = runningJob{jctx, stop}
 	q.changed(events.TopicJobUpdated, j.ID)
 	return j, true
+}
+
+// Stop stops job id for user by: a queued job fails at once; a running one is
+// cancelled and fails once its handler returns, so its repository is never
+// touched by two jobs. Either keeps the work it stored, which a Sync resumes
+// from. ErrFinished when the job has already ended.
+func (q *Queue) Stop(ctx context.Context, id int64, by string) (Job, error) {
+	why := stopped{by}
+	q.mu.Lock()
+	queued, err := q.Store.Stop(ctx, id, why.Error())
+	if queued { // under q.mu, so before any run of it a Sync queues
+		Progress{q: q, id: id}.Logf("failed: %v", why)
+	}
+	r, running := q.running[id]
+	if running {
+		r.stop(why)
+	}
+	q.mu.Unlock()
+	if err != nil {
+		return Job{}, err
+	}
+	if queued {
+		q.changed(events.TopicJobUpdated, id)
+	}
+	j, err := q.Get(ctx, id)
+	if err == nil && !queued && !running {
+		err = ErrFinished
+	}
+	return j, err
 }
 
 // run executes one claimed job and records its outcome: success, a hand-back
@@ -118,9 +155,14 @@ func (q *Queue) claim(ctx context.Context) (Job, bool) {
 // An attempt that stored work a later one skips (Progress.Saved) does not
 // count, nor does one cut by a server the job could not reach (Transient),
 // which is retried for about a day instead; so maxAttempts bounds only the
-// attempts that got nowhere. Then it prunes old jobs.
+// attempts that got nowhere. A job a user stopped fails. Then it prunes old
+// jobs. job is one claim(ctx) returned.
 func (q *Queue) run(ctx context.Context, job Job, h Handler) {
-	jctx, cancel := context.WithTimeoutCause(ctx, q.Timeout, fmt.Errorf("the job ran past DEEPCODE_JOB_TIMEOUT (%s): %w", q.Timeout, context.DeadlineExceeded))
+	q.mu.Lock()
+	r := q.running[job.ID]
+	q.mu.Unlock()
+	defer r.stop(nil)
+	jctx, cancel := context.WithTimeoutCause(r.ctx, q.Timeout, fmt.Errorf("the job ran past DEEPCODE_JOB_TIMEOUT (%s): %w", q.Timeout, context.DeadlineExceeded))
 	defer cancel()
 	start := time.Now()
 	progress := Progress{q: q, id: job.ID, saved: new(atomic.Int32)}
@@ -129,8 +171,12 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 	if h != nil {
 		err = safely(func() error { return h(jctx, job, progress) })
 	}
-	if err != nil && jctx.Err() != nil && ctx.Err() == nil {
-		err = context.Cause(jctx) // the job's own timeout, named, rather than what the step it cut short made of it
+	q.mu.Lock() // a Stop from here on finds the outcome stored, not the job running
+	delete(q.running, job.ID)
+	// The job's own timeout or stop, named, rather than what the step it cut short made of it; a stop before a
+	// shutdown still fails the job.
+	if cause := context.Cause(jctx); err != nil && jctx.Err() != nil && (ctx.Err() == nil || errors.As(cause, new(stopped))) {
+		err = cause
 	}
 	// ctx may already be cancelled (shutdown), so finish the bookkeeping regardless.
 	bg := context.WithoutCancel(ctx)
@@ -143,6 +189,8 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 		log.Printf("jobs: %s #%d (repository %d) succeeded in %s", job.Kind, job.ID, job.RepoID, time.Since(start).Round(time.Second))
 		progress.Logf("succeeded")
 		err = q.Store.Succeed(bg, job.ID)
+	case errors.As(err, new(stopped)):
+		err = q.fail(bg, job, progress, err)
 	case ctx.Err() != nil:
 		// Shutting down: hand the job back without spending an attempt. Work
 		// already committed is reused when it resumes.
@@ -166,6 +214,7 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 		progress.Logf("attempt failed, retrying in %ds: %v", backoff, err)
 		err = q.Store.Retry(bg, job.ID, err.Error(), backoff, attempts, retries)
 	}
+	q.mu.Unlock()
 	if err != nil {
 		log.Printf("jobs: update #%d: %v", job.ID, err)
 	}

@@ -2,8 +2,10 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"deepcode/internal/platform/events"
@@ -17,6 +19,17 @@ type Queue struct {
 	Bus     *events.Bus
 	Timeout time.Duration // per job
 	slots   chan struct{} // one per worker, held while it drains the queue
+
+	// mu orders claims, stops and outcomes, so Stop finds a job either queued,
+	// in running, or with its outcome stored.
+	mu      sync.Mutex
+	running map[int64]runningJob // the jobs this process has claimed, until their outcome is stored
+}
+
+// runningJob is the context a claimed job runs under, and how Stop cancels it.
+type runningJob struct {
+	ctx  context.Context
+	stop context.CancelCauseFunc
 }
 
 // maxAttempts is how many attempts that stored no work (Progress.Saved) a job
@@ -69,6 +82,9 @@ func (q *Queue) announce(id int64) {
 }
 
 var ErrNotFound = store.ErrNotFound
+
+// ErrFinished: the job has ended, so there is nothing to stop.
+var ErrFinished = errors.New("工作已結束")
 
 func (q *Queue) Get(ctx context.Context, id int64) (Job, error) { return q.Store.Get(ctx, id) }
 
