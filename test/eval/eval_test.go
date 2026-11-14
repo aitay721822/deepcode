@@ -45,15 +45,13 @@ func TestRetrieval(t *testing.T) {
 				t.Log(m)
 			}
 			t.Logf("%s: recall@%d %.3f, MRR %.3f over %d questions", c.Name, Hits, res.Recall, res.MRR, len(c.Questions))
-			recall, mrr := c.Recall, c.MRR
+			recall, mrr, of := c.Recall, c.MRR, "the lexical floors"
 			if embed != nil {
-				if embed.ModelName != HybridModel {
-					t.Skipf("no floors for the embedding model %s, only for %s", embed.ModelName, HybridModel)
-				}
 				recall, mrr = c.HybridRecall, c.HybridMRR
+				of = "the hybrid floors, measured with LM Studio's Qwen3 Embedding 0.6B (re-measure them for " + embed.ModelName + " if it is another)"
 			}
 			if res.Recall < recall || res.MRR < mrr {
-				t.Errorf("below the floors, recall %.3f and MRR %.3f", recall, mrr)
+				t.Errorf("below %s, recall %.3f and MRR %.3f", of, recall, mrr)
 			}
 		})
 	}

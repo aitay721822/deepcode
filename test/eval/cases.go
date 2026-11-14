@@ -2,7 +2,8 @@ package eval
 
 // Corpora are the repositories the eval indexes, each at a pinned commit,
 // with the questions asked of it and the floors its scores must keep: the
-// lexical pair, and the hybrid pair measured with HybridModel, each 0.001
+// lexical pair, and the hybrid pair measured with the embedding model
+// DEEPCODE_EMBED_MODEL names (LM Studio's Qwen3 Embedding 0.6B), each 0.001
 // under the score. Raise a floor when a change raises the score; a Chinese
 // question's terms are what the model replied to chat's termsPrompt for it.
 // Floors were lowered twice: deepcode's MRR for Markdown's sections, and

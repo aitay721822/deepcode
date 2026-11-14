@@ -8,8 +8,10 @@
 // need their history: set DEEPCODE_EVAL_GIT to a folder holding a bare clone
 // of each, named after its corpus (git clone --bare <url> chi.git). With
 // DEEPCODE_EMBED_MODEL set, chunks are embedded and searched as deepcode
-// serve does (Embedder) and, for HybridModel, held to the hybrid floors
-// (another model's scores are logged).
+// serve does (Embedder) and held to the hybrid floors. Those were measured
+// with LM Studio's Qwen3 Embedding 0.6B and are exact for that setup: the
+// same model quantised or served another way can move a rank, so re-measure
+// the old code before blaming a change, and another model needs its own.
 package eval
 
 import (
@@ -48,15 +50,9 @@ type Question struct {
 type Corpus struct {
 	Name, URL, SHA          string  // URL: where the clone comes from; "" for this repository
 	Recall, MRR             float64 // the floors of the lexical search
-	HybridRecall, HybridMRR float64 // the floors with HybridModel's embeddings
+	HybridRecall, HybridMRR float64 // the floors with the embeddings of the model DEEPCODE_EMBED_MODEL names
 	Questions               []Question
 }
-
-// HybridModel is the embedding model the hybrid floors were measured with
-// (served by LM Studio); another's scores are logged, not held to them. The
-// floors are exact for that setup: the same name quantised or served another
-// way can move a rank, so re-measure the old code before blaming a change.
-const HybridModel = "text-embedding-qwen3-embedding-0.6b"
 
 // Result is a corpus's scores, with a line for each question that missed a
 // file it wants.
