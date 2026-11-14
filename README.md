@@ -37,6 +37,25 @@
 
    第一次啟動會建立管理員 `admin`，密碼取自 `DEEPCODE_ADMIN_PASSWORD`；未設定時會產生一次性密碼並印在 log。資料寫在 `./data`。`deepcode --help` 列出所有指令與旗標。
 
+## 升級
+
+1. 先備份資料庫：`./deepcode backup backup.db`，伺服器運作中也可以。
+2. 停掉舊版，換上新的執行檔，再 `./deepcode serve`。資料庫在啟動時自動升級。
+3. `secret_key`（`DEEPCODE_SECRET_KEY`）要沿用；沒設定時用的是 `data/secret.key`，這個檔要留著。換了 key，存下的 Git 伺服器 token 就解不開。
+
+要退回舊版，換回舊的執行檔和備份的資料庫。
+
+## 相容性
+
+1.0.0 起，以下只會新增，不會改名或移除；要移除的，會先在一個 minor 版本標為 deprecated 並在 log 警告，到 2.0 才移除：
+
+- 設定：`deepcode.yaml` 的鍵、對應的 `DEEPCODE_*` 環境變數，以及 `DEEPCODE_CONFIG`。
+- HTTP API 的路由，以及 MCP（`/mcp`）的工具和參數。
+- CLI 指令 `serve`、`backup`、`passwd` 和它們的旗標。
+- 資料庫：發佈過的 migration 不再修改，新版本只往前加；v0.1.0 的資料庫可以直接升級。
+
+每一項都有測試守住清單（`TestFrozenSettings`、`TestFrozenRoutes`、`TestMCP`、`TestFrozenCommands`、`TestReleasedMigrations`），舊資料庫的升級由 `TestUpgrade` 驗證。
+
 ## License
 
 MIT License

@@ -113,6 +113,9 @@ func TestMCP(t *testing.T) {
 	if got, err := repositories(srv.URL, personal.Secret); err != nil || !strings.Contains(got, "acme/demo") {
 		t.Fatalf("with a personal token: %q %v", got, err)
 	}
+	if missing, err := gone(srv.URL, personal.Secret); err != nil || len(missing) > 0 {
+		t.Fatalf("v1.0.0's MCP tools and arguments gone: %v, %v", missing, err)
+	}
 	read := map[string]any{"repo": "acme/demo", "path": "./demo.go", "end_line": 1}
 	if got, err := call(srv.URL, personal.Secret, "read_file", read); err != nil || !strings.Contains(got, "lines 1-1 of 2") ||
 		!strings.Contains(got, "1  package demo\n") || strings.Contains(got, "\r") || strings.Contains(got, "func A") {
@@ -338,17 +341,66 @@ func repositories(base, secret string) (string, error) {
 	return call(base, secret, "list_repositories", map[string]any{})
 }
 
+// connect connects to the server at base as an MCP client sending secret.
+func connect(base, secret string) (*mcp.ClientSession, error) {
+	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	return c.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: base + "/mcp", HTTPClient: &http.Client{Transport: bearer(secret)}}, nil)
+}
+
+// frozenTools are the MCP tools v1.0.0 offers and their arguments (README's
+// compatibility promise): a release may add tools and arguments, never drop
+// or rename one of these.
+var frozenTools = map[string][]string{
+	"list_repositories": nil, "read_wiki_structure": {"repo"}, "read_wiki_contents": {"repo", "page"},
+	"search_code": {"repo", "query", "limit"}, "read_file": {"repo", "path", "start_line", "end_line"},
+	"ask_question": {"repo", "question", "mode"},
+}
+
+// gone lists, as an MCP client sending secret, frozenTools' tools and
+// arguments (tool.argument) the server at base no longer offers.
+func gone(base, secret string) ([]string, error) {
+	session, err := connect(base, secret)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close()
+	res, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		return nil, err
+	}
+	offered := map[string]bool{}
+	for _, tool := range res.Tools {
+		var schema struct{ Properties map[string]json.RawMessage }
+		b, _ := json.Marshal(tool.InputSchema)
+		json.Unmarshal(b, &schema)
+		offered[tool.Name] = true
+		for arg := range schema.Properties {
+			offered[tool.Name+"."+arg] = true
+		}
+	}
+	var out []string
+	for tool, args := range frozenTools {
+		for _, want := range append([]string{tool}, args...) {
+			if want != tool {
+				want = tool + "." + want
+			}
+			if !offered[want] {
+				out = append(out, want)
+			}
+		}
+	}
+	return out, nil
+}
+
 // call calls tool with args as an MCP client sending secret: its text, or the
 // error it answered with.
 func call(base, secret, tool string, args map[string]any) (string, error) {
-	ctx := context.Background()
-	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
-	session, err := c.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: base + "/mcp", HTTPClient: &http.Client{Transport: bearer(secret)}}, nil)
+	session, err := connect(base, secret)
 	if err != nil {
 		return "", err
 	}
 	defer session.Close()
-	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: tool, Arguments: args})
 	if err != nil {
 		return "", err
 	}

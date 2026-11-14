@@ -3,6 +3,7 @@ package e2e
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -11,14 +12,22 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gin-gonic/gin"
+
+	"deepcode/internal/app"
 	"deepcode/internal/app/server/repoapi/hooks"
+	"deepcode/internal/knowledge/chat"
 	"deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/platform/jobs"
+	"deepcode/internal/platform/storage"
 )
 
 // checkUsage: the console sums the tokens of the repository's model requests per model, its wiki's and its
@@ -370,5 +379,116 @@ func checkBranchesAndHooks(t *testing.T, admin *client, repoID, sha string) {
 	}
 	if code := admin.delete("/api/repos/" + repoID + "/webhook"); code != http.StatusNoContent {
 		t.Fatalf("clear webhook: %d", code)
+	}
+}
+
+// TestUpgrade: a database v0.1.0 wrote opens in this version, its migrations
+// run, and the repository, wiki and conversation it holds read as they were; a
+// sync with nothing new keeps its snapshot, and a commit pushed after the
+// upgrade is indexed on top of it, embedding only the changed chunks.
+// testdata/v0.1.0.db was written by v0.1.0 itself: in a worktree of the tag, a
+// test there made the commit below with these fixed dates, imported it as
+// TestEndToEnd does with SecretKey "upgrade-fixture-secret" and admin password
+// "admin-password", let index and wiki finish, asked one question and saved
+// the database with VACUUM INTO. Its GitHub server points at that run's fake
+// API, long gone, so the test points it at its own.
+func TestUpgrade(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	t.Setenv("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
+	t.Setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
+	remote := t.TempDir()
+	git(t, remote, "init", "-q", "-b", "main")
+	const sha1, repoPath = "389d686ae230fc38b9f60b8d9c75bdd5264eaf5f", "/api/repos/kpvfxnyjieu4gmf4qxkhl0h5"
+	if sha := commit(t, remote, map[string]string{"main.go": goSrc, "web/app.ts": tsSrc, "README.md": "# Demo\n\nA demo HTTP server.\n"}); sha != sha1 {
+		t.Fatalf("the fixture's commit made again is %s, want %s", sha, sha1)
+	}
+	t.Setenv("GIT_CONFIG_COUNT", "2")
+	t.Setenv("GIT_CONFIG_KEY_0", "url."+fileURL(remote)+".insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/acme/demo.git")
+	t.Setenv("GIT_CONFIG_KEY_1", "gc.auto")
+	t.Setenv("GIT_CONFIG_VALUE_1", "0")
+	apiSrv, llm := httptest.NewServer(&fakeAPI{}), &fakeLLM{}
+	defer apiSrv.Close()
+	llmSrv := httptest.NewServer(llm)
+	defer llmSrv.Close()
+
+	data := t.TempDir()
+	fixture, err := os.ReadFile(filepath.Join("testdata", "v0.1.0.db"))
+	if err == nil {
+		err = os.WriteFile(filepath.Join(data, "deepcode.db"), fixture, 0o644)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	db, err := storage.Open(ctx, filepath.Join(data, "deepcode.db")) // runs the migrations v0.1.0 lacks
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var added int
+	db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE name IN ('migrations/022_job_progress.sql', 'migrations/023_llm_usage.sql')`).Scan(&added)
+	if added != 2 {
+		t.Fatalf("migrations added since v0.1.0 recorded: %d of 2", added)
+	}
+	a, err := app.New(ctx, app.Config{
+		DataDir: data,
+		ChatURL: llmSrv.URL + "/v1", ChatModel: "fake-chat",
+		EmbedURL: llmSrv.URL + "/v1", EmbedModel: "fake-embed",
+		LLMTimeout: time.Minute, Workers: 2, JobTimeout: time.Minute, CacheMB: 1,
+		MaxRepoMB: 1, MaxFiles: 100, MaxFileKB: 1024, MaxIndexMB: 10,
+		WikiLanguage: "English", GitProtocols: "file",
+		AdminPassword: "admin-password", SecretKey: "upgrade-fixture-secret", SessionTTL: time.Hour,
+	}, db, http.NotFoundHandler(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() {
+		a.Run(ctx)
+		close(stopped)
+	}()
+	defer func() { cancel(); <-stopped }()
+	srv := httptest.NewServer(a.Handler)
+	defer srv.Close()
+	admin := newClient(t, srv.URL)
+	if code := admin.login("admin", "admin-password"); code != http.StatusOK {
+		t.Fatalf("sign in with v0.1.0's admin: %d", code)
+	}
+	if code := admin.patch("/api/admin/servers/1", fmt.Sprintf(`{"apiUrl":%q}`, apiSrv.URL), nil); code != http.StatusOK {
+		t.Fatalf("point GitHub at the fake API: %d", code)
+	}
+	var repo repoView
+	var wk view.Wiki
+	var stored chat.Conversation
+	admin.get(repoPath, &repo)
+	admin.get(repoPath+"/wiki", &wk)
+	admin.get("/api/conversations/1", &stored)
+	if repo.Snapshot == nil || repo.Snapshot.CommitSHA != sha1 || repo.Snapshot.WikiStatus != "ready" || repo.Snapshot.ChunkCount != 3 ||
+		wk.Status != "ready" || len(wk.Pages) != 4 || wk.Pages[0].Title != "Overview" || wk.Pages[0].Content == "" ||
+		len(stored.Messages) != 2 || stored.CommitSHA != sha1 || stored.Messages[0].Content != "How does Server.Handle work?" ||
+		len(stored.Messages[1].Citations) == 0 {
+		t.Fatalf("v0.1.0's data: repository %+v, wiki %s with %d pages, conversation %+v", repo, wk.Status, len(wk.Pages), stored)
+	}
+	var synced struct {
+		UpToDate bool      `json:"upToDate"`
+		Job      *jobs.Job `json:"job"`
+	}
+	if code := admin.post(repoPath+"/sync", `{}`, &synced); code != http.StatusOK || !synced.UpToDate {
+		t.Fatalf("sync with nothing new on v0.1.0's snapshot: %d %+v", code, synced)
+	}
+	sha2 := commit(t, remote, map[string]string{"web/util.ts": "export function add(a: number, b: number) {\n  return a + b;\n}\n"})
+	if code := admin.post(repoPath+"/sync", `{}`, &synced); code != http.StatusAccepted {
+		t.Fatalf("sync a commit pushed after the upgrade: %d %+v", code, synced)
+	}
+	waitFor(t, "index and wiki of the commit after the upgrade", func() bool {
+		admin.get(repoPath, &repo)
+		failIfJobFailed(t, repo.Job)
+		return repo.Snapshot.CommitSHA == sha2 && repo.Snapshot.WikiStatus == "ready" && repo.Job.Finished()
+	})
+	var changed int
+	db.QueryRow(`SELECT count(*) FROM chunks WHERE snapshot_id = ? AND path = 'web/util.ts'`, repo.Snapshot.ID).Scan(&changed)
+	if got := llm.chunkInputs(); got != changed || changed == 0 || changed >= repo.Snapshot.ChunkCount {
+		t.Fatalf("the sync embedded %d chunks, want only the %d of the new file of %d", got, changed, repo.Snapshot.ChunkCount)
 	}
 }

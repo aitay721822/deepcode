@@ -2,9 +2,13 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -264,5 +268,42 @@ func TestPublicIDMigration(t *testing.T) {
 	}
 	if len(ids) != 3 {
 		t.Fatalf("%d public ids, want 3", len(ids))
+	}
+}
+
+// released are v1.0.0's migrations, each by its SHA-256's first 16 hex
+// digits. A database that ran one never runs it again, so a release may add
+// migrations but never change or drop one of these (README's compatibility
+// promise).
+var released = map[string]string{
+	"001_init.sql": "389d33fa82000f1b", "002_fts_porter.sql": "8e86774a61352dd5", "003_access.sql": "4d8b429580044747",
+	"004_git_servers_job_logs.sql": "5d329469b4100fc5", "005_signup.sql": "966e9b76476f9031", "006_wiki_language.sql": "0e327d59ca9a8b05",
+	"007_chunk_terms.sql": "c085e44581b104d4", "008_import_graph.sql": "c361d4bcf793af23", "009_generated_files.sql": "3e4a34e8a023a7b4",
+	"010_repository_public_id.sql": "a66b606ba1537e82", "011_wiki_parent.sql": "5c16cfb0a3004df0", "012_role_descriptions.sql": "5fb636d5b439ccdd",
+	"013_git_server_oauth.sql": "64413cec4b409dea", "014_api_tokens.sql": "327c563e7807be9c", "015_message_codemap.sql": "c5d7de6451acfc89",
+	"016_oauth_client_indexes.sql": "976ccd5be6def494", "017_conversation_summary.sql": "4c0c4d21e10a1a64", "018_wiki_page_plan.sql": "c0d3096447b0d7b9",
+	"019_repository_tracked_branch.sql": "ddf8168ddcfc0b26", "020_repository_webhook_secret.sql": "4a20faf1f22f5422", "021_call_graph.sql": "29566bfe1f19db86",
+	"022_job_progress.sql": "7f8bab85e8135570", "023_llm_usage.sql": "1550bad25672f420",
+}
+
+// TestReleasedMigrations: each of v1.0.0's migrations is still embedded, as it was.
+func TestReleasedMigrations(t *testing.T) {
+	files, err := migrationFiles(migrations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, f := range files {
+		b, err := fs.ReadFile(migrations, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(b)
+		got[path.Base(f)] = hex.EncodeToString(sum[:8])
+	}
+	for name, sum := range released {
+		if got[name] != sum {
+			t.Errorf("released migration %s changed or gone: %q, want %q", name, got[name], sum)
+		}
 	}
 }
