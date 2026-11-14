@@ -58,8 +58,9 @@ const (
 )
 
 // Search returns the top chunks of a snapshot for a natural-language or
-// identifier query. A failing embedding provider degrades the search to FTS5
-// and symbols instead of failing it.
+// identifier query, one hit a file, the first of it the ranking reaches, so
+// that one file's many chunks leave room for the files ranked below it. A failing embedding
+// provider degrades the search to FTS5 and symbols instead of failing it.
 func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, limit int) (Result, error) {
 	var res Result
 	fts, err := r.fts(ctx, snapshotID, query, nil, ftsLimit)
@@ -90,7 +91,7 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 	}
 	ids, graph := supplement(ranked, near, limit)
 	res.FTS, res.Vector, res.Symbol, res.Named, res.Graph = len(fts), len(vec), len(sym), len(named), graph
-	res.Hits, err = r.Store.Read(ctx, snapshotID, then(ids, ranked), limit)
+	res.Hits, err = r.Store.Read(ctx, snapshotID, then(ids, ranked), limit, true)
 	return res, err
 }
 
@@ -101,9 +102,11 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 // files as given, never parsing names from words, so a path holding a space
 // is read whole. An anchor whose chunk is taken costs nothing more; one past
 // limit, or whose line no chunk holds, is left out, which the page's skeleton
-// sees in what its evidence shows. An embedding server it cannot reach fails
-// it (ai.ErrUnavailable), where Search goes on without vectors: a page is
-// stored, so it waits for the evidence a later try finds.
+// sees in what its evidence shows. Unlike Search, a file may take several
+// places, as a page draws on a file's many parts and its anchors may share a
+// file. An embedding server it cannot reach fails it (ai.ErrUnavailable),
+// where Search goes on without vectors: a page is stored, so it waits for the
+// evidence a later try finds.
 func (r *Retriever) SearchPage(ctx context.Context, snapshotID int64, words string, files []string, anchors []Anchor, limit int) (Result, error) {
 	var res Result
 	fts, err := r.fts(ctx, snapshotID, words, nil, ftsLimit)
@@ -158,7 +161,7 @@ func (r *Retriever) SearchPage(ctx context.Context, snapshotID int64, words stri
 		ids = append(ids, rest...)
 	}
 	res.FTS, res.Vector, res.Symbol, res.Named = len(fts), len(vec), len(sym), len(own)
-	res.Hits, err = r.Store.Read(ctx, snapshotID, then(ids, fused), limit)
+	res.Hits, err = r.Store.Read(ctx, snapshotID, then(ids, fused), limit, false)
 	return res, err
 }
 

@@ -92,12 +92,20 @@ func (s *Store) Chunks(ctx context.Context, ids []int64) ([]Hit, error) {
 // When both are ranked they are read as one hit, in the place of the first,
 // and a chunk joined is not read again; the places a join frees go to the
 // ranked chunks after, so limit hits are read while ranked has them. Those
-// past limit are read only as places fall free, as many as fell free.
+// past limit are read only as places fall free, as many as fell free. With
+// perFile a file takes one place, its first hit's: a hit of a file already
+// holding a place is left out and that place goes to the ranked chunks after,
+// so one file's many chunks never crowd out the files ranked below them.
 // ponytail: at search time, as joining them when chunking ranked the eval's
 // Java corpora lower; chunk headers apart if a corpus needs it.
-func (s *Store) Read(ctx context.Context, snapshotID int64, ranked []int64, limit int) ([]Hit, error) {
+func (s *Store) Read(ctx context.Context, snapshotID int64, ranked []int64, limit int, perFile bool) ([]Hit, error) {
 	var out []Hit
 	read := map[int64]bool{} // chunks read, alone or joined
+	take := func(h Hit) {
+		if !perFile || !slices.ContainsFunc(out, func(o Hit) bool { return o.Path == h.Path }) {
+			out = append(out, h)
+		}
+	}
 	for next := 0; len(out) < limit && next < len(ranked); {
 		batch := ranked[next:min(len(ranked), next+limit-len(out))]
 		next += len(batch)
@@ -111,7 +119,7 @@ func (s *Store) Read(ctx context.Context, snapshotID int64, ranked []int64, limi
 			}
 			read[h.ChunkID] = true
 			if h.Symbol != "" || h.StartLine != 1 {
-				out = append(out, h)
+				take(h)
 				continue
 			}
 			d, ok, err := s.Following(ctx, snapshotID, h.Path, h.EndLine+1)
@@ -119,7 +127,7 @@ func (s *Store) Read(ctx context.Context, snapshotID int64, ranked []int64, limi
 				return nil, err
 			}
 			if !ok {
-				out = append(out, h)
+				take(h)
 				continue
 			}
 			joined := Hit{ChunkID: h.ChunkID, Path: h.Path, Symbol: d.Symbol, StartLine: h.StartLine, EndLine: d.EndLine, Content: h.Content + "\n" + d.Content}
@@ -128,7 +136,7 @@ func (s *Store) Read(ctx context.Context, snapshotID int64, ranked []int64, limi
 				continue
 			}
 			read[d.ChunkID] = true
-			out = append(out, joined)
+			take(joined)
 		}
 	}
 	return out, nil

@@ -32,9 +32,9 @@ func TestSearchKeepsNamed(t *testing.T) {
 	}
 }
 
-// TestSearchPage: anchors' chunks come first, in order, each once, a path with
-// a space read whole and a line no word finds found; the page's files rank by
-// its words; an anchor past the limit, or whose line no chunk holds, is left out.
+// TestSearchPage: anchors' chunks come first, in order, each once, one file's
+// two in two places, a spaced path whole, a line no word finds found; the page's
+// files rank by its words; an anchor past limit or on no chunk's line is left out.
 func TestSearchPage(t *testing.T) {
 	ins := `INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'a/b c.cs', 1, 9, 'class Order', 'o'),
 		(1, 'README.md', 1, 20, 'intro', 'r1'), (1, 'README.md', 21, 40, 'recipe', 'r2'), (1, 'README.md', 45, 60, 'more', 'r3'), (1, 'own.go', 1, 9, 'alpha', 'w'), (1, 'far.go', 1, 9, 'alpha alpha beta', 'f')`
@@ -50,8 +50,8 @@ func TestSearchPage(t *testing.T) {
 		}
 		return append(out, fmt.Sprint(err))
 	}
-	got, top := search([]string{"own.go"}, []Anchor{{"README.md", 25}, {"a/b c.cs", 0}, {"README.md", 30}, {"README.md", 42}, {"gone.go", 1}}, 4), search(nil, many, 12)
-	if !slices.Equal(got, []string{"README.md:21", "a/b c.cs:1", "own.go:1", "far.go:1", "<nil>"}) || len(top) != 13 || top[11] != "n11.go:1" || top[12] != "<nil>" {
+	got, top := search([]string{"own.go"}, []Anchor{{"README.md", 25}, {"a/b c.cs", 0}, {"README.md", 30}, {"README.md", 42}, {"gone.go", 1}, {"README.md", 50}}, 5), search(nil, many, 12)
+	if !slices.Equal(got, []string{"README.md:21", "a/b c.cs:1", "README.md:45", "own.go:1", "far.go:1", "<nil>"}) || len(top) != 13 || top[11] != "n11.go:1" || top[12] != "<nil>" {
 		t.Errorf("got %q; 13 anchors at 12: %q", got, top)
 	}
 }
@@ -472,12 +472,12 @@ func TestSearchNamedFiles(t *testing.T) {
 }
 
 // TestSearchWithoutEmbeddings: a server without /embeddings leaves search to
-// FTS5 and symbols, in fused order and cut to the limit.
+// FTS5 and symbols, in fused order, a chunk a file, cut to the limit.
 func TestSearchWithoutEmbeddings(t *testing.T) {
 	db := seeded(t,
 		`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES
 			(1, 'docs/notes.md', 1, 9, 'how subscribe is used', 'h1'), (1, 'src/other.ts', 1, 9, 'subscribe(a); subscribe(b)', 'h2'),
-			(1, 'src/store.ts', 1, 9, 'const subscribe = (listener) => listeners.add(listener)', 'h3')`,
+			(1, 'src/store.ts', 1, 9, 'const subscribe = (listener) => listeners.add(listener)', 'h3'), (1, 'src/store.ts', 10, 19, 'subscribe subscribe subscribe', 'h4')`,
 		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'src/store.ts', 'subscribe', 'subscribe', 'function', 1, 1)`,
 	)
 	srv := httptest.NewServer(http.NotFoundHandler())
@@ -485,8 +485,8 @@ func TestSearchWithoutEmbeddings(t *testing.T) {
 	r := retriever(db)
 	r.Embed, r.Cache = &ai.OpenAI{BaseURL: srv.URL, ModelName: "embed"}, cache.New(1<<20)
 	res, err := r.Search(context.Background(), 1, "subscribe", 2)
-	if err != nil || res.Vector != 0 || res.FTS != 3 || res.Symbol != 1 || len(res.Hits) != 2 || res.Hits[0].Path != "src/store.ts" {
-		t.Fatalf("got %+v %v; want the defining chunk first of two, from FTS5 and symbols", res, err)
+	if err != nil || res.Vector != 0 || res.FTS != 4 || res.Symbol != 1 || len(res.Hits) != 2 || res.Hits[0].Path != "src/store.ts" || res.Hits[1].Path != "src/other.ts" {
+		t.Fatalf("got %+v %v; want the defining chunk first of two files, from FTS5 and symbols", res, err)
 	}
 }
 
