@@ -142,9 +142,11 @@ func Cited(answer string) []string {
 const Bar = 0.5
 
 // Need is gate G5: the least mean number of even questions, over every run and capture compared, of the
-// bench's Questions. It is DeepWiki's agreement with itself, 37 of 43 on code files between two captures
-// (2026-11-14), less 2: deepcode citing about what DeepWiki cites, as the user set it.
-const Need = 35
+// bench's Questions. It is DeepWiki's agreement with itself less 2, as the user set it: a run made of each
+// capture's citations, measured by TestCompare against the other capture, renames followed, is even on 40
+// and 40 of the 43 questions (2026-11-14), so deepcode is to cite about what DeepWiki cites as nearly as
+// DeepWiki repeats itself.
+const Need = 38
 
 // Questions is the number of questions the bench asks over its repositories, those Need counts of.
 const Questions = 43
@@ -200,8 +202,44 @@ func (o Overlap) Even() bool { return o.Measured() && o.Ratio >= Bar }
 type Row struct {
 	Repo, Question string
 	Failed         bool     // deepcode's answer failed (the run's error), so it cites nothing
-	Commit         string   // the commit DeepWiki read: a file renamed since it counts as a miss
+	Commit         string   // the commit DeepWiki read
+	Renamed        []string // DeepWiki's files renamed since Commit, "old → new", measured by their name at head
 	Overlap        *Overlap // nil: no answer of DeepWiki's to the question was captured
+}
+
+// Renames reads `git diff -M --name-status -z` from the commit DeepWiki read to head: each file renamed
+// since, by its old path. A copy (C) leaves its source in place, so only renames (R) count.
+func Renames(z []byte) map[string]string {
+	f := strings.Split(strings.TrimSuffix(string(z), "\x00"), "\x00")
+	out := map[string]string{}
+	for i := 0; i < len(f) && f[i] != ""; {
+		switch f[i][0] {
+		case 'R':
+			if i+2 < len(f) {
+				out[f[i+1]] = f[i+2]
+			}
+			i += 3
+		case 'C':
+			i += 3
+		default:
+			i += 2
+		}
+	}
+	return out
+}
+
+// Rename is paths by their names at head, as renames gives them, and the renames taken, "old → new".
+func Rename(paths []string, renames map[string]string) (out, moved []string) {
+	for _, p := range paths {
+		if to, ok := renames[p]; ok {
+			moved = append(moved, p+" → "+to)
+			p = to
+		}
+		if !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out, moved
 }
 
 // Tally is how one run's answers fare against one capture: of its questions, those even, those with no
@@ -289,7 +327,7 @@ func Report(pairs []Pair) string {
 
 // table writes rows as a Markdown table, a row a question.
 func table(b *strings.Builder, rows []Row) {
-	b.WriteString("| Repository | Question | DeepWiki read | DeepWiki | deepcode | Shared | Ratio | Count | Even | Gone |\n|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("| Repository | Question | DeepWiki read | DeepWiki | deepcode | Shared | Ratio | Count | Even | Gone or renamed |\n|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, r := range rows {
 		o, read := r.Overlap, cmp.Or(r.Commit, "–")
 		if o == nil {
@@ -304,7 +342,7 @@ func table(b *strings.Builder, rows []Row) {
 		if o.Measured() {
 			ratio, count, even = fmt.Sprintf("%.2f", o.Ratio), fmt.Sprintf("%.2f", o.Count), map[bool]string{true: "yes", false: "no"}[o.Even()]
 		}
-		fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", r.Repo, r.Question, read, files(o.DeepWiki), mine, files(o.Shared), ratio, count, even, files(o.Gone))
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", r.Repo, r.Question, read, files(o.DeepWiki), mine, files(o.Shared), ratio, count, even, files(slices.Concat(o.Gone, r.Renamed)))
 	}
 }
 

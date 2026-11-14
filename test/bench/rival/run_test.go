@@ -122,10 +122,11 @@ func TestCapture(t *testing.T) {
 
 // TestCompare compares the code files each answer of the stored bench runs DEEPCODE_DEEPWIKI_MEASURE
 // names (their JSON, separated as a PATH list is) cites with those every capture's answer cites
-// (data/bench/deepwiki/answers-<n>.json), one of DeepWiki's counting only when the run's head holds it, as
-// the bare clones in DEEPCODE_EVAL_GIT (<repo>.git, test/eval's) tell. It writes the comparison, gate G5's
-// verdict among it, as data/bench/deepwiki/<the runs' names, joined by +>.md, and fails when a question has
-// no captured answer, as the comparison is then partial; G5 not met is reported, not failed.
+// (data/bench/deepwiki/answers-<n>.json), one of DeepWiki's counting only when the run's head holds it, by
+// its name there when renamed since the commit DeepWiki read, as the bare clones in DEEPCODE_EVAL_GIT
+// (<repo>.git, test/eval's) tell. It writes the comparison, gate G5's verdict among it, as
+// data/bench/deepwiki/<the runs' names, joined by +>.md, and fails when a question has no captured answer,
+// as the comparison is then partial; G5 not met is reported, not failed.
 func TestCompare(t *testing.T) {
 	runs := filepath.SplitList(os.Getenv("DEEPCODE_DEEPWIKI_MEASURE"))
 	if len(runs) == 0 {
@@ -155,6 +156,7 @@ func TestCompare(t *testing.T) {
 		}
 	}
 	heads := map[string]map[string]bool{} // the files at each repository's head, by clone and commit
+	renames := map[string]map[string]string{}
 	var pairs []Pair
 	stems, err := Names(runs)
 	if err != nil {
@@ -170,8 +172,9 @@ func TestCompare(t *testing.T) {
 				for _, q := range r.Answers {
 					row := Row{Repo: r.Repo, Question: q.Question, Failed: q.Error != ""}
 					if ans, ok := c.Find(repo, q.Question); ok {
-						o := Measure(Code(ans.Files()), Code(Cited(q.Answer)), func(f string) bool { return head[f] })
-						row.Overlap, row.Commit = &o, ans.Commit
+						dw, moved := Rename(ans.Files(), renamed(t, renames, filepath.Join(clones, r.Repo+".git"), ans.Commit, r.Head))
+						o := Measure(Code(dw), Code(Cited(q.Answer)), func(f string) bool { return head[f] })
+						row.Overlap, row.Commit, row.Renamed = &o, ans.Commit, moved
 					} else {
 						t.Errorf("%s has no DeepWiki answer for %s: %q: run TestCapture to complete it", p.Capture, r.Repo, q.Question)
 					}
@@ -187,6 +190,24 @@ func TestCompare(t *testing.T) {
 	}
 	v := G5(pairs)
 	t.Logf("wrote %s: a mean of %.2f even questions of %.2f asked, against G5's bar of %.2f: met %v", md, v.Mean, v.Asked, v.Bar, v.Met)
+}
+
+// renamed is the files renamed (Renames) from the commit DeepWiki read to head in the bare clone at git,
+// read once into cache. A commit the clone lacks renames nothing, as the log says: its files renamed since
+// count as gone.
+func renamed(t *testing.T, cache map[string]map[string]string, git, from, head string) map[string]string {
+	t.Helper()
+	key := git + "@" + from + ".." + head
+	if r, ok := cache[key]; ok {
+		return r
+	}
+	out, err := exec.Command("git", "--git-dir", git, "diff", "-M", "--name-status", "-z", from, head).Output()
+	if err != nil {
+		t.Logf("%s: the renames from %s to %.7s are unread, so its files renamed since count as gone: %v", git, from, head, err)
+		out = nil
+	}
+	cache[key] = Renames(out)
+	return cache[key]
 }
 
 // atHead is the set of files the bare clone at git holds at commit head, read once into heads.

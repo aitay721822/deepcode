@@ -2,6 +2,7 @@ package rival
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -53,6 +54,27 @@ func TestMeasure(t *testing.T) {
 	}
 }
 
+// TestRenames reads git diff -M --name-status -z: a rename with its similarity counts, a copy leaves its
+// source in place, other changes rename nothing, and no output (a commit the clone lacks) neither.
+func TestRenames(t *testing.T) {
+	z := "M\x00go.mod\x00R076\x00src/eShop.AppHost/Program.cs\x00src/eShop.AppHost/AppHost.cs\x00C090\x00a.go\x00b.go\x00D\x00old.go\x00A\x00new.go\x00R100\x00x/y.go\x00z/y.go\x00"
+	want := map[string]string{"src/eShop.AppHost/Program.cs": "src/eShop.AppHost/AppHost.cs", "x/y.go": "z/y.go"}
+	if got := Renames([]byte(z)); !maps.Equal(got, want) {
+		t.Fatalf("Renames = %q, want %q", got, want)
+	}
+	if got := Renames(nil); len(got) != 0 {
+		t.Fatalf("no diff renames %q", got)
+	}
+	if got := Renames([]byte("R076\x00cut.go\x00")); len(got) != 0 {
+		t.Fatalf("a rename cut short renames %q", got)
+	}
+	got, moved := Rename([]string{"src/eShop.AppHost/Program.cs", "a.go", "z/y.go", "x/y.go"}, want)
+	if !slices.Equal(got, []string{"src/eShop.AppHost/AppHost.cs", "a.go", "z/y.go"}) ||
+		!slices.Equal(moved, []string{"src/eShop.AppHost/Program.cs → src/eShop.AppHost/AppHost.cs", "x/y.go → z/y.go"}) {
+		t.Fatalf("Rename = %q, %q", got, moved)
+	}
+}
+
 func TestCode(t *testing.T) {
 	paths := []string{"README.md", "docs/guide.md", "src/a_test.go", "tests/b.ts", ".github/workflows/ci.yml", "examples/e.go",
 		"src/Ordering.UnitTests/X.cs", "src/a.go", "lib/b.js", "src/main/java/x/Owner.java", "UserGuide.md"}
@@ -72,7 +94,7 @@ func TestReport(t *testing.T) {
 	failed := Measure([]string{"a.go"}, nil, at)
 	uncited := Measure(nil, []string{"a.go"}, at)
 	rows := []Row{{Repo: "chi", Question: "q1", Commit: "a54874f0", Overlap: &even}, {Repo: "chi", Question: "q2", Overlap: &uneven},
-		{Repo: "chi", Question: "q4", Overlap: &mid}, {Repo: "axum", Question: "q3"}, {Repo: "gson", Question: "q5", Failed: true, Overlap: &failed},
+		{Repo: "chi", Question: "q4", Renamed: []string{"old.go → a.go"}, Overlap: &mid}, {Repo: "axum", Question: "q3"}, {Repo: "gson", Question: "q5", Failed: true, Overlap: &failed},
 		{Repo: "zustand", Question: "q6", Overlap: &uncited}, {Repo: "axum", Question: "q7"}, {Repo: "gson", Question: "q9", Failed: true}}
 	if got, want := Score(rows), (Tally{Questions: 8, Even: 2, Missing: 3, Unmeasured: 1, Failed: 2, Measured: 4, Ratio: 0.45, Count: 0.7}); got != want {
 		t.Fatalf("Score = %+v, want %+v", got, want)
@@ -83,12 +105,12 @@ func TestReport(t *testing.T) {
 		"cites at least 50% of the code files DeepWiki cites",
 		"| run1 | answers-1.json | 2 of 8 | 4 | 3 | 1 | 2 | 0.45 | 0.70 |",
 		"| run1 | answers-2.json | 1 of 2 | 2 | 0 | 0 | 0 | 0.70 | 0.70 |",
-		"G5 (run × capture pairs compared: 2): a mean of 1.50 even questions of 5.00 asked, against a bar of 4.07 (35 of the bench's 43, DeepWiki's agreement with itself less 2, scaled to the questions asked): not met.",
+		"G5 (run × capture pairs compared: 2): a mean of 1.50 even questions of 5.00 asked, against a bar of 4.42 (38 of the bench's 43, DeepWiki's agreement with itself less 2, scaled to the questions asked): not met.",
 		"The runs hold a sample of the bench's questions",
 		"## run1 against answers-1.json",
 		"| chi | q1 | a54874f0 | a.go | a.go | a.go | 1.00 | 1.00 | yes | – |",
 		"| chi | q2 | – | a.go, b.go, c.go, d.go, e.go | a.go, b.go | a.go, b.go | 0.40 | 0.40 | no | – |",
-		"| chi | q4 | – | a.go, b.go | a.go, x.go, y.go | a.go | 0.50 | 1.50 | yes | gone.go |",
+		"| chi | q4 | – | a.go, b.go | a.go, x.go, y.go | a.go | 0.50 | 1.50 | yes | gone.go, old.go → a.go |",
 		"| axum | q3 | – | not captured |",
 		"| gson | q5 | – | a.go | failed | – | 0.00 | 0.00 | no | – |",
 		"| zustand | q6 | – | – | a.go | – | – | – | unmeasured | – |",
@@ -101,8 +123,8 @@ func TestReport(t *testing.T) {
 	if q10 := strings.Index(md, "| chi | q10 | – | a.go, b.go, c.go, d.go, e.go | a.go, b.go | a.go, b.go | 0.40 | 0.40 | no | – |"); second < 0 || q10 < second {
 		t.Errorf("the second pair's questions are not under its own heading:\n%s", md)
 	}
-	// Need of every Questions, scaled: 35 of 43 meets the bar and 34 does not; a sample of 6 questions
-	// needs 5 even (5×43 ≥ 35×6), as 4 falls short.
+	// Need of every Questions, scaled: 38 of 43 meets the bar and 37 does not; a sample of 6 questions
+	// needs all 6 even (6×43 ≥ 38×6), as 5 falls short (5×43 < 38×6).
 	run := func(evens, all int) []Pair {
 		rows := slices.Repeat([]Row{{Repo: "chi", Question: "q", Overlap: &even}}, evens)
 		rows = append(rows, slices.Repeat([]Row{{Repo: "chi", Question: "q", Overlap: &uneven}}, all-evens)...)
@@ -111,13 +133,13 @@ func TestReport(t *testing.T) {
 	for _, c := range []struct {
 		evens, all int
 		met        bool
-	}{{Need, Questions, true}, {Need - 1, Questions, false}, {5, 6, true}, {4, 6, false}} {
+	}{{Need, Questions, true}, {Need - 1, Questions, false}, {6, 6, true}, {5, 6, false}} {
 		if v := G5(run(c.evens, c.all)); v.Met != c.met || v.Mean != float64(c.evens) || v.Asked != float64(c.all) {
 			t.Errorf("%d even of %d: %+v, want met %v", c.evens, c.all, v, c.met)
 		}
 	}
 	whole := Report(run(Need, Questions))
-	if !strings.Contains(whole, "a mean of 35.00 even questions of 43.00 asked, against a bar of 35.00 (35 of the bench's 43") ||
+	if !strings.Contains(whole, "a mean of 38.00 even questions of 43.00 asked, against a bar of 38.00 (38 of the bench's 43") ||
 		!strings.Contains(whole, "): met.") || strings.Contains(whole, "a sample") {
 		t.Errorf("all the bench's questions at the bar:\n%s", whole)
 	}
