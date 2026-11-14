@@ -4,6 +4,7 @@
 package resume
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -27,11 +28,12 @@ import (
 )
 
 // model is an OpenAI-compatible embeddings server: one vector per text, or
-// every request answered with status, or one request held once a number of
-// batches were answered.
+// every request answered with status and refusal, or one request held once a
+// number of batches were answered.
 type model struct {
 	mu       sync.Mutex
 	status   int            // 0 answers; else every request gets it
+	refusal  string         // the body sent with status
 	hold     int            // with held set: the batch after this many answered ones is held
 	held     chan struct{}  // closed once a request is held
 	release  chan struct{}  // closed to let the held request go
@@ -41,11 +43,12 @@ type model struct {
 
 func newModel() *model { return &model{answered: map[string]int{}} }
 
-// fail answers every request with status from now on; 0 answers them again.
-func (m *model) fail(status int) {
+// fail answers every request with status and body from now on, a plain
+// refusal for body ""; status 0 answers them again.
+func (m *model) fail(status int, body string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.status = status
+	m.status, m.refusal = status, cmp.Or(body, `{"error":{"message":"fake model says no"}}`)
 }
 
 // holdAfter holds the request that comes after n more answered batches,
@@ -76,10 +79,10 @@ func (m *model) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	m.requests++
 	if m.status != 0 {
-		status := m.status
+		status, refusal := m.status, m.refusal
 		m.mu.Unlock()
 		w.Header().Set("Retry-After-Ms", "1") // the SDK's own retries come at once
-		http.Error(w, `{"error":{"message":"fake model says no"}}`, status)
+		http.Error(w, refusal, status)
 		return
 	}
 	if m.held != nil && m.hold == 0 {

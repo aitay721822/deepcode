@@ -80,7 +80,7 @@ func (s *Store) Retry(ctx context.Context, id int64, message string, seconds, at
 
 // Saved records that job id's running attempt stored work a later one skips.
 func (s *Store) Saved(id int64) error {
-	_, err := s.DB.Exec(`UPDATE jobs SET saved = 1 WHERE id = ?`, id)
+	_, err := s.DB.Exec(`UPDATE jobs SET saved = 1 WHERE id = ? AND status = 'running'`, id)
 	return err
 }
 

@@ -23,8 +23,8 @@ const (
 type Progress struct {
 	q      *Queue
 	id     int64
-	prefix string       // starts each line of output
-	saved  *atomic.Bool // the attempt stored work a later one skips (Saved)
+	prefix string        // starts each line of output
+	saved  *atomic.Int32 // what the attempt stored (Saved); nil outside a run
 }
 
 // With is p with each line of output starting with prefix: the lines of one
@@ -47,16 +47,26 @@ func (p Progress) Stage(stage string, done, total int) {
 
 // Saved records that the job stored work a later attempt skips, such as a
 // batch of files or vectors or a page, so this attempt does not count against
-// its attempts however it ends, a killed process included. Only the first
-// call writes.
+// its attempts however it ends, a killed process included. The database is
+// told once, or again by the next call when telling it failed.
 func (p Progress) Saved() {
-	if p.q == nil || p.saved != nil && p.saved.Swap(true) {
+	if p.q == nil || p.saved == nil || p.saved.Load() == savedTold {
 		return
 	}
+	p.saved.CompareAndSwap(savedNone, savedWork)
 	if err := p.q.Store.Saved(p.id); err != nil {
 		log.Printf("jobs: progress #%d: %v", p.id, err)
+		return
 	}
+	p.saved.Store(savedTold)
 }
+
+// What an attempt stored, as Progress.saved holds it.
+const (
+	savedNone int32 = iota
+	savedWork       // work a later attempt skips
+	savedTold       // that, and the database knows it
+)
 
 // Logf appends one line to the job's output.
 func (p Progress) Logf(format string, args ...any) {

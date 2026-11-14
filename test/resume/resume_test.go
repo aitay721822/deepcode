@@ -24,14 +24,14 @@ func TestIndexStopsThenRetries(t *testing.T) {
 	base, db, stop := start(t, t.TempDir(), ms.URL, 1)
 	defer stop()
 
-	m.fail(http.StatusUnauthorized)
+	m.fail(http.StatusUnauthorized, "")
 	id := importDemo(t, base, api.URL)
 	j := waitJob(t, db, "the refused attempt's outcome", func(j indexJob) bool { return j.Status != "running" && j.Error != "" })
 	if j.Status != "failed" || j.Attempts != 1 || !strings.Contains(j.Error, "401") {
 		t.Fatalf("a refused key should fail the job at once: %+v", j)
 	}
 
-	m.fail(http.StatusServiceUnavailable)
+	m.fail(http.StatusServiceUnavailable, "")
 	if code := call(t, client(t, base), http.MethodPost, base+"/api/repos/"+id+"/sync", ""); code != http.StatusAccepted {
 		t.Fatalf("sync: %d", code)
 	}
@@ -40,7 +40,7 @@ func TestIndexStopsThenRetries(t *testing.T) {
 		t.Fatalf("an outage should queue the job again in 30s without spending an attempt: %+v", j)
 	}
 
-	m.fail(0)
+	m.fail(0, "")
 	db.Exec(`UPDATE jobs SET run_after = CURRENT_TIMESTAMP`) // the backoff has passed
 	j = waitJob(t, db, "the job after the outage", func(j indexJob) bool { return j.Status == "succeeded" || j.Status == "failed" })
 	if j.Status != "succeeded" || j.Attempts != 1 {
@@ -80,14 +80,18 @@ func TestIndexResumesAfterKill(t *testing.T) {
 		if err := child.Start(); err != nil {
 			t.Fatal(err)
 		}
+		defer child.Process.Kill() // a test that fails midway leaves no child behind
 		exited := make(chan error, 1)
 		go func() { exited <- child.Wait() }()
 		select {
 		case <-held:
 		case err := <-exited:
+			close(release) // a request held as the child ended would keep ms from closing
 			t.Fatalf("run %d ended before it embedded two batches: %v\n%s", kill, err, out.String())
 		case <-time.After(90 * time.Second):
 			child.Process.Kill()
+			<-exited
+			close(release)
 			t.Fatalf("run %d never embedded two batches:\n%s", kill, out.String())
 		}
 		child.Process.Kill()

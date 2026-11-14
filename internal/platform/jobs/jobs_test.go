@@ -46,10 +46,12 @@ func TestEnqueueIsIdempotent(t *testing.T) {
 		t.Fatalf("ids %d %d %d", a.ID, b.ID, c.ID)
 	}
 	for _, finished := range []string{"failed", "succeeded"} { // e.g. a force-push back to sha
-		db.Exec(`UPDATE jobs SET status = ?, attempts = 3, error = 'x' WHERE id = ?`, finished, a.ID)
+		db.Exec(`UPDATE jobs SET status = ?, attempts = 3, retries = 7, saved = 1, error = 'x' WHERE id = ?`, finished, a.ID)
 		again, _ := q.EnqueueIndex(ctx, 1, "sha", "m")
-		if again.ID != a.ID || again.Status != "queued" || again.Attempts != 0 || again.Error != "" {
-			t.Fatalf("%s job not re-queued: %+v", finished, again)
+		var saved int
+		db.QueryRow(`SELECT saved FROM jobs WHERE id = ?`, a.ID).Scan(&saved)
+		if again.ID != a.ID || again.Status != "queued" || again.Attempts != 0 || again.Retries != 0 || saved != 0 || again.Error != "" {
+			t.Fatalf("%s job not re-queued from scratch: %+v, saved %d", finished, again, saved)
 		}
 	}
 	db.Exec(`UPDATE jobs SET status = 'running' WHERE id = ?`, a.ID)
@@ -340,12 +342,43 @@ func TestUncountedAttempts(t *testing.T) {
 			t.Fatalf("an attempt that stored work should not count: %+v, runs again in %ds", j, w)
 		}
 	}
+	db.Exec(`UPDATE jobs SET attempts = 2`) // two before it got nowhere
+	if j, w := run(saves(errors.New("timeout"))); j.Attempts != 2 || w < 20 || w > 30 {
+		t.Fatalf("after two attempts that counted, one that stored work: %+v, runs again in %ds, want 30s", j, w)
+	}
 	db.Exec(`UPDATE jobs SET retries = ?`, maxRetries-1)
 	if j, _ := run(down); j.Status != "queued" || j.Retries != maxRetries {
 		t.Fatalf("the last retry: %+v", j)
 	}
 	if j, _ := run(down); j.Status != "failed" || !strings.HasPrefix(j.Error, "still failing after 50 retries over about a day: connection refused") {
 		t.Fatalf("past the last retry: %+v", j)
+	}
+}
+
+// TestSavedTellsTheDatabase: when telling the database that the attempt
+// stored work fails, the next Saved tells it again, so the attempt would not
+// count had the process been killed; ending in an error, it does not count.
+func TestSavedTellsTheDatabase(t *testing.T) {
+	q, db := setup(t)
+	ctx := context.Background()
+	q.EnqueueIndex(ctx, 1, "sha", "")
+	j, _ := q.claim(ctx)
+	told := func() (n int) {
+		db.QueryRow(`SELECT saved FROM jobs WHERE id = ?`, j.ID).Scan(&n)
+		return n
+	}
+	var first, second int
+	q.run(ctx, j, func(_ context.Context, _ Job, p Progress) error {
+		db.Exec(`CREATE TRIGGER busy BEFORE UPDATE OF saved ON jobs WHEN new.saved = 1 BEGIN SELECT RAISE(ABORT, 'database is locked'); END`)
+		p.Saved()
+		first = told()
+		db.Exec(`DROP TRIGGER busy`)
+		p.Saved()
+		second = told()
+		return errors.New("timeout")
+	})
+	if got, _ := q.Get(ctx, j.ID); first != 0 || second != 1 || got.Attempts != 0 {
+		t.Fatalf("told the database %d, then %d; the job: %+v", first, second, got)
 	}
 }
 

@@ -123,8 +123,8 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 	jctx, cancel := context.WithTimeoutCause(ctx, q.Timeout, fmt.Errorf("the job ran past DEEPCODE_JOB_TIMEOUT (%s): %w", q.Timeout, context.DeadlineExceeded))
 	defer cancel()
 	start := time.Now()
-	progress := Progress{q: q, id: job.ID, saved: new(atomic.Bool)}
-	progress.Logf("%s %.7s: attempt %d of %d", job.Kind, job.CommitSHA, job.Attempts, maxAttempts)
+	progress := Progress{q: q, id: job.ID, saved: new(atomic.Int32)}
+	progress.Logf("%s %.7s: attempt %d of %d, counted unless it stores work or cannot reach a server", job.Kind, job.CommitSHA, job.Attempts, maxAttempts)
 	err := fmt.Errorf("no handler for job kind %q", job.Kind)
 	if h != nil {
 		err = safely(func() error { return h(jctx, job, progress) })
@@ -134,9 +134,9 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 	}
 	// ctx may already be cancelled (shutdown), so finish the bookkeeping regardless.
 	bg := context.WithoutCancel(ctx)
-	attempts, retries := job.Attempts, job.Retries
-	if progress.saved.Load() {
-		attempts, retries = attempts-1, 0
+	attempts, retries, backoff := job.Attempts, job.Retries, 30<<max(job.Attempts-1, 0) // 30s, 60s
+	if progress.saved.Load() != savedNone {
+		attempts, retries, backoff = attempts-1, 0, 30
 	}
 	switch {
 	case err == nil:
@@ -155,14 +155,13 @@ func (q *Queue) run(ctx context.Context, job Job, h Handler) {
 			err = q.fail(bg, job, progress, fmt.Errorf("still failing after %d retries over about a day: %w", maxRetries, err))
 			break
 		}
-		backoff := transientBackoff(retries)
-		log.Printf("jobs: %s #%d (repository %d) could not reach a server (retry %d of %d in %s): %v", job.Kind, job.ID, job.RepoID, retries, maxRetries, backoff, err)
-		progress.Logf("a server could not be reached; the attempt does not count (retry %d of %d in %s): %v", retries, maxRetries, backoff, err)
-		err = q.Store.Retry(bg, job.ID, err.Error(), int(backoff.Seconds()), job.Attempts-1, retries)
+		wait := transientBackoff(retries)
+		log.Printf("jobs: %s #%d (repository %d) could not reach a server (retry %d of %d in %s): %v", job.Kind, job.ID, job.RepoID, retries, maxRetries, wait, err)
+		progress.Logf("a server could not be reached; the attempt does not count (retry %d of %d in %s): %v", retries, maxRetries, wait, err)
+		err = q.Store.Retry(bg, job.ID, err.Error(), int(wait.Seconds()), job.Attempts-1, retries)
 	case attempts >= maxAttempts:
 		err = q.fail(bg, job, progress, err)
 	default:
-		backoff := 30 << max(attempts-1, 0) // 30s, 60s: 30s again after an attempt that stored work
 		log.Printf("jobs: %s #%d (repository %d) attempt %d failed, retrying in %ds: %v", job.Kind, job.ID, job.RepoID, job.Attempts, backoff, err)
 		progress.Logf("attempt failed, retrying in %ds: %v", backoff, err)
 		err = q.Store.Retry(bg, job.ID, err.Error(), backoff, attempts, retries)

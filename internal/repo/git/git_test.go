@@ -412,7 +412,8 @@ func TestValidBranch(t *testing.T) {
 // TestRemoteFailures: a fetch from a remote git cannot reach, or one that
 // answers a status a later try may pass, is ErrUnavailable; one refusing the
 // credentials, without the repository, or no longer holding the commit (a
-// force-push took it away) is ErrRefused. Each says so in git's own words.
+// force-push took it away) is ErrRefused; one answering another status, such
+// as a proxy's 413, is neither. Each says so in git's own words.
 func TestRemoteFailures(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -420,7 +421,7 @@ func TestRemoteFailures(t *testing.T) {
 	}
 	cases := map[string]error{"http://" + l.Addr().String() + "/r.git": ErrUnavailable}
 	l.Close()
-	for status, want := range map[int]error{503: ErrUnavailable, 429: ErrUnavailable, 401: ErrRefused, 403: ErrRefused, 404: ErrRefused} {
+	for status, want := range map[int]error{503: ErrUnavailable, 429: ErrUnavailable, 401: ErrRefused, 403: ErrRefused, 404: ErrRefused, 413: nil} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
 		defer srv.Close()
 		cases[srv.URL+"/r.git"] = want
@@ -433,8 +434,30 @@ func TestRemoteFailures(t *testing.T) {
 	for url, want := range cases {
 		id++
 		_, err := g.Fetch(context.Background(), id, Remote{URL: url}, strings.Repeat("1", 40))
-		if !errors.Is(err, want) || !strings.Contains(err.Error(), "fatal:") {
+		if err == nil || classOf(err) != want || !strings.Contains(err.Error(), "fatal:") {
 			t.Errorf("%s: %v, want %v", url, err, want)
 		}
 	}
+	// What a fetch may say past one status: GitHub's rate limit is a 403, and a
+	// 413 ends in a hang-up that is no dropped connection.
+	for msg, want := range map[string]error{
+		"remote: API rate limit exceeded fatal: unable to access 'x': The requested URL returned error: 403":                         ErrUnavailable,
+		"error: RPC failed; HTTP 413 curl 22 The requested URL returned error: 413 fatal: the remote end hung up unexpectedly":       nil,
+		"error: RPC failed; curl 18 transfer closed with outstanding read data remaining fatal: the remote end hung up unexpectedly": ErrUnavailable,
+		"remote: Invalid username or password. fatal: Authentication failed for 'x'":                                                 ErrRefused,
+	} {
+		if got := classOf(classify(errors.New(msg), msg)); got != want {
+			t.Errorf("%q: %v, want %v", msg, got, want)
+		}
+	}
+}
+
+// classOf is ErrRefused or ErrUnavailable when err is one, else nil.
+func classOf(err error) error {
+	for _, kind := range []error{ErrRefused, ErrUnavailable} {
+		if errors.Is(err, kind) {
+			return kind
+		}
+	}
+	return nil
 }

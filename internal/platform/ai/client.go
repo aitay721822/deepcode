@@ -229,6 +229,10 @@ func (c *OpenAI) fail(path string, res *http.Response, err error) error {
 			refusal = overflow(body, fmt.Errorf("%s %s: %s: %s", c.ModelName, path, res.Status, msg))
 		}
 		switch s := res.StatusCode; {
+		case errors.As(refusal, new(*ErrContext)):
+			return refusal // longer than the context, whatever the status: no later try is shorter
+		case s == http.StatusTooManyRequests && bytes.Contains(body, []byte(`"insufficient_quota"`)):
+			return kinded{refusal, ErrRefused} // OpenAI's account out of credit: no wait ends it
 		case s == http.StatusRequestTimeout || s == http.StatusConflict || s == http.StatusTooManyRequests || s >= 500:
 			return kinded{refusal, ErrUnavailable}
 		case s == http.StatusUnauthorized || s == http.StatusForbidden || s == http.StatusNotFound:
@@ -247,24 +251,29 @@ func (c *OpenAI) fail(path string, res *http.Response, err error) error {
 // broken reports a request that got no whole answer for want of a working
 // connection: one that failed or broke off (a dial, read or write error, an
 // end midway, a stream's included), or timed out below the caller's context.
-// A certificate the client does not trust, or a malformed URL, is no such
+// A certificate the client does not trust, a TLS alert the server sent (its
+// refusal of the client's certificate), or a malformed URL, is no such
 // failure: a later try meets it again.
 func broken(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	var op *net.OpError
+	if op := (*net.OpError)(nil); errors.As(err, &op) {
+		return op.Op != "remote error" // crypto/tls's name for an alert the peer sent
+	}
 	var ne net.Error
-	return errors.As(err, &op) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &ne) && ne.Timeout()
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &ne) && ne.Timeout()
 }
 
 // ErrUnavailable: the server could not be reached, or failed for now: the
 // connection failed or broke off (broken), or it answered 408, 409, 429 or a
-// 5xx once the SDK's own retries were spent. A later try may get through.
+// 5xx once the SDK's own retries were spent, unless it said the request was
+// longer than the context. A later try may get through.
 var ErrUnavailable = errors.New("the model server is unavailable")
 
-// ErrRefused: the server refused the key (401, 403) or has no such model or
-// path (404). A setting is wrong, which no retry fixes.
+// ErrRefused: the server refused the key (401, 403), has no such model or
+// path (404), or OpenAI's account is out of credit (a 429 of
+// insufficient_quota). A setting is wrong, which no retry fixes.
 var ErrRefused = errors.New("the model server refused the request")
 
 // ErrFailed: the server failed the answer it was giving (an error inside the
@@ -273,7 +282,8 @@ var ErrRefused = errors.New("the model server refused the request")
 // server's failure, not a feature the server lacks.
 var ErrFailed = errors.New("the server failed the answer")
 
-// kinded is an error that is also kind (errors.Is), its message its own.
+// kinded is an error that is also kind (errors.Is), its message its own;
+// package git has its twin, as neither imports the other.
 type kinded struct {
 	error
 	kind error

@@ -23,31 +23,36 @@ import (
 
 // TestModelErrors: what a model server does to a request says whether a later
 // try may get through. A status the SDK retries is unavailable once those
-// retries are spent; a refused key or an unknown model is refused at once; a
-// bad request is neither; so are a server that cannot be reached and an
-// answer cut midway, both unavailable.
+// retries are spent, unless the account is out of credit, which is refused,
+// or the request was longer than the context, which is neither; a refused
+// key or an unknown model is refused at once; a bad request is neither; a
+// server that cannot be reached and an answer cut midway are unavailable.
 func TestModelErrors(t *testing.T) {
+	quota := `{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}`
+	overflow := `{"error":{"code":"context_length_exceeded","message":"too long"}}`
 	for _, c := range []struct {
-		status    int
-		want, not error
-		requests  int
+		status   int
+		body     string
+		want     error // ai.ErrUnavailable, ai.ErrRefused or nil
+		requests int
 	}{
-		{http.StatusServiceUnavailable, ai.ErrUnavailable, ai.ErrRefused, 4},
-		{http.StatusTooManyRequests, ai.ErrUnavailable, ai.ErrRefused, 4},
-		{http.StatusUnauthorized, ai.ErrRefused, ai.ErrUnavailable, 1},
-		{http.StatusForbidden, ai.ErrRefused, ai.ErrUnavailable, 1},
-		{http.StatusNotFound, ai.ErrRefused, ai.ErrUnavailable, 1},
-		{http.StatusBadRequest, nil, nil, 1},
+		{http.StatusServiceUnavailable, "", ai.ErrUnavailable, 4},
+		{http.StatusTooManyRequests, "", ai.ErrUnavailable, 4},
+		{http.StatusTooManyRequests, quota, ai.ErrRefused, 4},
+		{http.StatusServiceUnavailable, overflow, nil, 4},
+		{http.StatusUnauthorized, "", ai.ErrRefused, 1},
+		{http.StatusForbidden, "", ai.ErrRefused, 1},
+		{http.StatusNotFound, "", ai.ErrRefused, 1},
+		{http.StatusBadRequest, "", nil, 1},
 	} {
 		m := newModel()
-		m.fail(c.status)
+		m.fail(c.status, c.body)
 		srv := httptest.NewServer(m)
 		_, err := (&ai.OpenAI{BaseURL: srv.URL + "/v1", ModelName: "fake-embed"}).Embed(context.Background(), []string{"x"})
 		srv.Close()
 		_, requests, _ := m.counts()
-		if err == nil || c.want != nil && !errors.Is(err, c.want) || errors.Is(err, ai.ErrUnavailable) && c.want != ai.ErrUnavailable ||
-			errors.Is(err, ai.ErrRefused) && c.want != ai.ErrRefused || requests != c.requests {
-			t.Errorf("status %d: %v after %d requests, want %v after %d", c.status, err, requests, c.want, c.requests)
+		if err == nil || classOf(err) != c.want || requests != c.requests || c.body == overflow && !errors.As(err, new(*ai.ErrContext)) {
+			t.Errorf("status %d %s: %v after %d requests, want %v after %d", c.status, c.body, err, requests, c.want, c.requests)
 		}
 	}
 
@@ -75,12 +80,22 @@ func TestModelErrors(t *testing.T) {
 	}
 }
 
+// classOf is ai.ErrRefused or ai.ErrUnavailable when err is one, else nil.
+func classOf(err error) error {
+	for _, kind := range []error{ai.ErrRefused, ai.ErrUnavailable} {
+		if errors.Is(err, kind) {
+			return kind
+		}
+	}
+	return nil
+}
+
 // TestPageWaitsForEmbeddings: with the embedding server down, a wiki page's
 // search fails, to be written once it is back, where a question's search
 // goes on without vectors.
 func TestPageWaitsForEmbeddings(t *testing.T) {
 	m := newModel()
-	m.fail(http.StatusServiceUnavailable)
+	m.fail(http.StatusServiceUnavailable, "")
 	srv := httptest.NewServer(m)
 	defer srv.Close()
 	db, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "deepcode.db"))
