@@ -48,7 +48,8 @@ func TestFolderLimits(t *testing.T) {
 
 // TestFileLength enforces the length rule: no file is longer than 500 lines;
 // past that, split it by responsibility. The lockfile npm writes is not ours
-// to split.
+// to split, and a binary file (an image, a database fixture) has no lines: one
+// is told as git tells it, by a NUL byte in its first 8000.
 func TestFileLength(t *testing.T) {
 	for _, f := range repoFiles(t) {
 		if f == "web/package-lock.json" {
@@ -57,6 +58,9 @@ func TestFileLength(t *testing.T) {
 		b, err := os.ReadFile("../" + f)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if bytes.IndexByte(b[:min(len(b), 8000)], 0) >= 0 {
+			continue
 		}
 		lines := bytes.Count(b, []byte("\n"))
 		if len(b) > 0 && b[len(b)-1] != '\n' {
