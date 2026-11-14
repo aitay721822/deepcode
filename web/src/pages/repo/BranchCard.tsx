@@ -53,13 +53,13 @@ export function BranchCard({ repo, onChanged }: { repo: Repo; onChanged: () => v
       <p className="mt-1 text-[12px] [overflow-wrap:anywhere] text-muted-foreground">
         目前跟隨 <span className="text-foreground">{current || repo.defaultBranch || '預設'}</span>
       </p>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="mt-3 flex items-center gap-2">
         <select
           aria-label="Branch"
           value={branch}
           disabled={busy || options.length === 0}
           onChange={(e) => setBranch(e.target.value)}
-          className="h-9 max-w-56 rounded-md border border-input bg-card px-3 text-sm transition-colors hover:border-foreground/60 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25 focus-visible:outline-hidden"
+          className="h-9 min-w-0 max-w-56 flex-1 rounded-md border border-input bg-card px-3 text-sm transition-colors hover:border-foreground/60 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25 focus-visible:outline-hidden"
         >
           <option value="">跟隨預設（{repo.defaultBranch || 'HEAD'}）</option>
           {options.map((b) => (

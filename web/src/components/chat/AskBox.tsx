@@ -1,5 +1,6 @@
 import { ArrowUpIcon } from 'lucide-react'
 import { useId, useState } from 'react'
+import { cn } from '../../lib/style/cn'
 import type { AskMode } from '../../types/repo/chat'
 import { Button } from '../ui/controls/button'
 import { Spinner } from '../ui/feedback/spinner'
@@ -11,18 +12,23 @@ const modes: { value: AskMode; label: string; hint: string }[] = [
   { value: 'codemap', label: 'Codemap', hint: '畫出回答問題的程式路徑：依執行順序編號的程式碼位置，也能切換成圖' },
 ]
 
-/** The question box docked at the bottom of the window, with how to answer: fast, deep (slower), or as a code map. */
+/**
+ * The question box docked at the bottom of the window, with how to answer: fast, deep (slower), or as a code map.
+ * className pads the docked strip, so a page with side columns centres the box over its main column.
+ */
 export function AskBox({
   placeholder,
   disabled,
   busy,
   defaultMode = 'fast',
+  className,
   onAsk,
 }: {
   placeholder: string
   disabled?: boolean
   busy?: boolean
   defaultMode?: AskMode
+  className?: string
   onAsk: (q: string, mode: AskMode) => void
 }) {
   const [text, setText] = useState('')
@@ -36,7 +42,12 @@ export function AskBox({
     setText('')
   }
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-30 print:hidden flex justify-center px-4">
+    <div
+      className={cn(
+        'pointer-events-none fixed inset-x-0 bottom-4 z-30 print:hidden flex justify-center px-4',
+        className,
+      )}
+    >
       <form
         className="pointer-events-auto w-full max-w-[760px] rounded-xl border border-brand/40 bg-popover/90 shadow-floating ring-4 ring-brand/8 backdrop-blur-xl transition-[border-color,box-shadow] focus-within:border-brand/80 focus-within:ring-brand/15"
         onSubmit={(e) => {

@@ -209,6 +209,8 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                 : `針對 ${repo.owner}/${repo.name} 提問`
           }
           disabled={!ready || !health?.chatModel}
+          // Over the main column, clear of the side columns: 260px from 900px wide, 300px each from 1240px.
+          className="min-[900px]:pl-[276px] min-[1240px]:px-[316px]"
           onAsk={(q, mode) =>
             navigate({
               to: '/repos/$id/search/{-$conversationId}',
