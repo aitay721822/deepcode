@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/ThreeDotsLabs/watermill v1.5.3
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/dop251/goja v0.0.0-20261110204830-f493a2b600d6
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/jsonschema-go v0.4.3
