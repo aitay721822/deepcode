@@ -94,7 +94,7 @@ func (c *Client) respond(ctx context.Context, params *responses.ResponseNewParam
 	case r.Status == responses.ResponseStatusFailed:
 		return "", nil, c.refused("/responses", r.Error.Message)
 	case r.IncompleteDetails.Reason == "max_output_tokens":
-		return "", nil, errSpent
+		return "", nil, ai.ErrSpent
 	}
 	text := r.OutputText()
 	if text != "" {

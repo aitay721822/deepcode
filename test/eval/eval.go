@@ -34,7 +34,7 @@ func Embedder() (*compat.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, embed := app.Providers(cfg, nil)
+	_, embed := app.Providers(cfg, nil, nil)
 	return embed, nil
 }
 

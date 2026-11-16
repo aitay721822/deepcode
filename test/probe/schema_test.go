@@ -45,7 +45,7 @@ func TestSchema(t *testing.T) {
 	for _, api := range []string{compat.Completions, compat.Responses} {
 		t.Run(api, func(t *testing.T) {
 			cfg.ChatAPI = api
-			chat, _ := app.Providers(cfg, nil)
+			chat, _ := app.Providers(cfg, nil, nil)
 			model, _ := chat.(*compat.Client)
 			if model == nil {
 				t.Fatal("the probe needs DEEPCODE_CHAT_MODEL")

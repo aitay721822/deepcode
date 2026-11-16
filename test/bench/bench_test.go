@@ -447,7 +447,7 @@ func (r *rig) writeWiki(ctx context.Context, id int64, sha string, fail func(str
 		fail("wiki "+sha[:7], err)
 	}
 	calls, u, _ := r.meter.take()
-	r.last.Calls, r.last.InTokens, r.last.OutTokens, r.last.InChars, r.last.OutChars, r.last.CachedTokens = calls, u.InTokens, u.OutTokens, u.InChars, u.OutChars, u.CachedTokens
+	r.last.Calls, r.last.InTokens, r.last.OutTokens, r.last.InChars, r.last.OutChars, r.last.CachedTokens, r.last.EstInTokens, r.last.EstOutTokens = calls, u.InTokens, u.OutTokens, u.InChars, u.OutChars, u.CachedTokens, u.EstIn, u.EstOut
 	return r.last
 }
 

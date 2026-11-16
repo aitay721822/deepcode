@@ -29,6 +29,9 @@ func (p *Pieces) Len() int { return len(p.texts) }
 // MarkSent records that the request just answered sent the first n pieces.
 func (p *Pieces) MarkSent(n int) { p.sent = n }
 
+// Texts are the first n pieces' texts.
+func (p *Pieces) Texts(n int) []string { return p.texts[:n:n] }
+
 // Chars is the pieces' characters.
 func (p *Pieces) Chars() (n int) {
 	for _, s := range p.texts {

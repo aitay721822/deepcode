@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
@@ -50,14 +52,36 @@ func TestRead(t *testing.T) {
 	if got := Embedding(e); got != (Usage{InTokens: 4}) {
 		t.Errorf("embedding: %+v", got)
 	}
-	u := Usage{InChars: 1, OutChars: 2, InTokens: 3, OutTokens: 4, CachedTokens: 5}
-	if u.Add(u); u != (Usage{InChars: 2, OutChars: 4, InTokens: 6, OutTokens: 8, CachedTokens: 10}) {
+	u := Usage{InChars: 1, OutChars: 2, InTokens: 3, OutTokens: 4, CachedTokens: 5, EstIn: 6, EstOut: 7, Elapsed: 8}
+	if u.Add(u); u != (Usage{InChars: 2, OutChars: 4, InTokens: 6, OutTokens: 8, CachedTokens: 10, EstIn: 12, EstOut: 14, Elapsed: 16}) {
 		t.Errorf("add: %+v", u)
 	}
 }
 
-// TestManager: a request's tokens are summed on its repository's row of the day and model, its context's
-// cancelling notwithstanding; one no repository asked for counts on repository 0, one with no tokens not at all.
+// TestEstimate: a request the server counted no tokens for has the tokens of what it sent and received counted
+// by the local tokenizer; one it counted any for, or with no tokenizer, has none.
+func TestEstimate(t *testing.T) {
+	words := func(s string) int { return len(strings.Fields(s)) }
+	in, out := []string{"be brief", "how does it work"}, []string{"like this"}
+	for _, tc := range []struct {
+		u     Usage
+		count func(string) int
+		want  Usage
+	}{
+		{Usage{InChars: 24}, words, Usage{InChars: 24, EstIn: 6, EstOut: 2}},
+		{Usage{OutTokens: 1}, words, Usage{OutTokens: 1}},
+		{Usage{CachedTokens: 1}, words, Usage{CachedTokens: 1}},
+		{Usage{}, nil, Usage{}},
+	} {
+		if tc.u.Estimate(tc.count, in, out); tc.u != tc.want {
+			t.Errorf("%+v, want %+v", tc.u, tc.want)
+		}
+	}
+}
+
+// TestManager: a request's tokens and time are summed on its repository's row of the day and model, its
+// context's cancelling notwithstanding; one no repository asked for counts on repository 0; one the server
+// counted no tokens for counts as an unreported call, with its estimated tokens.
 // Totals read the sums back, the largest input first, within the days asked for and the repositories kept,
 // a repository with no row (deleted) with no name.
 func TestManager(t *testing.T) {
@@ -77,19 +101,23 @@ func TestManager(t *testing.T) {
 	one := WithRepository(ctx, 1)
 	cancelled, cancel := context.WithCancel(WithRepository(ctx, 2))
 	cancel()
-	m.Record(one, "chat", Usage{InChars: 400, InTokens: 100, CachedTokens: 60, OutTokens: 10})
+	m.Record(one, "chat", Usage{InChars: 400, InTokens: 100, CachedTokens: 60, OutTokens: 10, Elapsed: 250 * time.Millisecond})
 	m.Record(one, "chat", Usage{InTokens: 50, OutTokens: 5})
 	m.Record(one, "embed", Usage{InTokens: 7})
 	m.Record(ctx, "chat", Usage{InTokens: 3})
 	m.Record(cancelled, "chat", Usage{OutTokens: 1})
+	m.Record(WithRepository(ctx, 2), "agent", Usage{EstIn: 60, EstOut: 1}) // estimated input orders a row as counted input does
+	m.Record(WithRepository(ctx, 2), "agent", Usage{EstIn: 40, EstOut: 2})
 	m.Record(WithRepository(ctx, 9), "chat", Usage{InTokens: 2})
-	m.Record(one, "chat", Usage{InChars: 9}) // no tokens: a refused request
+	m.Record(one, "chat", Usage{InChars: 9, EstIn: 4, EstOut: 2, Elapsed: 1500 * time.Millisecond}) // no tokens: a subscription agent's
 	if _, err := db.Exec(`INSERT INTO llm_usage(repository_id, day, model, calls, input_tokens) VALUES (1, date('now', '-40 days'), 'chat', 1, 1000)`); err != nil {
 		t.Fatal(err)
 	}
 	all := func(int64) bool { return true }
 	recent := []store.Total{
-		{RepoID: 1, RepoPublicID: "p1", RepoOwner: "o", RepoName: "r1", Model: "chat", Calls: 2, Input: 150, Cached: 60, Output: 15},
+		{RepoID: 1, RepoPublicID: "p1", RepoOwner: "o", RepoName: "r1", Model: "chat", Calls: 3, Input: 150, Cached: 60, Output: 15,
+			Unreported: 1, EstInput: 4, EstOutput: 2, Milliseconds: 1750},
+		{RepoID: 2, RepoPublicID: "p2", RepoOwner: "o", RepoName: "r2", Model: "agent", Calls: 2, Unreported: 2, EstInput: 100, EstOutput: 3},
 		{RepoID: 1, RepoPublicID: "p1", RepoOwner: "o", RepoName: "r1", Model: "embed", Calls: 1, Input: 7},
 		{RepoID: 0, Model: "chat", Calls: 1, Input: 3},
 		{RepoID: 9, Model: "chat", Calls: 1, Input: 2},
@@ -102,8 +130,9 @@ func TestManager(t *testing.T) {
 	}{
 		{30, all, recent},
 		{1, all, recent},
-		{0, all, append([]store.Total{{RepoID: 1, RepoPublicID: "p1", RepoOwner: "o", RepoName: "r1", Model: "chat", Calls: 3, Input: 1150, Cached: 60, Output: 15}}, recent[1:]...)},
-		{30, func(id int64) bool { return id == 1 }, recent[:2]},
+		{0, all, append([]store.Total{{RepoID: 1, RepoPublicID: "p1", RepoOwner: "o", RepoName: "r1", Model: "chat", Calls: 4, Input: 1150, Cached: 60, Output: 15,
+			Unreported: 1, EstInput: 4, EstOutput: 2, Milliseconds: 1750}}, recent[1:]...)},
+		{30, func(id int64) bool { return id == 1 }, []store.Total{recent[0], recent[2]}},
 	} {
 		got, err := m.Totals(ctx, tc.days, tc.keep)
 		if err != nil || !slices.Equal(got, tc.want) {

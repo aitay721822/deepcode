@@ -1,7 +1,9 @@
 // Package harness fits one question's model requests to the model's context
-// (ai.Window), counted in the model's tokens (tokens.Counter). A request may
-// take a threshold of the context: its Ratio of it, and never the Room the
-// answer needs. Before an answer is gathered, the room the
+// (ai.Window), counted by the model's tokenizer, or one near it
+// (tokens.Counter). A request may take a threshold of the context: its Ratio
+// of it, and never the Room the answer needs, less the Overhead the backend
+// adds to every request, in the local tokenizer's tokens (the model's over
+// Scale). Before an answer is gathered, the room the
 // threshold leaves is shared out (Share): the evidence first, then the
 // conversation so far, older turns summed up by the model when they do not fit
 // (Recall), and the background last. A gathering's request that would pass the
@@ -76,8 +78,9 @@ func (f *Fit) Prompt(p ai.Prompt) int {
 	return size + n*perMessage
 }
 
-// Threshold is the tokens a request may take: the window's Ratio of the
-// context, but never past the context less the answer's room; 0 when no
+// Threshold is the tokens a request may take, as the local tokenizer counts
+// them: the window's Ratio of the context, but never past the context less
+// the answer's room, less the backend's Overhead, over its Scale; 0 when no
 // context is known.
 func (f *Fit) Threshold() int { return f.threshold(f.Context()) }
 
@@ -87,7 +90,7 @@ func (f *Fit) threshold(window int) int {
 		return 0
 	}
 	w := f.model.Window()
-	return min(int(cmp.Or(w.Ratio, defaultRatio)*float64(window)), window-w.Room)
+	return int(float64(min(int(cmp.Or(w.Ratio, defaultRatio)*float64(window)), window-w.Room)-w.Overhead) / max(w.Scale, 1))
 }
 
 // Context is the model's context in tokens, 0 when unknown.

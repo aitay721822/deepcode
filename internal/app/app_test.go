@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"deepcode/internal/platform/ai/compat"
+	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	jobstore "deepcode/internal/platform/jobs/store"
@@ -176,14 +177,21 @@ func localRemote(t *testing.T) {
 
 // TestProviders: the chat model is the one the settings name, with its
 // context, the share of it a request may fill and where a request for JSON
-// gives its schema; none without a model.
+// gives its schema; it and the embedding model tell the meter their requests,
+// the chat model's estimated by the tokenizer given; none without a model.
 func TestProviders(t *testing.T) {
-	chatP, embedP := Providers(Config{ChatModel: "m", ChatContext: 524288, CompactRatio: 0.5, ChatSchema: "prompt"}, nil)
-	if c, ok := chatP.(*compat.Client); !ok || c.Context != 524288 || c.CompactRatio != 0.5 || c.Schema != "prompt" || embedP != nil {
-		t.Errorf("%+v %+v", chatP, embedP)
+	meter, counted := &usage.Manager{}, 0
+	count := func(string) int { counted++; return 0 }
+	chatP, embedP := Providers(Config{ChatModel: "m", ChatContext: 524288, CompactRatio: 0.5, ChatSchema: "prompt", EmbedModel: "e"}, meter, count)
+	c, ok := chatP.(*compat.Client)
+	if !ok || c.Context != 524288 || c.CompactRatio != 0.5 || c.Schema != "prompt" || embedP == nil || embedP.ModelName != "e" || c.Meter != meter || embedP.Meter != meter {
+		t.Fatalf("%+v %+v", chatP, embedP)
 	}
-	if chatP, _ := Providers(Config{ChatContext: 524288}, nil); chatP != nil {
-		t.Errorf("no model: %+v", chatP)
+	if c.Count(""); counted != 1 || embedP.Count != nil {
+		t.Errorf("the tokenizer counted %d times, want once, and the embedding model's is %p", counted, embedP.Count)
+	}
+	if chatP, embedP := Providers(Config{ChatContext: 524288}, meter, count); chatP != nil || embedP != nil {
+		t.Errorf("no model: %+v %+v", chatP, embedP)
 	}
 }
 

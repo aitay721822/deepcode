@@ -132,7 +132,7 @@ func TestLanguage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, embed := app.Providers(cfg, nil)
+	model, embed := app.Providers(cfg, nil, nil)
 	counter, err := tokens.Load(os.Getenv("DEEPCODE_CHAT_TOKENIZER"))
 	if model == nil || embed == nil || err != nil {
 		t.Fatalf("the probe needs DEEPCODE_CHAT_MODEL, DEEPCODE_EMBED_MODEL (the bench's hybrid search) and a tokenizer: %v", err)

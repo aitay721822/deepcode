@@ -5,7 +5,8 @@
 // try may get through (ErrUnavailable, ErrRefused, ErrFailed, ErrContext),
 // the 1 MB answer cap (Answer), timeouts that name DEEPCODE_LLM_TIMEOUT, the
 // text an exchange's next request sends (Pieces), and schemas, made from Go
-// types or at request time within OpenAI's limits, checked on the answer.
+// types or at request time within OpenAI's structured-output limits, the
+// strictest a backend has, checked on the answer.
 // The free functions Stream, Generate and StreamJSON ask any Chat.
 package ai
 
@@ -67,13 +68,20 @@ func (p Prompt) After(reply, dynamic string) Prompt {
 }
 
 // Chat is a chat model, however it is reached. A nil Chat means none is
-// configured.
+// configured. A backend tells its Meter every request's Usage, a failed one
+// too: its tokens as the model counted them, or, for an answer it counted
+// none for, estimated (Usage.Estimate); and its time. Callers meter nothing. It fails
+// a request with the errors below: ErrUnavailable when a later try may get
+// through, ErrRefused when a setting is wrong, ErrFailed when the model failed
+// its answer, ErrContext when the request is longer than the context.
 type Chat interface {
 	// Name is the model's name in errors, logs and usage rows.
 	Name() string
 	// Ask streams the model's answer to p, relaying its text to onDelta as it
 	// comes; with s, asking for s's JSON as SchemaMode says. A failed answer
-	// keeps the text that came before it failed.
+	// keeps the text that came before it failed. An answer that stopped at the
+	// output budget is no error but Spent; Stream and StreamJSON fail one with
+	// nothing said, or JSON cut short.
 	Ask(ctx context.Context, p Prompt, s *JSONSchema, onDelta func(string)) (Reply, error)
 	// Exchange starts a conversation from p in which the model may call tools.
 	Exchange(p Prompt, tools []Tool) Exchange
@@ -101,30 +109,38 @@ type Reply struct {
 // id.
 type Exchange interface {
 	// Next asks for the model's next reply: its text and the tools it calls,
-	// each of which Answer answers before the next reply is asked for.
+	// each of which Answer answers before the next reply is asked for. A reply
+	// that stopped at the output budget fails with ErrSpent, as its calls may
+	// be cut. A failed request adds nothing to the exchange.
 	Next(ctx context.Context) (text string, calls []ToolCall, err error)
 	// Answer gives the model result as what call returned.
 	Answer(call ToolCall, result string)
 	// Compact gives the calls short, by Key, the text short gives them in
-	// place of their results, and returns how many it replaced.
+	// place of their results, and returns how many it replaced: none where
+	// the backend cannot change what was sent.
 	Compact(short map[int]string) int
 	// Size is the next request's text in count's units, each piece counted
 	// once (count must not change), and the part of it the last request sent.
 	Size(count func(string) int) (next, sent int)
 	// Added is the pieces the last request answered did not send.
 	Added() int
-	// Used is the last reply's Usage.
+	// Used is the last reply's Usage: InTokens 0 when the model counted none.
 	Used() Usage
 }
 
-// Window is a model's context: Context tokens in all, 0 when unknown; Room of
-// them kept for the answer; Ratio, the share of Context a request may fill
-// before it is made smaller (package chat/harness), 0 leaving it to the
-// caller's default.
+// Window is a model's context, as the backend knows it: Context tokens in
+// all, 0 when unknown; Room of them kept for the answer, the output limit set
+// or DefaultOutput; Ratio, the share of Context a request may fill before it
+// is made smaller, 0 leaving it to the caller's default; Overhead, the tokens
+// the backend adds to every request that deepcode does not send (an agent's
+// own instructions and tools); and Scale, the model's tokens over the local
+// tokenizer's for the same text, at least 1 (0 is taken as 1).
 type Window struct {
-	Context int
-	Room    int
-	Ratio   float64
+	Context  int
+	Room     int
+	Ratio    float64
+	Overhead int
+	Scale    float64
 }
 
 // DefaultOutput is the room, in tokens, kept in the context for an answer
@@ -212,11 +228,13 @@ func StripThinking(s string) string { return strings.TrimSpace(thinkRe.ReplaceAl
 // ErrContext is a request the server refused as longer than the model's
 // context. Prompt and Context are the request's tokens and the context's when
 // the server gives them, else 0; Err is the refusal as the backend words it.
+// A caller that fits requests to the context learns from it (Chat.Learn).
 type ErrContext struct {
 	Prompt, Context int
 	Err             error
 }
 
+// Error is the refusal's words, or that the request was too long.
 func (e *ErrContext) Error() string {
 	if e.Err == nil {
 		return "the request is longer than the model's context"
@@ -225,17 +243,22 @@ func (e *ErrContext) Error() string {
 }
 
 // ErrUnavailable: the model could not be reached, or failed for now, unless it
-// said the request was longer than the context. A later try may get through.
+// said the request was longer than the context. A later try may get through:
+// a job waits and tries again.
 var ErrUnavailable = errors.New("the model server is unavailable")
 
 // ErrRefused: the model's server refused the request for a setting that is
-// wrong (a key, a model, a path, an account out of credit), which no retry
-// fixes.
+// wrong (a key, a model, a path, an account out of credit, a login), which no
+// retry fixes.
 var ErrRefused = errors.New("the model server refused the request")
 
-// ErrFailed: the server failed the answer it was giving and sent none of its
-// text: the model's or the server's failure, not a feature the server lacks.
+// ErrFailed: the model or its server failed the answer it was giving, or
+// refused to give one, and sent none of its text: not a feature the server
+// lacks. A structured output's turn asks again (package contract).
 var ErrFailed = errors.New("the server failed the answer")
+
+// ErrSpent: a reply cut at the output budget, whose calls may be cut too.
+var ErrSpent = errors.New("the model's reply reached the output budget: raise DEEPCODE_MAX_OUTPUT_TOKENS")
 
 // Kinded is err, which is also kind (errors.Is), its message its own.
 func Kinded(err, kind error) error { return kinded{err, kind} }
@@ -247,8 +270,11 @@ type kinded struct {
 	kind error
 }
 
+// Is reports whether target is k's kind.
 func (k kinded) Is(target error) bool { return target == k.kind }
-func (k kinded) Unwrap() error        { return k.error }
+
+// Unwrap is the error k carries.
+func (k kinded) Unwrap() error { return k.error }
 
 // WithTimeout bounds one request to the model name by d, unless d is not
 // positive. Its cause names the model and the setting, which a bare "context

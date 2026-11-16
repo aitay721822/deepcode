@@ -32,7 +32,8 @@ import (
 
 // checkUsage: the console sums the tokens of the repository's model requests per model, its wiki's and its
 // answer's: the chat model's input, its cached input as DeepSeek counts it, and its output; the embedding
-// model's input. The days asked for must be a number of days.
+// model's input; a request the fake refused (one with no source) a call it counted no tokens for, none
+// estimated as none was answered. The days asked for must be a number of days.
 func checkUsage(t *testing.T, admin *client, repoID string) {
 	t.Helper()
 	var totals []usage.Total
@@ -49,8 +50,9 @@ func checkUsage(t *testing.T, admin *client, repoID string) {
 		}
 	}
 	chat, embed := byModel["fake-chat"], byModel["fake-embed"]
-	if chat.Calls < 5 || chat.Input != 20*chat.Calls || chat.Cached != 8*chat.Calls || chat.Output != 5*chat.Calls ||
-		embed.Calls == 0 || embed.Input < embed.Calls || embed.Cached != 0 || embed.Output != 0 || len(byModel) != 2 {
+	if counted := chat.Calls - chat.Unreported; counted < 5 || chat.Input != 20*counted || chat.Cached != 8*counted || chat.Output != 5*counted ||
+		embed.Calls == 0 || embed.Input < embed.Calls || embed.Cached != 0 || embed.Output != 0 || len(byModel) != 2 ||
+		chat.Unreported == 0 || chat.EstInput+chat.EstOutput+embed.Unreported+embed.EstInput != 0 {
 		t.Fatalf("usage: %+v", totals)
 	}
 	if code := admin.get("/api/admin/usage?days=week", nil); code != http.StatusBadRequest {
@@ -427,9 +429,10 @@ func TestUpgrade(t *testing.T) {
 	}
 	defer db.Close()
 	var added int
-	db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE name IN ('migrations/022_job_progress.sql', 'migrations/023_llm_usage.sql', 'migrations/024_public_ids.sql', 'migrations/025_wiki_replan.sql')`).Scan(&added)
-	if added != 4 {
-		t.Fatalf("migrations added since v0.1.0 recorded: %d of 4", added)
+	db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE name IN ('migrations/022_job_progress.sql', 'migrations/023_llm_usage.sql', 'migrations/024_public_ids.sql', 'migrations/025_wiki_replan.sql',
+		'migrations/026_llm_usage_estimates.sql')`).Scan(&added)
+	if added != 5 {
+		t.Fatalf("migrations added since v0.1.0 recorded: %d of 5", added)
 	}
 	a, err := app.New(ctx, app.Config{
 		DataDir: data,

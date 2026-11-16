@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 	"unicode/utf8"
 
 	"github.com/openai/openai-go/v3"
@@ -27,10 +28,17 @@ func (c *Client) Ask(ctx context.Context, p ai.Prompt, s *ai.JSONSchema, onDelta
 	out := &ai.Answer{OnDelta: onDelta}
 	var used ai.Usage
 	if c.Meter != nil {
-		for _, m := range messages {
-			used.InChars += utf8.RuneCountInString(m.Content)
+		start, sent := time.Now(), make([]string, len(messages))
+		for i, m := range messages {
+			used.InChars, sent[i] = used.InChars+utf8.RuneCountInString(m.Content), m.Content
 		}
-		defer func() { used.OutChars = utf8.RuneCountInString(out.String()); c.Meter.Record(ctx, c.ModelName, used) }()
+		defer func() {
+			used.OutChars, used.Elapsed = utf8.RuneCountInString(out.String()), time.Since(start)
+			if err == nil { // a failed request's tokens are not counted: most were never spent
+				used.Estimate(c.Count, sent, []string{out.String()})
+			}
+			c.Meter.Record(ctx, c.ModelName, used)
+		}()
 	}
 	stream := c.completions
 	if c.API == Responses {
@@ -103,9 +111,6 @@ func (c *Client) completions(ctx context.Context, messages []ai.Message, s *ai.J
 	}
 	return acc.Choices[0].FinishReason == "length", nil
 }
-
-// errSpent: a reply cut at the output budget, whose calls may be cut too.
-var errSpent = errors.New("the model's reply reached the output budget: raise DEEPCODE_MAX_OUTPUT_TOKENS")
 
 // exchange is an ai.Exchange held in the SDK's params of the API its client
 // asks by and continued as the SDK's README continues one: each reply is
@@ -187,7 +192,7 @@ func (e *exchange) Next(ctx context.Context) (text string, calls []ai.ToolCall, 
 	ctx, cancel := ai.WithTimeout(ctx, e.c.Timeout, e.c.ModelName)
 	defer cancel()
 	defer func() { err = ai.Cause(ctx, err) }()
-	sent, used := e.Len(), ai.Usage{InChars: e.Chars()}
+	start, sent, used := time.Now(), e.Len(), ai.Usage{InChars: e.Chars()}
 	defer func() {
 		if err == nil { // a refused request sent nothing the next one will not
 			e.MarkSent(sent)
@@ -199,13 +204,20 @@ func (e *exchange) Next(ctx context.Context) (text string, calls []ai.ToolCall, 
 				e.Add(calls[i].Name + calls[i].Arguments)
 			}
 		}
-		used.OutChars = utf8.RuneCountInString(text)
+		out := []string{text}
 		for _, call := range calls {
-			used.OutChars += utf8.RuneCountInString(call.Arguments)
+			out = append(out, call.Arguments)
 		}
-		if e.used = used; e.c.Meter != nil {
+		for _, s := range out {
+			used.OutChars += utf8.RuneCountInString(s)
+		}
+		if used.Elapsed = time.Since(start); e.c.Meter != nil {
+			if err == nil {
+				used.Estimate(e.c.Count, e.Texts(sent), out)
+			}
 			e.c.Meter.Record(ctx, e.c.ModelName, used)
 		}
+		e.used = used
 	}()
 	if e.c.API == Responses {
 		return e.c.respond(ctx, &e.resp, &used)
@@ -240,7 +252,7 @@ func (c *Client) complete(ctx context.Context, params *openai.ChatCompletionNewP
 	case len(completion.Choices) == 0:
 		return "", nil, errors.New("the model sent no reply")
 	case completion.Choices[0].FinishReason == "length":
-		return "", nil, errSpent
+		return "", nil, ai.ErrSpent
 	}
 	msg := completion.Choices[0].Message
 	params.Messages = append(params.Messages, msg.ToParam())

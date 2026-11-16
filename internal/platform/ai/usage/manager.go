@@ -10,21 +10,20 @@ import (
 // Total is one repository's spend on one model.
 type Total = store.Total
 
-// Manager is the Meter that keeps every request's tokens, summed per
-// repository, day and model, and reads the sums back for the admin console.
+// Manager is the Meter that keeps every request, summed per repository, day
+// and model, and reads the sums back for the admin console.
 type Manager struct{ Store *store.Store }
 
-// Record counts u's tokens for the repository ctx names (0 when none) and the
-// model. A request the server counted no tokens for, such as one refused, is
-// left out. Counting outlives ctx, as the tokens were spent however the
-// request ended, and its failure is logged, never the request's.
+// Record counts a request of the model for the repository ctx names (0 when
+// none): its tokens, or, when the server counted none (a subscription agent's
+// answer, a refused request), an unreported call, with the tokens estimated
+// for an answer; and its time. Counting outlives ctx, as the request was made
+// however it ended, and its failure is logged, never the request's.
 func (m *Manager) Record(ctx context.Context, model string, u Usage) {
-	if u.InTokens == 0 && u.OutTokens == 0 && u.CachedTokens == 0 {
-		return
-	}
-	row := store.Row{Repository: Repository(ctx), Model: model, In: u.InTokens, Cached: u.CachedTokens, Out: u.OutTokens}
+	row := store.Row{Repository: Repository(ctx), Model: model, In: u.InTokens, Cached: u.CachedTokens, Out: u.OutTokens,
+		Unreported: !u.Reported(), EstIn: u.EstIn, EstOut: u.EstOut, Elapsed: u.Elapsed}
 	if err := m.Store.Add(context.WithoutCancel(ctx), row); err != nil {
-		log.Printf("usage: counting %d tokens of %s for repository %d: %v", u.InTokens+u.OutTokens, model, row.Repository, err)
+		log.Printf("usage: counting a request of %s for repository %d: %v", model, row.Repository, err)
 	}
 }
 

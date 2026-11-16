@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -17,6 +18,14 @@ func (c *Client) Embed(ctx context.Context, texts []string) (_ [][]float32, err 
 	ctx, cancel := ai.WithTimeout(ctx, c.Timeout, c.ModelName)
 	defer cancel()
 	defer func() { err = ai.Cause(ctx, err) }() // before cancel, which would end ctx too
+	var used ai.Usage
+	if c.Meter != nil {
+		start := time.Now()
+		defer func() {
+			used.Elapsed = time.Since(start)
+			c.Meter.Record(ctx, c.ModelName, used)
+		}()
+	}
 	var raw *http.Response
 	svc := openai.NewEmbeddingService(c.options()...)
 	res, err := svc.New(ctx, openai.EmbeddingNewParams{
@@ -26,9 +35,7 @@ func (c *Client) Embed(ctx context.Context, texts []string) (_ [][]float32, err 
 	if err != nil {
 		return nil, c.fail("/embeddings", raw, err)
 	}
-	if c.Meter != nil {
-		c.Meter.Record(ctx, c.ModelName, usage.Embedding(res.Usage))
-	}
+	used = usage.Embedding(res.Usage)
 	vecs := make([][]float32, len(texts))
 	for _, d := range res.Data {
 		if d.Index < 0 || d.Index >= int64(len(vecs)) {

@@ -90,6 +90,35 @@ func TestThreshold(t *testing.T) {
 	}
 }
 
+// windowed is a Chat of window w, which asks nothing: the threshold's arithmetic alone.
+type windowed struct {
+	ai.Chat
+	w ai.Window
+}
+
+// Window is w.
+func (c windowed) Window() ai.Window { return c.w }
+
+// TestOverhead: the tokens a backend adds to every request come off the threshold, and its Scale divides what is
+// left, in the local tokenizer's tokens; Share gives that out. 80,000 of a context of 100,000 less 20,000, over 1.5,
+// is 40,000; the room bounds the share first; a Scale of 0 is 1.
+func TestOverhead(t *testing.T) {
+	for _, tc := range []struct {
+		w    ai.Window
+		want int
+	}{
+		{ai.Window{Context: 100000, Room: 8192, Ratio: 0.8, Scale: 1}, 80000},
+		{ai.Window{Context: 100000, Room: 8192, Ratio: 0.8, Overhead: 20000, Scale: 1.5}, 40000},
+		{ai.Window{Context: 100000, Room: 30000, Ratio: 0.8, Overhead: 20000, Scale: 2}, 25000},
+		{ai.Window{Context: 100000, Room: 8192, Ratio: 0.8, Overhead: 20000}, 60000},
+	} {
+		f := New(windowed{w: tc.w}, o200k)
+		if sh, err := f.Share(1000, Shares{Evidence: 1 << 20}, false); f.Threshold() != tc.want || err != nil || sh.Evidence != tc.want-1000 {
+			t.Errorf("%+v: threshold %d, shares %+v %v", tc.w, f.Threshold(), sh, err)
+		}
+	}
+}
+
 // TestSummaryRoom: a summary's request is sized as it is sent
 // (ai.Format.Prompt), its schema in it under ai.SchemaPrompt: a context that
 // leaves its one message 60 tokens asks the model, a token less does not.

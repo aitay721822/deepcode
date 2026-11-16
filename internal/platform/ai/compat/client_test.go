@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/ai/usage"
@@ -29,6 +30,12 @@ func serve(t *testing.T, status int, body string) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// untimed is u with its time left out, to compare.
+func untimed(u ai.Usage) ai.Usage {
+	u.Elapsed = 0
+	return u
 }
 
 // A server that repeats the key it refused gets none of it into the error: not whole, not where the 2048-byte cut
@@ -180,7 +187,8 @@ func TestFormat(t *testing.T) {
 
 // TestResponses: by the Responses API an answer is the output text's deltas, whole once the response completed
 // or ended incomplete; a failed response, an error event and a stream cut short are errors, and an answer that
-// spent the whole budget on reasoning says so. The request asks for nothing stored.
+// spent the whole budget on reasoning says so. The request asks for nothing stored. An answer the server counted
+// no tokens for is metered with its tokens estimated by Count; one it counted for, or that failed, with none.
 func TestResponses(t *testing.T) {
 	ev := func(typ, rest string) string { return `data: {"type":"` + typ + `"` + rest + "}\n\n" }
 	delta := ev("response.output_text.delta", `,"delta":"hi"`)
@@ -203,7 +211,8 @@ func TestResponses(t *testing.T) {
 			w.Write([]byte(tc.body))
 		}))
 		var got []ai.Usage
-		c := &Client{BaseURL: srv.URL + "/v1", ModelName: "m", API: Responses, MaxTokens: 50, Meter: usage.Func(func(_ context.Context, _ string, u ai.Usage) { got = append(got, u) })}
+		c := &Client{BaseURL: srv.URL + "/v1", ModelName: "m", API: Responses, MaxTokens: 50, Count: utf8.RuneCountInString,
+			Meter: usage.Func(func(_ context.Context, _ string, u ai.Usage) { got = append(got, untimed(u)) })}
 		answer, err := ai.Generate(context.Background(), c, ai.Prompt{Static: "be brief", Dynamic: "größe"})
 		srv.Close()
 		if answer != tc.want && tc.fails == "" || tc.fails != "" && (err == nil || !strings.Contains(err.Error(), tc.fails)) || tc.fails == "" && err != nil {
@@ -214,20 +223,23 @@ func TestResponses(t *testing.T) {
 				t.Errorf("%s: the request lacks %s: %s", name, w, body)
 			}
 		}
-		if name == "completed" && (len(got) != 1 || got[0] != (ai.Usage{InChars: 13, OutChars: 2, InTokens: 12, OutTokens: 3, CachedTokens: 8})) {
+		if name == "completed" && (len(got) != 1 || got[0] != (ai.Usage{InChars: 13, OutChars: 2, InTokens: 12, OutTokens: 3, CachedTokens: 8})) ||
+			name == "incomplete" && (len(got) != 1 || got[0] != (ai.Usage{InChars: 13, OutChars: 2, EstIn: 13, EstOut: 2})) ||
+			name == "failed" && (len(got) != 1 || got[0] != (ai.Usage{InChars: 13, OutChars: 2})) {
 			t.Errorf("measured %+v", got)
 		}
 	}
 }
 
 // TestMeasure: a metered answer asks for the server's token counts and tells the Meter them with its characters,
-// the reasoning not counted, DeepSeek's cached tokens read (package usage), its model and its context's
-// repository; an unmetered one asks for none.
+// the reasoning not counted, DeepSeek's cached tokens read (package usage), its time, its model and its
+// context's repository; an unmetered one asks for none.
 func TestMeasure(t *testing.T) {
 	var asked atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		asked.Store(strings.Contains(string(body), `"include_usage":true`))
+		time.Sleep(20 * time.Millisecond)
 		w.Write([]byte(`data: {"choices":[{"delta":{"reasoning_content":"hmm, "}}]}` + "\n\n" +
 			`data: {"choices":[{"delta":{"content":"héllo"},"finish_reason":"stop"}]}` + "\n\n" +
 			`data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"prompt_cache_hit_tokens":9,"prompt_tokens_details":{"cached_tokens":8}}}` +
@@ -236,12 +248,12 @@ func TestMeasure(t *testing.T) {
 	defer srv.Close()
 	var got []string
 	c := &Client{BaseURL: srv.URL, ModelName: "m", Meter: usage.Func(func(ctx context.Context, model string, u ai.Usage) {
-		got = append(got, fmt.Sprint(usage.Repository(ctx), model, u))
+		got = append(got, fmt.Sprint(usage.Repository(ctx), model, untimed(u), u.Elapsed >= 20*time.Millisecond))
 	})}
 	if answer, err := ai.Generate(usage.WithRepository(context.Background(), 7), c, ai.Prompt{Dynamic: "größe"}); err != nil || answer != "héllo" {
 		t.Fatalf("%q %v", answer, err)
 	}
-	if want := fmt.Sprint(7, "m", ai.Usage{InChars: 5, OutChars: 5, InTokens: 12, OutTokens: 3, CachedTokens: 9}); !asked.Load() || len(got) != 1 || got[0] != want {
+	if want := fmt.Sprint(7, "m", ai.Usage{InChars: 5, OutChars: 5, InTokens: 12, OutTokens: 3, CachedTokens: 9}, true); !asked.Load() || len(got) != 1 || got[0] != want {
 		t.Fatalf("asked %v, measured %q, want %q", asked.Load(), got, want)
 	}
 	c.Meter = nil
@@ -271,7 +283,7 @@ func TestEmbedAnswerSize(t *testing.T) {
 }
 
 // TestEmbedOrder: vectors are placed by their index, whatever order the server lists them in, and their tokens
-// metered; the key goes as a bearer token; a refused request (4xx) is not tried again.
+// metered; the key goes as a bearer token; a refused request (4xx) is not tried again, and is metered with none.
 func TestEmbedOrder(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -285,13 +297,14 @@ func TestEmbedOrder(t *testing.T) {
 	}))
 	defer srv.Close()
 	var got []ai.Usage
-	meter := usage.Func(func(_ context.Context, _ string, u ai.Usage) { got = append(got, u) })
+	meter := usage.Func(func(_ context.Context, _ string, u ai.Usage) { got = append(got, untimed(u)) })
 	vecs, err := (&Client{BaseURL: srv.URL, APIKey: "k", ModelName: "m", Meter: meter}).Embed(context.Background(), []string{"a", "b"})
 	if err != nil || len(vecs) != 2 || vecs[0][0] != 1 || vecs[1][0] != 2 || len(got) != 1 || got[0] != (ai.Usage{InTokens: 4}) {
 		t.Fatalf("got %v %v, metered %+v", vecs, err, got)
 	}
-	if _, err := (&Client{BaseURL: srv.URL, APIKey: "wrong", ModelName: "m"}).Embed(context.Background(), []string{"a"}); err == nil || calls.Load() != 2 {
-		t.Fatalf("a refused key: %v, after %d requests in all", err, calls.Load())
+	if _, err := (&Client{BaseURL: srv.URL, APIKey: "wrong", ModelName: "m", Meter: meter}).Embed(context.Background(), []string{"a"}); err == nil ||
+		calls.Load() != 2 || len(got) != 2 || got[1] != (ai.Usage{}) {
+		t.Fatalf("a refused key: %v, after %d requests in all, metered %+v", err, calls.Load(), got)
 	}
 }
 
@@ -419,7 +432,9 @@ func TestExchange(t *testing.T) {
 			sent = append(sent, string(b))
 		}))
 		var measured []int
-		e := (&Client{BaseURL: srv.URL, ModelName: "m", API: api, Meter: usage.Func(func(_ context.Context, _ string, u ai.Usage) { measured = append(measured, u.InChars, u.OutChars) })}).
+		e := (&Client{BaseURL: srv.URL, ModelName: "m", API: api, Count: utf8.RuneCountInString, Meter: usage.Func(func(_ context.Context, _ string, u ai.Usage) {
+			measured = append(measured, u.InChars, u.OutChars, u.EstIn-u.InChars, u.EstOut-u.OutChars) // no usage reported: estimated, in characters here
+		})}).
 			Exchange(ai.Prompt{Dynamic: "how?"}, []ai.Tool{tool})
 		text, calls, err := e.Next(context.Background())
 		if err != nil || text != "looking" || len(calls) != 2 || calls[0] != (ai.ToolCall{ID: "c1", Name: "search", Arguments: `{"query":"router"}`}) || calls[1] != (ai.ToolCall{ID: "c1", Name: "done", Key: 1}) {
@@ -437,13 +452,13 @@ func TestExchange(t *testing.T) {
 		if text, calls, err = e.Next(context.Background()); err != nil || text != "enough" || len(calls) != 0 {
 			t.Fatalf("%s, second: %q %+v %v", api, text, calls, err)
 		}
-		if _, _, err = e.Next(context.Background()); !errors.Is(err, errSpent) {
+		if _, _, err = e.Next(context.Background()); !errors.Is(err, ai.ErrSpent) {
 			t.Errorf("%s, cut: %v", api, err)
 		}
 		srv.Close()
 		// how? 4 and the tool's definition, d; looking, search {"query":"router"} and done 35; the results 17,
-		// as compacted; enough 6. Out: the text and the arguments.
-		if d := measured[0] - 4; d <= 0 || !slices.Equal(measured, []int{4 + d, 25, 56 + d, 6, 62 + d, 0}) {
+		// as compacted; enough 6. Out: the text and the arguments. Estimated alike, but the cut reply: none.
+		if d := measured[0] - 4; d <= 0 || !slices.Equal(measured, []int{4 + d, 25, 0, 0, 56 + d, 6, 0, 0, 62 + d, 0, -62 - d, 0}) {
 			t.Errorf("%s: measured %v", api, measured)
 		}
 		var first, second struct {

@@ -53,9 +53,13 @@ type Client struct {
 	// server keeps a usage.Manager here, the bench its own; a server that
 	// rejects the option fails the request.
 	Meter usage.Meter
+	// Count estimates the tokens of a chat model's answer the server counted
+	// none for (usage.Usage.Estimate); nil estimates none. A failed request,
+	// and an embedding, has none estimated.
+	Count func(string) int
 	// Context is the model's context in tokens, 0 when not set (Window).
 	// CompactRatio is the share of it a request may fill before it is made
-	// smaller (package chat/harness); 0 means 0.8.
+	// smaller (ai.Window.Ratio); 0 leaves it to the caller's default.
 	Context      int
 	CompactRatio float64
 
@@ -77,11 +81,12 @@ func (c *Client) SchemaMode() string {
 
 // Window is the model's context: Context, or the smaller context a server
 // reported (Learn), or 0 when neither is known; the room kept for the answer,
-// MaxTokens, else ai.DefaultOutput; and CompactRatio.
+// MaxTokens, else ai.DefaultOutput; and CompactRatio. A server adds nothing to
+// what it is sent, and its tokens are the ones counted: Overhead 0, Scale 1.
 func (c *Client) Window() ai.Window {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	w := ai.Window{Context: c.Context, Room: cmp.Or(c.MaxTokens, ai.DefaultOutput), Ratio: c.CompactRatio}
+	w := ai.Window{Context: c.Context, Room: cmp.Or(c.MaxTokens, ai.DefaultOutput), Ratio: c.CompactRatio, Scale: 1}
 	if c.learned > 0 && (c.Context == 0 || c.learned < c.Context) {
 		w.Context = c.learned
 	}

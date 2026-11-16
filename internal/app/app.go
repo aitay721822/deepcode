@@ -81,15 +81,17 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	if err != nil {
 		return nil, err
 	}
-	meter := &usage.Manager{Store: &usagestore.Store{DB: db}} // every model request's tokens, for the admin console
-	chatP, embedP := Providers(cfg, meter)
+	meter := &usage.Manager{Store: &usagestore.Store{DB: db}} // every model request, for the admin console
 	var counter *tokens.Counter
-	if chatP != nil {
+	var count func(string) int // estimates the tokens of a request the server counted none for
+	if cfg.ChatModel != "" {
 		if counter, err = tokens.Load(cfg.ChatTokenizer); err != nil {
 			return nil, fmt.Errorf("chat tokenizer (DEEPCODE_CHAT_TOKENIZER): %w", err)
 		}
 		log.Printf("chat: the model's tokens are counted by %s", counter.Name) // o200k_base: set chat_tokenizer for a model with its own
+		count = counter.Count
 	}
+	chatP, embedP := Providers(cfg, meter, count)
 	mem := cache.New(cfg.CacheMB << 20)
 	vectors := &vectorstore.SQLite{DB: db}
 	graphs := &graph.Graph{Store: &graphstore.Store{DB: db}}
@@ -156,13 +158,14 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 // Providers builds the configured models, each telling meter its requests'
-// usage; nil means turned off. The retrieval eval and the bench embed with the
-// same client (test/eval Embedder).
-func Providers(cfg Config, meter usage.Meter) (chatP ai.Chat, embedP *compat.Client) {
+// usage, the chat model's answers the server counted no tokens for estimated
+// by count (nil estimates none); nil means turned off. The retrieval eval and the bench
+// embed with the same client (test/eval Embedder).
+func Providers(cfg Config, meter usage.Meter, count func(string) int) (chatP ai.Chat, embedP *compat.Client) {
 	if cfg.ChatModel != "" {
 		chatP = &compat.Client{BaseURL: cfg.ChatURL, APIKey: cfg.ChatKey, ModelName: cfg.ChatModel, API: cfg.ChatAPI, Schema: cfg.ChatSchema,
 			MaxTokens: cfg.MaxOutputTokens, ReasoningEffort: cfg.ReasoningEffort, Temperature: cfg.Temperature, Timeout: cfg.LLMTimeout, RPM: cfg.LLMRPM,
-			Context: cfg.ChatContext, CompactRatio: cfg.CompactRatio, Meter: meter}
+			Context: cfg.ChatContext, CompactRatio: cfg.CompactRatio, Meter: meter, Count: count}
 	}
 	if cfg.EmbedModel != "" {
 		embedP = &compat.Client{BaseURL: cfg.EmbedURL, APIKey: cfg.EmbedKey, ModelName: cfg.EmbedModel,

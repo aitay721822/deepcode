@@ -90,6 +90,9 @@ type wikiRun struct {
 	OutChars  int     `json:"outputChars"`
 	// CachedTokens are the input tokens the server read from its prompt cache.
 	CachedTokens int `json:"cachedTokens"`
+	// EstInTokens and EstOutTokens are the tokens of the calls the server counted none for, as estimated.
+	EstInTokens  int `json:"estInputTokens,omitempty"`
+	EstOutTokens int `json:"estOutputTokens,omitempty"`
 	// Planning is how the model's plan of the pages went, nil when they were carried over.
 	Planning *wiki.Planning `json:"planning,omitempty"`
 	// Touched counts the carried pages written again, by why (wiki.Generator.Touched).
@@ -191,7 +194,7 @@ func (rep report) markdown() string {
 				planning = fmt.Sprintf("%.1f s, %d requests", s.Seconds, s.Requests)
 			}
 			p("| %s | %s | %s | %d | %s | %s | %s | %d | %d | %s | %s | %s |", r.Repo, cmp.Or(strings.Join(times, " · "), took(w)), count(r, "base pages", w.Pages), w.Calls,
-				reported(w.InTokens), cached, reported(w.OutTokens), w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations), lines, planning)
+				reported(w.InTokens, w.EstInTokens), cached, reported(w.OutTokens, w.EstOutTokens), w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations), lines, planning)
 		}
 	}
 	p("\n## Update by one commit (base → head)\n\n| Repository | Changed files | Index | Wiki | Pages rewritten | Model calls |\n|---|---|---|---|---|---|")
@@ -437,9 +440,14 @@ func took(w *wikiRun) string {
 	return fmt.Sprintf("%.0f s", w.Seconds)
 }
 
-// reported shows a token count, or that the server reported none.
-func reported(n int) string {
-	if n == 0 {
+// reported shows a token count, or that the server reported none, and est tokens estimated where it counted none.
+func reported(n, est int) string {
+	switch {
+	case est > 0 && n > 0:
+		return fmt.Sprintf("%d + ≈%d (est.)", n, est)
+	case est > 0:
+		return fmt.Sprintf("≈%d (est.)", est)
+	case n == 0:
 		return "–"
 	}
 	return fmt.Sprint(n)
@@ -465,7 +473,7 @@ func TestMarkdown(t *testing.T) {
 		{Question: "u", Citations: 1, FirstTokenSeconds: 1, AnswerStartSeconds: 1, Seconds: 2, Rounds: 1, Trace: &trace.Trace{Gathered: 0.6, Shown: make([]trace.Source, 1), Evicted: make([]trace.Source, 1), Resolved: 1}}} // its judge failed; no reply, no usage
 	ok.WikiRuns, ok.Tree = []wikiRun{{Parallel: 1, Seconds: 20}, {Parallel: 2, Seconds: 12}}, []string{"- 1 Overview", "- 2 Core", "  - 2.1 Mux"}
 	ok.Pages, ok.Topics, ok.CitationSpan, ok.PageCitations = 10, &coverage{Topics: 4, Covered: 3, Missing: []string{"SSE"}, ToolingPages: 2}, citationSpan{3, 40}, 7
-	uncited, uncounted := result{Repo: "uncited", Wiki: &wikiRun{}}, result{Repo: "uncounted", Wiki: &wikiRun{}, Failed: []string{"page citations"}}
+	uncited, uncounted := result{Repo: "uncited", Wiki: &wikiRun{EstInTokens: 90, OutTokens: 4, EstOutTokens: 2}}, result{Repo: "uncounted", Wiki: &wikiRun{}, Failed: []string{"page citations"}}
 	md := report{Repos: []result{ok, broken, uncited, uncounted}}.markdown()
 	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 (1 by skeleton) |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
 		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 3.0 s | 9.5 s | 20.0 s | 2 | fail: no Mount | yes | other |", "| ok | u | 1.0 s | 1.0 s | 2.0 s | 1 | pass | not judged | not judged |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
@@ -473,7 +481,8 @@ func TestMarkdown(t *testing.T) {
 		"The judge is advisory, hand labels gate; its measured error: " + judgeError + ".",
 		"Evidence budget: 4 hits evicted, 1 refused; 3 citation references resolved to a path that differs from the one written by leading folders.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |",
 		"Answer decode |\n|---|---|---|---|---|---|---|\n| ok | 2 | 1.0 | 1.0 s | 0.7 s | 2.0 s | 10.0 tokens/s |\n\n**broken errors:**", "| 0 | 0 | 7 | 3, at most 40 | 4.2 s, 9 requests |", "| 0 | 0 | failed | failed | 1.0 s, 2 requests |",
-		"| Repository | Pages | DeepWiki | Thin | Crowded | Projects without a page | Ceiling | Contracts |\n|---|---|---|---|---|---|---|---|\n", "| ok | 10 | 28 | 1 | 0 | 1: svc/ | 80 wanted, 64 planned (limit 64) | flat.json 1/0/0, section.missing 2/1/0 |", "| broken | 3 | 0 | 0 | 0 | 0 | – | none broken |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |"} {
+		"| Repository | Pages | DeepWiki | Thin | Crowded | Projects without a page | Ceiling | Contracts |\n|---|---|---|---|---|---|---|---|\n", "| ok | 10 | 28 | 1 | 0 | 1: svc/ | 80 wanted, 64 planned (limit 64) | flat.json 1/0/0, section.missing 2/1/0 |", "| broken | 3 | 0 | 0 | 0 | 0 | – | none broken |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |",
+		"| uncited | 0 s | 0 | 0 | ≈90 (est.) | – | 4 + ≈2 (est.) |"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the report lacks %q:\n%s", want, md)
 		}

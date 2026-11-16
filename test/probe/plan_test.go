@@ -107,7 +107,7 @@ func TestPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.ChatAPI = compat.Completions
-	chat, _ := app.Providers(cfg, nil)
+	chat, _ := app.Providers(cfg, nil, nil)
 	model, _ := chat.(*compat.Client)
 	if model == nil {
 		t.Fatal("the probe needs DEEPCODE_CHAT_MODEL")

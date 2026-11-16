@@ -1,12 +1,14 @@
 // Package usage is what model requests cost: the tokens each server counted,
 // read from its API's own fields in one place (Chat, Responses, Embedding),
-// told to a Meter with the request's context, and kept per repository by
-// Manager for the admin console.
+// or estimated by a local tokenizer for an answer it counted none for
+// (Estimate), and the request's time, told to a Meter with the request's
+// context, and kept per repository by Manager for the admin console.
 package usage
 
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
@@ -15,15 +17,38 @@ import (
 // Usage is one request's size: the characters sent and received, and the
 // tokens the server counted, 0 when it reports none. CachedTokens are the
 // part of InTokens the server read from its prompt cache: the prefix it had
-// seen.
+// seen. EstIn and EstOut are the tokens a local tokenizer counted in what was
+// sent and received for an answer the server counted none for (Estimate);
+// Elapsed is how long the request took, a failed one too.
 type Usage struct {
 	InChars, OutChars, InTokens, OutTokens, CachedTokens int
+	EstIn, EstOut                                        int
+	Elapsed                                              time.Duration
 }
 
 // Add adds o to u, field by field.
 func (u *Usage) Add(o Usage) {
 	u.InChars, u.OutChars = u.InChars+o.InChars, u.OutChars+o.OutChars
 	u.InTokens, u.OutTokens, u.CachedTokens = u.InTokens+o.InTokens, u.OutTokens+o.OutTokens, u.CachedTokens+o.CachedTokens
+	u.EstIn, u.EstOut, u.Elapsed = u.EstIn+o.EstIn, u.EstOut+o.EstOut, u.Elapsed+o.Elapsed
+}
+
+// Reported reports whether the server counted any of u's tokens.
+func (u Usage) Reported() bool { return u.InTokens > 0 || u.OutTokens > 0 || u.CachedTokens > 0 }
+
+// Estimate counts, by count, the tokens of in, the texts sent, and of out,
+// the texts received, as EstIn and EstOut, when the server counted none and
+// count is not nil.
+func (u *Usage) Estimate(count func(string) int, in, out []string) {
+	if u.Reported() || count == nil {
+		return
+	}
+	for _, s := range in {
+		u.EstIn += count(s)
+	}
+	for _, s := range out {
+		u.EstOut += count(s)
+	}
 }
 
 // Chat is the tokens of a Chat Completions usage, or of one streamed chunk's.
