@@ -38,7 +38,6 @@ import (
 	"deepcode/internal/knowledge/wiki"
 	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
-	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/ai/tokens"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/events"
@@ -55,6 +54,7 @@ import (
 	"deepcode/internal/repo/index/indexer"
 	indexstore "deepcode/internal/repo/index/indexer/store"
 	"deepcode/internal/repo/index/indexer/vectorstore"
+	"deepcode/test/bench/score"
 	"deepcode/test/bench/shape"
 	"deepcode/test/bench/trace"
 	"deepcode/test/eval"
@@ -95,6 +95,7 @@ type rig struct {
 	ret      *retrieval.Retriever
 	wiki     *wiki.Generator // nil without a chat model
 	chat     *chat.Service
+	judge    ai.Chat // the answers' (score.Model)
 	meter    *meter
 	parallel []int    // the first wiki's runs, by pages written at a time
 	last     *wikiRun // the wiki being written, which the generator's hooks tell of its plan and carried pages
@@ -126,8 +127,11 @@ func TestBench(t *testing.T) {
 		}
 		r.parallel = append(r.parallel, n)
 	}
-	rep := report{Started: time.Now().UTC().Format(time.RFC3339), Model: os.Getenv("DEEPCODE_CHAT_MODEL"),
-		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Temperature: os.Getenv("DEEPCODE_TEMPERATURE"), ChatSchema: schema(), Deepcode: head(), Judged: true}
+	rep := report{Started: time.Now().UTC().Format(time.RFC3339), ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"),
+		Temperature: os.Getenv("DEEPCODE_TEMPERATURE"), Deepcode: head(), Judged: true, JudgeModel: os.Getenv("DEEPCODE_JUDGE_MODEL")}
+	if r.chat != nil { // an agent by its name and model: claude-agent-acp/default
+		rep.Model, rep.ChatSchema = r.chat.Chat.Name(), r.chat.Chat.SchemaMode()
+	}
 	if r.ret.Embed != nil {
 		rep.EmbedModel = r.ret.Embed.ModelName
 	}
@@ -179,43 +183,29 @@ func setup(t *testing.T, work string) *rig {
 	r.cat = &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: jobs.New(&jobstore.Store{DB: db}, bus, 2*time.Hour), Git: gitc, Servers: servers}
 	r.ix = &indexer.Indexer{Store: &indexstore.Store{DB: db}, Graph: graphs, Git: gitc, Servers: servers, Events: bus,
 		Embed: embed, Vectors: vectors, Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
-	if llm := chatModel(t, r.meter); llm != nil {
+	counter, err := tokens.Load(os.Getenv("DEEPCODE_CHAT_TOKENIZER")) // OpenAI's o200k_base when unset, as serve counts
+	if err != nil {
+		t.Fatalf("DEEPCODE_CHAT_TOKENIZER: %v", err)
+	}
+	llm, err := eval.Chat(work, r.meter, counter.Count) // a server's, or an agent's on its subscription
+	if err != nil {
+		t.Fatal(err)
+	}
+	if llm != nil {
+		if c, ok := llm.(interface{ Close() }); ok { // an agent's process ends with the bench
+			t.Cleanup(c.Close)
+		}
 		pages, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), "0")) // 0, the default, when unset
-		counter, err2 := tokens.Load(os.Getenv("DEEPCODE_CHAT_TOKENIZER"))            // OpenAI's o200k_base when unset, as serve counts
-		if err != nil || pages < 0 || err2 != nil {
-			t.Fatalf("DEEPCODE_WIKI_MAX_PAGES holds %q, which is no number of pages; DEEPCODE_CHAT_TOKENIZER: %v", os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), err2)
+		if err != nil || pages < 0 {
+			t.Fatalf("DEEPCODE_WIKI_MAX_PAGES holds %q, which is no number of pages", os.Getenv("DEEPCODE_WIKI_MAX_PAGES"))
 		}
 		if os.Getenv("DEEPCODE_BENCH_WIKI") != "0" {
 			r.wiki = &wiki.Generator{Store: &wikistore.Store{DB: db}, Graph: graphs, Catalog: r.cat, Retriever: r.ret, Chat: llm, Language: "English", MaxPages: pages,
 				Planned: func(p wiki.Planning) { r.last.Planning = &p }, Touched: func(_, why string) { r.last.Touched[why]++ }}
 		}
-		r.chat = &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: r.cat, Retriever: r.ret, Chat: llm, Tokens: counter}
+		r.chat, r.judge = &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: r.cat, Retriever: r.ret, Chat: llm, Tokens: counter}, score.Model(llm)
 	}
 	return r
-}
-
-// chatModel is the chat model the DEEPCODE_CHAT_* settings name, as serve
-// reads them, telling measure every answer's usage; nil without one.
-func chatModel(t *testing.T, measure ai.Meter) *compat.Client {
-	model := os.Getenv("DEEPCODE_CHAT_MODEL")
-	if model == "" {
-		return nil
-	}
-	window, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_CHAT_CONTEXT"), "0")) // 0, unknown, when unset
-	ratio, err2 := strconv.ParseFloat(cmp.Or(os.Getenv("DEEPCODE_COMPACT_RATIO"), "0.8"), 64)
-	llm := &compat.Client{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model, Schema: schema(),
-		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Meter: measure, Context: window, CompactRatio: ratio}
-	if s := os.Getenv("DEEPCODE_TEMPERATURE"); s != "" {
-		temp, err := strconv.ParseFloat(s, 64)
-		if err != nil || !(temp >= 0 && temp <= 2) { // NaN too
-			t.Fatalf("DEEPCODE_TEMPERATURE holds %q, which is no number from 0 to 2", s)
-		}
-		llm.Temperature = &temp
-	}
-	if err != nil || window < 0 || window > 0 && window <= llm.Window().Room || err2 != nil || !(ratio > 0 && ratio <= 1) || llm.Schema != ai.SchemaServer && llm.Schema != ai.SchemaPrompt { // NaN too
-		t.Fatalf("DEEPCODE_CHAT_CONTEXT %q, DEEPCODE_COMPACT_RATIO %q, DEEPCODE_CHAT_SCHEMA %q: want none or more than %d tokens, a ratio above 0 and at most 1, and server or prompt", os.Getenv("DEEPCODE_CHAT_CONTEXT"), os.Getenv("DEEPCODE_COMPACT_RATIO"), llm.Schema, llm.Window().Room)
-	}
-	return llm
 }
 
 // measure indexes tg at base and writes its wiki, updates both to head, then
@@ -359,7 +349,7 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 			}
 			if a.Error != "" {
 				fail(fmt.Sprintf("question %d", n+1), errors.New(a.Error))
-			} else if v, err := judge(ctx, r.chat.Chat, a.Answer); err != nil {
+			} else if v, err := judge(ctx, r.judge, a.Answer); err != nil {
 				fail(fmt.Sprintf("judging question %d", n+1), err)
 			} else {
 				a.SelfTalk, a.SelfTalkSentence, a.Language, a.OtherLanguage = v.SelfTalk, v.Sentence, v.Language, !speaks(v.Language, q.language())

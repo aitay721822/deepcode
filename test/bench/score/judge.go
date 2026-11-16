@@ -3,9 +3,12 @@ package score
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
+	"time"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 )
 
 // Verdict is the judge's reading of a text.
@@ -36,6 +39,18 @@ language is the language the answer is written in, read from the answer alone: t
 // JudgeError is the judge's measured error against blind hand labels of 331
 // answers: its counts are advisory, the hand labels gate.
 const JudgeError = "15 extras on 268 clean answers (2 borderline), 1 borderline miss of 63 positives, 0 failures, language 330 of 331 (an English answer named German)"
+
+// Model is the judge DEEPCODE_JUDGE_MODEL names on the server at
+// DEEPCODE_JUDGE_BASE_URL with DEEPCODE_JUDGE_API_KEY, its schema in the
+// prompt, as any server takes one, or chat, which judges when none is named:
+// a run on an agent is judged by a server, not by the agent it measures.
+func Model(chat ai.Chat) ai.Chat {
+	if name := os.Getenv("DEEPCODE_JUDGE_MODEL"); name != "" {
+		return &compat.Client{BaseURL: os.Getenv("DEEPCODE_JUDGE_BASE_URL"), APIKey: os.Getenv("DEEPCODE_JUDGE_API_KEY"), ModelName: name,
+			Schema: ai.SchemaPrompt, Timeout: 5 * time.Minute}
+	}
+	return chat
+}
 
 // Judge asks model for its verdict on answer, which it reads alone: the
 // question is not sent, so the language it names is the answer's own, never

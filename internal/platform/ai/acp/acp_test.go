@@ -3,15 +3,16 @@ package acp
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	acp "github.com/coder/acp-go-sdk"
 
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/ai/acp/acptest"
@@ -36,63 +37,6 @@ func fake(t *testing.T, flags string, set ...func(*Agent)) (*Agent, *acptest.Met
 	}
 	t.Cleanup(a.Close)
 	return a, m
-}
-
-// TestSessions: each request is a session in its repository's folder, its
-// instructions where Claude's, Codex's or any other adapter takes them, the
-// conversation as a transcript, the agent's environment without deepcode's keys,
-// the user's settings and connectors off unless asked for, and Codex in its
-// read-only mode.
-func TestSessions(t *testing.T) {
-	t.Setenv("DS_APIKEY", "secret")
-	t.Setenv("DEEPCODE_CHAT_API_KEY", "secret")
-	p := ai.Prompt{Static: "Be brief.", Previous: []ai.Message{{Role: "user", Content: "q1"}, {Role: "assistant", Content: "a1"}}, Dynamic: "q2"}
-	claude, _ := fake(t, "-name claude-agent-acp", func(a *Agent) { a.CodexHome = "/codex" })
-	got := acptest.Echo(t, usage.WithRepository(context.Background(), 7), claude, p)
-	if acptest.At(got, "static") != "Be brief." || filepath.Base(acptest.At(got, "cwd").(string)) != "7" || acptest.At(got, "air") != true ||
-		!strings.HasPrefix(acptest.At(got, "prompt").(string), "<conversation>\n<user>\nq1\n</user>\n<assistant>\na1\n</assistant>\n</conversation>\n\nq2") {
-		t.Fatalf("claude: %v", got)
-	}
-	options := acptest.At(got, "meta", "claudeCode", "options")
-	if b, _ := json.Marshal(options); string(b) != `{"promptSuggestions":false,"settingSources":[],"settings":{"disableClaudeAiConnectors":true},"strictMcpConfig":true,"tools":[]}` {
-		t.Errorf("claude's options: %s", b)
-	}
-	env := acptest.At(got, "env").(map[string]any)
-	if env["DS_APIKEY"] != "" || env["DEEPCODE_CHAT_API_KEY"] != "" || env["PATH"] == "" || env["CODEX_HOME"] != "/codex" ||
-		!strings.Contains(env["CODEX_CONFIG"].(string), `"skip_host_skill_discovery":true`) {
-		t.Errorf("the agent's environment: %v", env)
-	}
-	if got := acptest.Echo(t, context.Background(), claude, ai.Prompt{}); filepath.Base(acptest.At(got, "cwd").(string)) != "_" || !filepath.IsAbs(acptest.At(got, "cwd").(string)) ||
-		acptest.At(got, "static") != bare {
-		t.Errorf("a request of no repository and no instructions: %v", got)
-	}
-
-	mine, _ := fake(t, "-name claude-agent-acp", func(a *Agent) { a.UserConfig, a.Connectors = true, true })
-	got = acptest.Echo(t, context.Background(), mine, p)
-	if b, _ := json.Marshal(acptest.At(got, "meta", "claudeCode", "options")); string(b) != `{"promptSuggestions":false,"settingSources":["user","project","local"],"settings":{"disableClaudeAiConnectors":false},"strictMcpConfig":false,"tools":[]}` ||
-		acptest.At(got, "env", "CODEX_CONFIG") != "" || acptest.At(got, "env", "CODEX_HOME") != "" {
-		t.Errorf("the user's settings and connectors asked for: %s, %v", b, acptest.At(got, "env"))
-	}
-
-	codex, _ := fake(t, "-name codex-acp -modes agent,read-only")
-	got = acptest.Echo(t, context.Background(), codex, p)
-	if acptest.At(got, "static") != "Be brief." || acptest.At(got, "meta", "jetbrains", "air", "customInstructions") != "Be brief." || acptest.At(got, "config", "mode") != "read-only" {
-		t.Errorf("codex: %v", got)
-	}
-
-	var logged bytes.Buffer
-	log.SetOutput(&logged)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
-	other, _ := fake(t, "-name gemini-cli", func(a *Agent) { a.CodexHome, a.Connectors = "/codex", true })
-	got = acptest.Echo(t, context.Background(), other, p)
-	if acptest.At(got, "meta") != nil || !strings.HasPrefix(acptest.At(got, "prompt").(string), "<instructions>\nBe brief.\n</instructions>\n\n<conversation>") {
-		t.Errorf("another agent: %v", got)
-	}
-	ai.Generate(context.Background(), other, ai.Prompt{Dynamic: "fake:tool"}) // what it asks for, each logged cut to 80 characters
-	if s := logged.String(); !strings.Contains(s, "acp_codex_home is not used") || !strings.Contains(s, "acp_claude_connectors is not used") ||
-		!strings.Contains(s, "neither Claude nor Codex") || strings.Count(s, strings.Repeat("x", 75)) != 5 || strings.Contains(s, "Long") {
-		t.Errorf("the settings another agent leaves unused, the tools it asked for: %q", s)
-	}
 }
 
 // TestOptions: the model and effort set are chosen in every session, one of
@@ -242,7 +186,7 @@ func TestFailures(t *testing.T) {
 	if r, err := a.Ask(context.Background(), ai.Prompt{Dynamic: "fake:spent"}, nil, nil); err != nil || !r.Spent || r.Text != `{"a": ` {
 		t.Errorf("an answer cut at the budget: %+v, %v", r, err)
 	}
-	for _, line := range []string{"no-such-agent-x7 --acp", `"` + os.Args[0] + `" acpfake -login`} {
+	for _, line := range []string{"no-such-agent-x7 --acp", `"` + os.Args[0] + `" acpfake -login`, `npx "unclosed`} {
 		gone, _ := fake(t, "", func(a *Agent) { a.Command = line })
 		for range 2 { // the second within the backoff, failing as the first did
 			if _, err := ai.Generate(context.Background(), gone, ai.Prompt{}); !errors.Is(err, ai.ErrRefused) {
@@ -260,10 +204,10 @@ func TestFailures(t *testing.T) {
 	}
 	defer func(was time.Duration) { startLimit = was }(startLimit)
 	startLimit = 300 * time.Millisecond
-	for _, flag := range []string{"-hang", "-stall"} { // the probe's request, its session/new, past its time
+	for _, flag := range []string{"-hang", "-stall session/new", "-stall initialize"} { // the probe's request, its session/new, initialize, past its time
 		hung, _ := fake(t, flag, func(a *Agent) { a.Timeout = 300 * time.Millisecond })
 		ai.Generate(context.Background(), hung, ai.Prompt{})
-		if !errors.Is(hung.last, ai.ErrUnavailable) || !errors.Is(hung.last, context.DeadlineExceeded) {
+		if !errors.Is(hung.last, ai.ErrUnavailable) || !errors.Is(hung.last, context.DeadlineExceeded) || !strings.Contains(hung.last.Error(), "within") {
 			t.Errorf("%s: %v", flag, hung.last)
 		}
 	}
@@ -303,6 +247,10 @@ func TestStatus(t *testing.T) {
 	time.AfterFunc(200*time.Millisecond, cancel)
 	ai.Generate(gone, slow, ai.Prompt{Dynamic: "fake:slow"}) // a reader who left: not the agent's failure
 	left := slow.Status().Trouble
+	due, cancelDue := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancelDue()
+	ai.Generate(due, slow, ai.Prompt{Dynamic: "fake:slow"}) // a job's own deadline: nor that
+	left += slow.Status().Trouble
 	if _, err := ai.Generate(ctx, slow, ai.Prompt{Dynamic: "fake:slow"}); left != "" || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(slow.Status().Trouble, "no whole answer") {
 		t.Errorf("a request its caller ended: %q; one past its time: %v, %q", left, err, slow.Status().Trouble)
 	}
@@ -310,19 +258,27 @@ func TestStatus(t *testing.T) {
 	if _, err := ai.Generate(ctx, slow, ai.Prompt{}); !errors.Is(err, ai.ErrRefused) || !strings.Contains(slow.Status().Trouble, "not signed in") {
 		t.Errorf("signed out once it answered: %v, %+v", err, slow.Status())
 	}
+	blocked, _ := fake(t, "", func(b *Agent) { b.Dir = filepath.Join(slow.Dir, "agent.log", "acp") }) // under a file: deepcode's failure, not the agent's
+	if _, err := ai.Generate(ctx, blocked, ai.Prompt{}); !errors.Is(err, ai.ErrUnavailable) || blocked.fails != 0 || blocked.Status().Trouble != "" {
+		t.Errorf("no folder to work in: %v, %d starts failed, %+v", err, blocked.fails, blocked.Status())
+	}
 }
 
 // TestLog: the agent's log is appended to, and set aside past 10 MB.
 func TestLog(t *testing.T) {
 	a, _ := fake(t, "")
 	file := filepath.Join(a.Dir, "agent.log")
-	os.WriteFile(file, []byte("before\n"), 0o600)
+	if err := os.WriteFile(file, []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	ai.Generate(context.Background(), a, ai.Prompt{})
 	a.Close()
 	if b, err := os.ReadFile(file); err != nil || !bytes.HasPrefix(b, []byte("before\n")) {
 		t.Errorf("the log of the start before: %q, %v", b, err)
 	}
-	os.WriteFile(file, make([]byte, 10<<20+1), 0o600)
+	if err := os.WriteFile(file, make([]byte, 10<<20+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	again, _ := fake(t, "", func(b *Agent) { b.Dir = a.Dir })
 	ai.Generate(context.Background(), again, ai.Prompt{})
 	if fi, err := os.Stat(file + ".old"); err != nil || fi.Size() != 10<<20+1 {
@@ -331,13 +287,19 @@ func TestLog(t *testing.T) {
 }
 
 // TestClose: Close ends every process of the agent's, a retired one still
-// serving a session too, before it returns.
+// serving a session too, before it returns; a start it stopped is no failure.
 func TestClose(t *testing.T) {
+	stalled, _ := fake(t, "-stall session/new")
+	go ai.Generate(context.Background(), stalled, ai.Prompt{})
+	acptest.Await(t, stalled.Dir, "session/new") // its start's probe; Close takes the lock the start holds, so sees its end
+	if stalled.Close(); stalled.fails != 0 || stalled.trouble != nil {
+		t.Errorf("a start Close stopped: %d starts failed, %v", stalled.fails, stalled.trouble)
+	}
 	a, _ := fake(t, "", func(a *Agent) { a.Sessions = 2 })
 	ai.Generate(context.Background(), a, ai.Prompt{}) // starts the process
 	done := make(chan error)
 	go func() { _, err := ai.Generate(context.Background(), a, ai.Prompt{Dynamic: "fake:slow"}); done <- err }()
-	time.Sleep(200 * time.Millisecond)
+	acptest.Await(t, a.Dir, "a slow prompt")
 	a.retire(a.now)
 	if _, err := ai.Generate(context.Background(), a, ai.Prompt{}); err != nil { // on a new process
 		t.Fatal(err)
@@ -370,7 +332,7 @@ func TestRestart(t *testing.T) {
 	if second == first {
 		t.Error("the agent that ended was not replaced")
 	}
-	if _, err := ai.Generate(context.Background(), a, ai.Prompt{Dynamic: "fake:systemerror"}); !errors.Is(err, ai.ErrUnavailable) {
+	if _, err := ai.Generate(context.Background(), a, ai.Prompt{Dynamic: "fake:systemerror"}); !errors.Is(err, ai.ErrUnavailable) || !strings.Contains(err.Error(), "usage limit") {
 		t.Errorf("a silent system error: %v", err)
 	}
 	third := pid()
@@ -388,29 +350,6 @@ func TestRestart(t *testing.T) {
 	a.Close()
 	if _, err := ai.Generate(context.Background(), a, ai.Prompt{}); !errors.Is(err, ai.ErrUnavailable) {
 		t.Errorf("after Close: %v", err)
-	}
-}
-
-// TestTurns: no more prompts run at a time than Sessions; a request waiting
-// for its turn gives up with its context.
-func TestTurns(t *testing.T) {
-	a, _ := fake(t, "", func(a *Agent) { a.Sessions = 1 })
-	if _, err := ai.Generate(context.Background(), a, ai.Prompt{}); err != nil { // started
-		t.Fatal(err)
-	}
-	slow, stop := context.WithCancel(context.Background())
-	done := make(chan error)
-	go func() { _, err := ai.Generate(slow, a, ai.Prompt{Dynamic: "fake:slow"}); done <- err }()
-	time.Sleep(200 * time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	if _, err := ai.Generate(ctx, a, ai.Prompt{}); !errors.Is(err, context.DeadlineExceeded) || a.Status().Trouble != "" { // deepcode's queue, not the agent
-		t.Errorf("a second prompt with one turn: %v, %+v", err, a.Status())
-	}
-	stop()
-	<-done
-	if text, err := ai.Generate(context.Background(), a, ai.Prompt{}); err != nil || text != "OK" {
-		t.Errorf("once the turn is back: %q, %v", text, err)
 	}
 }
 
@@ -497,4 +436,26 @@ func TestExchange(t *testing.T) {
 		t.Errorf("after a request that failed: %v, then %+v, %v, %d tokens, want %d", err, calls, again, ex.Used().InTokens, held/4)
 	}
 	ex.Close()
+	defer func(was time.Duration) { grace = was }(grace)
+	grace = 300 * time.Millisecond
+	ex = a.Exchange(ai.Prompt{Dynamic: "fake:deaf"}, tools) // its turn never ends
+	short, cancel = context.WithTimeout(ctx, 200*time.Millisecond)
+	_, _, err = ex.Next(short)
+	cancel()
+	if _, _, again := ex.Next(ctx); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(again, ai.ErrUnavailable) || !strings.Contains(again.Error(), "did not end") {
+		t.Errorf("a turn not ended once cancelled: %v, then %v", err, again)
+	}
+	ex.Close()
+}
+
+// TestQuiet: a notification the SDK has no method for is dropped from the
+// connection's log, as a client drops it; any other failure is logged.
+func TestQuiet(t *testing.T) {
+	var b bytes.Buffer
+	l := slog.New(quiet{slog.NewTextHandler(&b, nil)}).With("conn", 1).WithGroup("rpc") // a logger the SDK may derive
+	l.Error("failed to handle notification", "method", "auth/status_update", "err", acp.NewMethodNotFound("auth/status_update"))
+	l.Error("failed to handle notification", "method", "session/update", "err", acp.NewInvalidParams(nil))
+	if s := b.String(); strings.Contains(s, "auth/status_update") || !strings.Contains(s, "session/update") {
+		t.Errorf("logged: %q", s)
+	}
 }

@@ -23,7 +23,9 @@ import (
 	"deepcode/cmd/deepcode/config"
 	"deepcode/internal/app"
 	"deepcode/internal/knowledge/retrieval"
+	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/ai/compat"
+	"deepcode/internal/platform/ai/usage"
 )
 
 // Embedder is the embedding model deepcode serve searches with, read as serve
@@ -36,6 +38,20 @@ func Embedder() (*compat.Client, error) {
 	}
 	_, embed := app.Providers(cfg, nil, nil)
 	return embed, nil
+}
+
+// Chat is the chat model deepcode serve asks, read as serve reads it
+// (DEEPCODE_CHAT_PROVIDER; DEEPCODE_CHAT_* for a server, DEEPCODE_ACP_* for an
+// agent, which works in dir), telling meter its usage and counting the tokens
+// of an answer it counted none of by count; nil without one.
+func Chat(dir string, meter usage.Meter, count func(string) int) (ai.Chat, error) {
+	cfg, _, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	cfg.DataDir = dir
+	chat, _ := app.Providers(cfg, meter, count)
+	return chat, nil
 }
 
 // Hits is how many results a question reads: as many as chat's evidence.

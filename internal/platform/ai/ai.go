@@ -328,7 +328,20 @@ func WithTimeout(ctx context.Context, d time.Duration, name string) (context.Con
 		return context.WithCancel(ctx)
 	}
 	return context.WithTimeoutCause(ctx, d,
-		fmt.Errorf("no whole answer from %s within DEEPCODE_LLM_TIMEOUT (%s): %w", name, d, context.DeadlineExceeded))
+		timedOut{fmt.Errorf("no whole answer from %s within DEEPCODE_LLM_TIMEOUT (%s): %w", name, d, context.DeadlineExceeded)})
+}
+
+// timedOut is the cause WithTimeout gives a request past its own time.
+type timedOut struct{ error }
+
+// Unwrap is the error t carries.
+func (t timedOut) Unwrap() error { return t.error }
+
+// TimedOut reports whether ctx ended at a WithTimeout's own time, not at its
+// caller's end (a job's timeout, a reader who left).
+func TimedOut(ctx context.Context) bool {
+	var t timedOut
+	return ctx.Err() != nil && errors.As(context.Cause(ctx), &t)
 }
 
 // Cause is err, or once ctx has ended, why it ended: the request's own

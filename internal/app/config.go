@@ -30,7 +30,7 @@ type Config struct {
 	ACPSessions   int    // the agent's prompts at a time
 	ACPCodexHome  string // CODEX_HOME for the agent; "" leaves Codex its own
 	ACPConnectors bool   // Claude: the account's claude.ai connectors join each session
-	ACPUserConfig bool   // the user's own agent settings, instructions, MCP servers, plugins and skills join
+	ACPUserConfig bool   // the user's own agent settings, instructions, auto memory, MCP servers, plugins and skills join
 
 	Workers    int
 	JobTimeout time.Duration

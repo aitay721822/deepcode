@@ -16,6 +16,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"testing"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -27,10 +29,10 @@ import (
 // fake is the agent: its flags and its sessions.
 type fake struct {
 	conn                             *acp.AgentSideConnection
-	name, relay, setfail             string
+	name, relay, setfail, stall      string
 	overhead, size, quota            int
 	scale                            float64
-	counts, login, hang, stall       bool
+	counts, login, hang              bool
 	models, efforts, efforts2, modes []string
 	mu                               sync.Mutex
 	air                              bool // the client declared the AIR extension
@@ -40,7 +42,7 @@ type fake struct {
 
 // session is what a session holds: its folder, its options, its
 // instructions, the bytes of all it was sent and answered, its options' values,
-// and the replies its prompts have left (fake:script).
+// the replies its prompts have left (fake:script), and whether a turn runs.
 type session struct {
 	cwd     string
 	meta    map[string]any
@@ -48,6 +50,7 @@ type session struct {
 	bytes   int
 	config  map[string]string
 	replies []string
+	busy    bool
 }
 
 // Main serves one connection on standard input and output, then exits. Its
@@ -56,11 +59,11 @@ type session struct {
 // updates report (none when 0); -models, -efforts and -modes, its options'
 // values, comma separated, the first one current, and -efforts2 the efforts
 // once the model is not the first; -setfail, the folder whose sessions' options
-// cannot be set; -login, a session/new that fails as not signed in; -stall,
-// one answered by nothing; -hang, prompts answered by nothing till
-// cancelled; -quota, the bytes past which a
-// prompt fails as over the subscription's limit; -relay, the base URL of a
-// server each prompt asks.
+// cannot be set; -login, a session/new that fails as not signed in; -stall
+// initialize or session/new, that request answered by nothing; -hang, prompts
+// answered by nothing till cancelled; -quota, the bytes past which a prompt
+// fails as over the subscription's limit; -relay, the base URL of a server
+// each prompt asks.
 func Main(args []string) {
 	f := &fake{sessions: map[acp.SessionId]*session{}}
 	flags := flag.NewFlagSet("acpfake", flag.ExitOnError)
@@ -74,7 +77,7 @@ func Main(args []string) {
 	flags.StringVar(&f.setfail, "setfail", "", "")
 	flags.BoolVar(&f.login, "login", false, "")
 	flags.BoolVar(&f.hang, "hang", false, "")
-	flags.BoolVar(&f.stall, "stall", false, "")
+	flags.StringVar(&f.stall, "stall", "", "")
 	flags.IntVar(&f.quota, "quota", 0, "")
 	flags.StringVar(&f.relay, "relay", "", "")
 	flags.Parse(args)
@@ -92,7 +95,11 @@ func Main(args []string) {
 }
 
 // Initialize names the agent and offers session/close.
-func (f *fake) Initialize(_ context.Context, q acp.InitializeRequest) (acp.InitializeResponse, error) {
+func (f *fake) Initialize(ctx context.Context, q acp.InitializeRequest) (acp.InitializeResponse, error) {
+	if f.stall == "initialize" {
+		<-ctx.Done()
+		return acp.InitializeResponse{}, ctx.Err()
+	}
 	f.mu.Lock()
 	_, f.air = q.ClientCapabilities.Meta["jetbrains"]
 	f.mu.Unlock()
@@ -107,7 +114,8 @@ const preset = "(Claude Code's system prompt)"
 // NewSession opens a session with its options, its instructions taken from
 // its _meta as Claude's and Codex's adapters take them.
 func (f *fake) NewSession(ctx context.Context, q acp.NewSessionRequest) (acp.NewSessionResponse, error) {
-	if f.stall {
+	if f.stall == "session/new" {
+		waits("session/new")
 		<-ctx.Done()
 		return acp.NewSessionResponse{}, ctx.Err()
 	}
@@ -196,7 +204,8 @@ func (f *fake) CloseSession(_ context.Context, q acp.CloseSessionRequest) (acp.C
 //	fake:crash       the process exits
 //	fake:logout      OK, then every session/new fails as not signed in
 //	fake:tool        a tool call, a permission and a file asked for
-//	fake:slow        nothing till the prompt is cancelled
+//	fake:slow        nothing till the prompt is cancelled, its turn ended 100 ms later
+//	fake:deaf        nothing, a cancel too
 //	fake:big         an answer of 1.1 MB
 //
 // else the session's next scripted reply (fake:slow among them, as above), or
@@ -214,8 +223,18 @@ func (f *fake) Prompt(ctx context.Context, q acp.PromptRequest) (acp.PromptRespo
 		f.mu.Unlock()
 		return acp.PromptResponse{}, acp.NewInvalidParams("no such session")
 	}
+	if s.busy { // one turn at a time, as an agent takes them
+		f.mu.Unlock()
+		return acp.PromptResponse{}, acp.NewInternalError(map[string]any{"error": "a prompt while the session's turn runs"})
+	}
+	s.busy = true
 	s.bytes += text.Len()
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		s.busy = false
+		f.mu.Unlock()
+	}()
 	if f.hang {
 		<-ctx.Done()
 		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
@@ -277,8 +296,10 @@ func (f *fake) Prompt(ctx context.Context, q acp.PromptRequest) (acp.PromptRespo
 	case strings.Contains(t, "fake:tool"):
 		reply = f.tool(ctx, q.SessionId, say)
 	case strings.Contains(t, "fake:slow"):
-		<-ctx.Done()
-		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+		return slow(ctx)
+	case strings.Contains(t, "fake:deaf"):
+		time.Sleep(time.Hour) // till the process ends
+		return acp.PromptResponse{}, nil
 	case strings.Contains(t, "fake:big"):
 		reply = strings.Repeat("x", 1100<<10)
 	default:
@@ -288,8 +309,7 @@ func (f *fake) Prompt(ctx context.Context, q acp.PromptRequest) (acp.PromptRespo
 		}
 		f.mu.Unlock()
 		if reply == "fake:slow" {
-			<-ctx.Done()
-			return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+			return slow(ctx)
 		}
 	}
 	for _, part := range []string{reply[:len(reply)/2], reply[len(reply)/2:]} {
@@ -376,6 +396,33 @@ func (f *fake) Logout(context.Context, acp.LogoutRequest) (acp.LogoutResponse, e
 
 // Cancel does nothing more than the connection, which ends the prompt's context.
 func (f *fake) Cancel(context.Context, acp.CancelNotification) error { return nil }
+
+// slow answers nothing till ctx, the prompt's, is cancelled, then ends the
+// turn as cancelled a moment later, as an agent takes some time to stop.
+func slow(ctx context.Context) (acp.PromptResponse, error) {
+	waits("a slow prompt")
+	<-ctx.Done()
+	time.Sleep(100 * time.Millisecond)
+	return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+}
+
+// waits says in the agent's log, its standard error, that the fake waits on
+// what, for a test to wait till it does (Await).
+func waits(what string) { fmt.Fprintf(os.Stderr, "fake: waits on %s\n", what) }
+
+// Await returns once the fake whose agent.log is in dir waits on what (a
+// stalled session/new, a slow prompt), failing t if it does not in 20 s.
+func Await(t testing.TB, dir, what string) {
+	t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if b, _ := os.ReadFile(filepath.Join(dir, "agent.log")); strings.Contains(string(b), "fake: waits on "+what+"\n") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the fake never waited on %s", what)
+		}
+	}
+}
 
 // ListSessions lists none.
 func (f *fake) ListSessions(context.Context, acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {

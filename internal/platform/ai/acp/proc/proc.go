@@ -9,6 +9,7 @@ package proc
 import (
 	"cmp"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -38,7 +39,7 @@ func Start(line string, env []string, stderr *os.File) (*Process, error) {
 		return nil, err
 	}
 	if len(args) == 0 {
-		return nil, errors.New("no command")
+		return nil, fmt.Errorf("%w: no command", ErrLine)
 	}
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = env
@@ -94,6 +95,10 @@ func (p *Process) Stop(grace time.Duration) {
 	})
 }
 
+// ErrLine is a command line that names no program to run: the setting is
+// wrong.
+var ErrLine = errors.New("the agent's command line is not one")
+
 // Split is line's words: split at spaces, a double-quoted part kept whole
 // without its quotes ("C:\Program Files\nodejs\npx.cmd" -y pkg). A backslash
 // is a character, as in a Windows path.
@@ -116,7 +121,7 @@ func Split(line string) ([]string, error) {
 		}
 	}
 	if quoted {
-		return nil, errors.New("a quote is not closed")
+		return nil, fmt.Errorf("%w: a quote is not closed", ErrLine)
 	}
 	if started {
 		args = append(args, word.String())
@@ -124,37 +129,51 @@ func Split(line string) ([]string, error) {
 	return args, nil
 }
 
+// switches are the runners' flags that take no value.
+var switches = []string{"--", "-y", "--yes", "-q", "--quiet", "-s", "--silent", "--offline", "--prefer-offline", "--bun", "--no-install", "--ignore-scripts"}
+
 // Name is the package a runner (npx, bunx, pnpm dlx, uvx) runs in line, the
 // first scoped one (@scope/pkg) else the first word after the runner, without
-// its scope and version; else the program's name; acp when line names none.
-// No word with :// in it is taken, nor after a runner one with a colon, as a
-// flag's value (a registry's URL, user:k3y@host) may hold a key; an unscoped
-// package after a flag's value given apart from it (--token k3y pkg) is not
-// found, so give that one as --token=k3y.
+// its scope and version (@1.2, ==1.2); else the program's name; acp when line
+// names none. A flag's value may hold a key (--token k3y, a registry's URL,
+// user:k3y@host), so none is taken: the word after a flag that is not one of
+// the runners' switches (and --) and has no =, unless a scoped package, any
+// word with a colon, and one starting with @ that is no scope.
 func Name(line string) string {
-	var words []string
 	args, _ := Split(line)
-	for _, w := range args {
-		if !strings.HasPrefix(w, "-") && w != "dlx" && w != "x" && !strings.Contains(w, "://") {
-			words = append(words, w)
-		}
-	}
 	base := func(w string) string { return w[strings.LastIndexAny(w, `/\`)+1:] }
-	name := ""
-	if len(words) > 0 {
-		name = strings.ToLower(base(words[0]))
-		name = strings.TrimSuffix(name, filepath.Ext(name))
+	i := slices.IndexFunc(args, func(w string) bool { return !strings.HasPrefix(w, "-") && !strings.Contains(w, "://") })
+	if i < 0 {
+		return "acp"
 	}
-	if slices.Contains([]string{"npx", "bunx", "pnpx", "pnpm", "yarn", "bun", "uvx"}, name) {
-		pkgs := slices.DeleteFunc(words[1:], func(w string) bool { return strings.Contains(w, ":") })
-		if i := slices.IndexFunc(pkgs, func(w string) bool { return strings.HasPrefix(w, "@") && strings.Contains(w, "/") }); i > 0 {
-			pkgs = pkgs[i:]
-		}
-		if len(pkgs) > 0 {
-			name, _, _ = strings.Cut(base(strings.TrimPrefix(pkgs[0], "@")), "@")
+	name := strings.ToLower(base(args[i]))
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	if !slices.Contains([]string{"npx", "bunx", "pnpx", "pnpm", "yarn", "bun", "uvx"}, name) {
+		return cmp.Or(name, "acp")
+	}
+	scoped := func(w string) bool { return strings.HasPrefix(w, "@") && strings.Contains(w, "/") }
+	var pkgs []string
+	for rest := args[i+1:]; len(rest) > 0; rest = rest[1:] {
+		switch w := rest[0]; {
+		case strings.HasPrefix(w, "-"):
+			if !strings.Contains(w, "=") && !slices.Contains(switches, w) && len(rest) > 1 && !scoped(rest[1]) {
+				rest = rest[1:] // its value
+			}
+		case w != "dlx" && w != "x" && !strings.Contains(w, ":") && (scoped(w) || !strings.HasPrefix(w, "@")):
+			pkgs = append(pkgs, w)
 		}
 	}
-	return cmp.Or(name, "acp")
+	if j := slices.IndexFunc(pkgs, scoped); j > 0 {
+		pkgs = pkgs[j:]
+	}
+	if len(pkgs) == 0 {
+		return name
+	}
+	pkg := base(pkgs[0])
+	if k := strings.IndexAny(pkg, "@=<>~!"); k >= 0 {
+		pkg = pkg[:k]
+	}
+	return cmp.Or(pkg, name)
 }
 
 // passed are the variables an agent gets from this process's environment:

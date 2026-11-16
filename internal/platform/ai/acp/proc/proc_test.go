@@ -2,6 +2,7 @@ package proc
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -62,13 +63,16 @@ func TestSplit(t *testing.T) {
 			t.Errorf("Split(%q) = %q, %v; want %q", line, got, err, want)
 		}
 	}
-	if _, err := Split(`npx "unclosed`); err == nil {
-		t.Error("an unclosed quote split")
+	if _, err := Split(`npx "unclosed`); !errors.Is(err, ErrLine) {
+		t.Errorf("an unclosed quote: %v", err)
+	}
+	if _, err := Start("  ", nil, nil); !errors.Is(err, ErrLine) {
+		t.Errorf("no command: %v", err)
 	}
 }
 
 // TestName: an agent's name is the package a runner runs or the program's,
-// never a flag's value with a colon, which may hold a key.
+// never a flag's value, which may hold a key.
 func TestName(t *testing.T) {
 	for line, want := range map[string]string{
 		"npx -y @agentclientprotocol/claude-agent-acp@0.107.3": "claude-agent-acp", "gemini --acp": "gemini",
@@ -80,6 +84,12 @@ func TestName(t *testing.T) {
 		"npx --registry user:k3y@host codex-acp":               "codex-acp", // a value with a colon
 		"npx codex-acp @notes":                                 "codex-acp", // an argument, not a scoped package
 		"npx":                                                  "npx",
+		"npx --token k3y codex-acp":                            "codex-acp", // a flag's value given apart from it
+		"npx --no-such-flag codex-acp":                         "npx",       // as a value it might be: not taken
+		"npx -y --yes codex-acp@2.6.0":                         "codex-acp", // switches take no value
+		"uvx --quiet agent-tool==1.2":                          "agent-tool",
+		"npx @notes codex-acp":                                 "codex-acp",
+		"npx --no-install -- codex-acp":                        "codex-acp",
 	} {
 		if got := Name(line); got != want {
 			t.Errorf("%q: %s, want %s", line, got, want)

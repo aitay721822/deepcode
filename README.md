@@ -91,6 +91,12 @@
    CODEX_HOME=/path/to/deepcode-codex codex login
    ```
 
+   Windows 的 PowerShell：
+
+   ```powershell
+   $env:CODEX_HOME = "C:\path\to\deepcode-codex"; codex login
+   ```
+
    不設 `acp_codex_home` 時 Codex 讀你的 `~/.codex`，其中的 AGENTS.md、MCP server、plugin 與 hook 都會加進每個請求。
 
 2. 設定（第一次執行時 npx 會先下載 agent，可以先手動跑一次）：
@@ -107,15 +113,31 @@
    # embed_model: your-embedding-model
    ```
 
-每個請求都是一個新的 session，在 `data/acp/work/` 下該 Repository 自己的空資料夾裡執行（不屬於任何 Repository 的請求共用一個），各 Repository 互不相通。deepcode 的指示會取代 Claude 的整個 system prompt 與 Codex 的 custom instructions。agent 拿不到 deepcode 的任何工具、檔案或終端機，它要求的權限一律被拒絕。Codex 以唯讀模式執行。Claude 預設不載入你的設定、CLAUDE.md、MCP server 與 plugin，`acp_user_config: true` 才載入；claude.ai 的 connectors 也預設關閉，`acp_claude_connectors: true` 才打開，打開後從 session 的第二個 prompt 起，每次約多 16k token。其他 agent 的這些都由它自己決定，deepcode 關不掉：它的指示、設定、MCP server 與工具都會帶進每個 session，deepcode 的指示則放在 prompt 開頭。後台的「模型與用量」頁顯示 agent 的名稱與版本、context、Overhead 與 Scale，以及最後一次失敗（例如未登入）。agent 沒回報的 token 以本地 tokenizer 估算。
+每個請求都是一個新的 session，在 `data/acp/work/` 下該 Repository 自己的空資料夾裡執行（不屬於任何 Repository 的請求共用一個），各 Repository 互不相通。deepcode 的指示會取代 Claude 的整個 system prompt 與 Codex 的 custom instructions。agent 拿不到 deepcode 的任何工具、檔案或終端機，它要求的權限一律被拒絕。Codex 以唯讀模式執行，沒有 shell（它要跑的指令一律被拒，而 Codex 被拒就會結束回答），回答的詳細程度用 API 預設的 medium（Codex 給自己模型的 low 回答較短、引用較少），預設不帶 `~/.agents` 的 skills 與 apps 的指示。Claude 預設不載入你的設定、CLAUDE.md、自動記憶、MCP server 與 plugin。`acp_user_config: true` 讓 Claude 載入這些，讓 Codex 帶回 `~/.agents` 的 skills 與 apps 的指示（Codex 自己的設定來自 `CODEX_HOME`；shell 照樣關、詳細程度照樣 medium，權限、環境與協作模式的說明照樣不帶）；claude.ai 的 connectors 也預設關閉，`acp_claude_connectors: true` 才打開，打開後從 session 的第二個 prompt 起，每次約多 16k token。其他 agent 的這些都由它自己決定，deepcode 關不掉：它的指示、設定、MCP server 與工具都會帶進每個 session，deepcode 的指示則放在 prompt 開頭。後台的「模型與用量」頁顯示 agent 的名稱與版本、context、Overhead 與 Scale，以及最後一次失敗（例如未登入）。agent 沒回報的 token 以本地 tokenizer 估算。
 
 限制：
 
 - agent 不接受 `temperature`、輸出上限與 response format：`chat_base_url`、`chat_api_key`、`chat_api`、`temperature`、`max_output_tokens` 設了會報錯，`chat_schema` 只能是 `prompt` 或不設。
-- 比 API 慢。Claude 一個 JSON 請求約 1 到 4 秒、一題問答約 10 秒，Codex 慢上數倍。
-- Codex 在唯讀模式下仍能用自己的 shell 讀檔，讀得到執行 deepcode 的 OS 使用者能讀的檔案。`data` 放在 git repository 裡時，Codex 還會把從那個 repository 根目錄到工作資料夾之間的 AGENTS.md 加進每個請求。
-- agent 沒有 Embedding，向量檢索要另接 Embedding API（`embed_base_url` 與 `embed_model`，不沿用 chat 的設定）。不設時只用全文與 Symbol 檢索。
+- 比 API 慢。在 go-chi/chi 上，一題問答 DeepSeek（API）約 11 秒，Claude 約 35 秒，Codex（effort low）約 50 秒。wiki 一次寫 4 頁時，6 頁 Claude 約 100 秒、Codex 約 150 秒，跟 DeepSeek 一次寫 1 頁差不多。
+- `data` 放在 git repository 裡時，Codex 會把從那個 repository 根目錄到工作資料夾之間的 AGENTS.md 加進每個請求。
+- Claude Code 在每個請求都附上它登入帳號的 email、當天日期與環境（工作資料夾、是否在 git repository 裡、平台與 OS），deepcode 關不掉。
+- agent 沒有 Embedding，向量檢索要另接 Embedding API（`embed_base_url` 與 `embed_model`，不沿用 chat 的設定）。不設時只用全文與 Symbol 檢索：小 repo 找得到的相同，較大的 repo recall@10 少到約 0.07，排序也差一些（見下表）。
+- Codex 每個請求固定多出約 1.3 萬 token（它自己的指示與工具定義），Claude 約 600，所以 Codex 的額度用得快很多：在 go-chi/chi 上連跑約 7 次 wiki 與全部問答，就用完了一個 ChatGPT 訂閱的 Codex 額度。
+- Codex 額度用完時，codex-acp 只回報 system error，不說原因。用執行 deepcode 的 OS 使用者、同一個 `CODEX_HOME` 跑 `codex exec "hi"`，它會說額度何時重置。
 - 錯誤訊息與 log 會帶有 agent 回報的內容（例如額度何時重置）和資料夾路徑。agent 自己的輸出寫在 `data/acp/agent.log`（啟動 agent 時若已超過 10 MB，先移到 `agent.log.old`），可能引用 prompt 的內容，也就是你的程式碼。
+
+沒有 Embedding 時的檢索，8 個 eval corpus 的 recall@10／MRR（`test/eval`）：
+
+| Corpus | 只用全文與 Symbol | 加上向量（Qwen3 Embedding 0.6B） |
+|---|---|---|
+| go-chi/chi | 1.000／0.839 | 1.000／0.892 |
+| pmndrs/zustand | 1.000／0.875 | 1.000／0.948 |
+| expressjs/express | 1.000／0.981 | 1.000／1.000 |
+| spring-petclinic | 0.964／0.737 | 1.000／0.873 |
+| deepcode | 0.967／0.701 | 0.967／0.808 |
+| google/gson | 0.839／0.691 | 0.911／0.748 |
+| dotnet/eShop | 0.800／0.688 | 0.833／0.748 |
+| tokio-rs/axum | 0.867／0.641 | 0.933／0.804 |
 
 ## 升級
 

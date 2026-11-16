@@ -3,6 +3,7 @@ package acp
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/acp/proc"
 	"deepcode/internal/platform/ai/usage"
 )
 
@@ -26,6 +28,7 @@ type session struct {
 	r      *running
 	id     acp.SessionId
 	static string
+	stuck  bool // a cancelled turn the agent did not end within grace: no prompt may follow
 }
 
 // bare is the instructions of a session of Claude's that deepcode gives none:
@@ -118,11 +121,15 @@ func counted(u *acp.Usage) ai.Usage {
 // the running process, counted open on it until close; a session the agent
 // refuses (signed out since, a setting it no longer takes) is noted.
 func (a *Agent) session(ctx context.Context, static string) (*session, error) {
+	dir, err := a.work(usage.Repository(ctx))
+	if err != nil {
+		return nil, err
+	}
 	r, err := a.agent(ctx)
 	if err != nil {
 		return nil, err
 	}
-	s, err := a.open(ctx, r, usage.Repository(ctx), static)
+	s, err := a.open(ctx, r, dir, static)
 	if err != nil {
 		a.note(ctx, r, err)
 		a.release(r)
@@ -131,11 +138,10 @@ func (a *Agent) session(ctx context.Context, static string) (*session, error) {
 	return s, nil
 }
 
-// open opens a session on r in repository repo's folder, an empty one
-// (<Dir>/work/<repo>, _ for none), with static as its instructions where the
-// adapter takes them (meta), and sets its options (configure). r's count of
-// open sessions is the caller's to keep, on a failure too.
-func (a *Agent) open(ctx context.Context, r *running, repo int64, static string) (*session, error) {
+// work is repository repo's folder, an empty one made for it if need be:
+// <Dir>/work/<repo>, _ for none. Not making it is deepcode's failure, not the
+// agent's.
+func (a *Agent) work(repo int64) (string, error) {
 	folder := "_"
 	if repo > 0 {
 		folder = strconv.FormatInt(repo, 10)
@@ -145,8 +151,16 @@ func (a *Agent) open(ctx context.Context, r *running, repo int64, static string)
 		err = os.MkdirAll(dir, 0o700)
 	}
 	if err != nil {
-		return nil, err
+		return "", ai.Kinded(fmt.Errorf("%s: %w", a.Name(), err), ai.ErrUnavailable)
 	}
+	return dir, nil
+}
+
+// open opens a session on r in the folder dir (work), with static as its
+// instructions where the adapter takes them (meta), and sets its options
+// (configure). r's count of open sessions is the caller's to keep, on a
+// failure too.
+func (a *Agent) open(ctx context.Context, r *running, dir, static string) (*session, error) {
 	meta, taken := a.meta(r.kind, static)
 	res, err := r.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: dir, McpServers: []acp.McpServer{}, Meta: meta})
 	if err != nil {
@@ -163,10 +177,10 @@ func (a *Agent) open(ctx context.Context, r *running, repo int64, static string)
 // meta is a session's options for an adapter of kind (design 5.6), and the
 // instructions it takes: Claude's takes static, else bare, as its whole system
 // prompt and gets no tool, no suggested next prompt, and none of the user's
-// settings, CLAUDE.md, MCP servers and plugins, nor the account's claude.ai
-// connectors (which join from a session's second prompt otherwise) unless
-// UserConfig and Connectors say so; Codex's takes static as its custom
-// instructions; another takes none.
+// settings, CLAUDE.md, auto memory, MCP servers and plugins, nor the
+// account's claude.ai connectors (which join from a session's second prompt
+// otherwise) unless UserConfig and Connectors say so; Codex's takes static as
+// its custom instructions; another takes none.
 func (a *Agent) meta(kind, static string) (map[string]any, string) {
 	switch kind {
 	case "claude":
@@ -177,11 +191,35 @@ func (a *Agent) meta(kind, static string) (map[string]any, string) {
 		static = cmp.Or(static, bare)
 		return map[string]any{"systemPrompt": static, "claudeCode": map[string]any{"options": map[string]any{
 			"tools": []string{}, "settingSources": sources, "promptSuggestions": false, "strictMcpConfig": !a.UserConfig,
-			"settings": map[string]any{"disableClaudeAiConnectors": !a.Connectors}}}}, static
+			"settings": map[string]any{"disableClaudeAiConnectors": !a.Connectors, "autoMemoryEnabled": a.UserConfig}}}}, static
 	case "codex":
 		return map[string]any{"jetbrains": map[string]any{"air": map[string]any{"customInstructions": static}}}, static
 	}
 	return nil, ""
+}
+
+// env is an agent's environment: the OS's, Node's, npm's and a proxy's
+// variables (proc.Env), CODEX_HOME when set, and CODEX_CONFIG, which codex-acp
+// alone reads (design 5.1): no shell, as deepcode refuses every command and
+// Codex ends its turn at a refusal; nothing of a sandbox, of approvals or of
+// the environment in its instructions; the API's medium verbosity, not the
+// low its models are given, whose answers cite a third less (P5); and no
+// skills of ~/.agents nor apps' instructions unless UserConfig.
+func (a *Agent) env() []string {
+	features := map[string]any{"shell_tool": false, "unified_exec": false}
+	codex := map[string]any{"features": features, "model_verbosity": "medium", "include_permissions_instructions": false,
+		"include_environment_context": false, "include_collaboration_mode_instructions": false}
+	if !a.UserConfig {
+		features["skip_host_skill_discovery"] = true
+		codex["skills"] = map[string]any{"include_instructions": false}
+		codex["include_apps_instructions"] = false
+	}
+	b, _ := json.Marshal(codex) // of maps of strings and bools: it cannot fail
+	env := proc.Env("CODEX_CONFIG=" + string(b))
+	if a.CodexHome != "" {
+		env = append(env, "CODEX_HOME="+a.CodexHome)
+	}
+	return env
 }
 
 // configure sets s's options: the model to Model and the thought level to
@@ -263,6 +301,45 @@ func (s *session) close() {
 	s.a.release(s.r)
 }
 
+// cancel runs prompt on a context of its own, which outlives ctx: once ctx
+// ends it sends session/cancel and waits up to grace for the agent to answer
+// the turn (as cancelled), the end ACP gives a cancelled turn. The SDK alone
+// returns at once, and the agent, which handles a request before a
+// notification it got first, may then stop the session's next prompt with
+// the cancel meant for this one. An agent that does not answer leaves s
+// stuck, its prompt given up.
+func (s *session) cancel(ctx context.Context, prompt func(context.Context) (acp.PromptResponse, error)) (acp.PromptResponse, error) {
+	pctx, stop := context.WithCancel(context.WithoutCancel(ctx))
+	defer stop()
+	done, stuck := make(chan struct{}), make(chan bool, 1)
+	go func() {
+		select {
+		case <-done:
+			stuck <- false
+			return
+		case <-ctx.Done():
+		}
+		select {
+		case <-done: // answered as ctx ended: no cancel to reach the next turn
+			stuck <- false
+			return
+		default:
+		}
+		_ = s.r.conn.Cancel(context.Background(), acp.CancelNotification{SessionId: s.id})
+		select {
+		case <-done:
+			stuck <- false
+		case <-time.After(grace):
+			stop()
+			stuck <- true
+		}
+	}()
+	res, err := prompt(pctx)
+	close(done)
+	s.stuck = <-stuck || s.stuck
+	return res, err
+}
+
 // end closes s where the agent offers that.
 func (s *session) end() {
 	if s.r.closes {
@@ -301,8 +378,13 @@ func transcript(p ai.Prompt) string {
 // answer to onDelta, and fails as design 5.5 says: a failure the agent typed
 // (failed), Codex's silent system error, which retires the process, a stop
 // for a refusal or for too many turns; what the prompt came to is noted
-// (note), not a wait for its turn, which is deepcode's queue.
+// (note), not a wait for its turn, which is deepcode's queue. A prompt ctx
+// ends is cancelled as ACP has it (cancel): the turn ends when the agent says
+// so, as a later prompt of the session would be the one a late cancel stops.
 func (s *session) ask(ctx context.Context, text string, onDelta func(string)) (_ result, err error) {
+	if s.stuck {
+		return result{}, ai.Kinded(fmt.Errorf("%s: the session's cancelled turn did not end within %s", s.a.Name(), grace), ai.ErrUnavailable)
+	}
 	select {
 	case s.a.slots <- struct{}{}:
 	case <-ctx.Done():
@@ -315,7 +397,9 @@ func (s *session) ask(ctx context.Context, text string, onDelta func(string)) (_
 	defer func() { s.a.note(ctx, s.r, err) }()
 	t := &turn{answer: &ai.Answer{OnDelta: onDelta}}
 	s.r.cl.watch(s.id, t)
-	res, err := s.r.conn.Prompt(ctx, acp.PromptRequest{SessionId: s.id, Prompt: []acp.ContentBlock{acp.TextBlock(text)}})
+	res, err := s.cancel(ctx, func(pctx context.Context) (acp.PromptResponse, error) {
+		return s.r.conn.Prompt(pctx, acp.PromptRequest{SessionId: s.id, Prompt: []acp.ContentBlock{acp.TextBlock(text)}})
+	})
 	s.r.cl.forget(s.id)
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -335,19 +419,19 @@ func (s *session) ask(ctx context.Context, text string, onDelta func(string)) (_
 		return out, s.a.failed(*t.failure)
 	case t.broken && strings.TrimSpace(out.text) == "":
 		s.a.retire(s.r)
-		return out, ai.Kinded(fmt.Errorf("%s: the agent's thread failed in a system error and gave no answer", name), ai.ErrUnavailable)
+		return out, ai.Kinded(fmt.Errorf("%s: the agent's thread failed in a system error and gave no answer "+
+			"(its usage limit, reached, is one cause it does not name: codex exec, signed in as the agent is, says)", name), ai.ErrUnavailable)
 	case res.StopReason == acp.StopReasonEndTurn || res.StopReason == acp.StopReasonMaxTokens:
 		return out, nil
-	case res.StopReason == acp.StopReasonCancelled && ctx.Err() != nil:
-		return out, ctx.Err()
 	}
 	return out, ai.Kinded(fmt.Errorf("%s: the agent stopped its answer: %s", name, res.StopReason), ai.ErrFailed)
 }
 
 // note keeps what a prompt on r came to (Status): an answer marks r answered
 // and, once r serves (a.now, so not while start probes it), clears the starts
-// failed and the last failure; a failure the caller did not cancel, a
-// timeout too, is the last failure.
+// failed and the last failure; a failure before the request ended, or at its
+// own timeout, is the last failure, one its caller ended (a cancel, a job's
+// deadline) not.
 func (a *Agent) note(ctx context.Context, r *running, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -357,7 +441,7 @@ func (a *Agent) note(ctx context.Context, r *running, err error) {
 		if r == a.now {
 			a.fails, a.trouble = 0, nil
 		}
-	case !errors.Is(ctx.Err(), context.Canceled):
+	case ctx.Err() == nil || ai.TimedOut(ctx):
 		a.trouble, a.at = ai.Cause(ctx, err), time.Now()
 	}
 }
@@ -377,30 +461,6 @@ func (a *Agent) fail(r *running, step string, err error) error {
 		return err
 	}
 	return ai.Kinded(fmt.Errorf("%s %s: %w", a.Name(), step, err), ai.ErrFailed)
-}
-
-// failed is the error of a failure the agent typed (design 5.5): signing in
-// is refused; a context or budget a new session would clear is an
-// ai.ErrContext; a quota, a rate limit, a service's or a connection's failure
-// may pass, so a later try may get through; anything else failed the answer.
-func (a *Agent) failed(f failure) error {
-	words := f.Title
-	if f.Details != "" {
-		words += ": " + f.Details
-	}
-	err := fmt.Errorf("%s: %s", a.Name(), words)
-	switch f.Category {
-	case "access":
-		return ai.Kinded(fmt.Errorf("%w: %s", err, signIn), ai.ErrRefused)
-	case "limit":
-		if slices.Contains(f.Actions, "new_session") {
-			return &ai.ErrContext{Err: err}
-		}
-		return ai.Kinded(err, ai.ErrUnavailable)
-	case "service", "connection":
-		return ai.Kinded(err, ai.ErrUnavailable)
-	}
-	return ai.Kinded(err, ai.ErrFailed)
 }
 
 // unfence is text without the one fence around it, when it has exactly one:

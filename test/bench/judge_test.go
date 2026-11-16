@@ -13,6 +13,7 @@ import (
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/ai/compat"
 	"deepcode/test/bench/score"
+	"deepcode/test/eval"
 )
 
 // The judge is score's, as the bench reads its answers.
@@ -67,7 +68,7 @@ func (n tally) reliable() bool { return n.failed*20 <= n.stored()+n.unstored+n.f
 // run the judge read (report.Judged) has no flag for an answer the judge
 // failed on; an older run's flags are all its detector's. A failure is
 // counted apart, never as agreement.
-func rejudge(ctx context.Context, t *testing.T, model *compat.Client, rep report) ([]judged, tally) {
+func rejudge(ctx context.Context, t *testing.T, model ai.Chat, rep report) ([]judged, tally) {
 	var out []judged
 	var n tally
 	for _, r := range rep.Repos {
@@ -116,21 +117,28 @@ func rejudge(ctx context.Context, t *testing.T, model *compat.Client, rep report
 }
 
 // TestJudge re-judges the answers of a stored run, DEEPCODE_BENCH_JUDGE=<its
-// JSON>, with the chat model the DEEPCODE_CHAT_* settings name, and reports
-// how often the judge agrees with the run's selfTalk flags, how it differs,
-// and how many answers it reads as not in their question's language
-// (rejudge). Each difference is logged (go test -v shows them) and every
-// verdict or failure written beside the run (<run>.judged.json) to be read by
-// hand: the judge's validation, before a bench uses it. A judge that fails on
-// more than one answer in 20 fails it.
+// JSON>, with the judge score.Model names, and reports how often the judge
+// agrees with the run's selfTalk flags, how it differs, and how many answers
+// it reads as not in their question's language (rejudge). Each difference is
+// logged (go test -v shows them) and every verdict or failure written beside
+// the run (<run>.judged.json) to be read by hand: the judge's validation,
+// before a bench uses it. A judge that fails on more than one answer in 20
+// fails it.
 func TestJudge(t *testing.T) {
 	path := os.Getenv("DEEPCODE_BENCH_JUDGE")
 	if path == "" {
 		t.Skip("set DEEPCODE_BENCH_JUDGE to a bench run's JSON to judge its answers again")
 	}
-	model := chatModel(t, nil)
+	chat, err := eval.Chat(t.TempDir(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := chat.(interface{ Close() }); ok {
+		t.Cleanup(c.Close)
+	}
+	model := score.Model(chat)
 	if model == nil {
-		t.Fatal("judging needs DEEPCODE_CHAT_MODEL")
+		t.Fatal("judging needs DEEPCODE_JUDGE_MODEL or a chat model")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

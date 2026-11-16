@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"log/slog"
+	"slices"
 	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -18,6 +21,31 @@ import (
 // session's instructions come in session/new.
 var air = map[string]any{"jetbrains": map[string]any{"air": map[string]any{"version": 1,
 	"capabilities": []string{"sessionFailure", "customInstructions"}}}}
+
+// quiet is a connection's log without the notifications the SDK has no method
+// for, which a client drops silently, as ACP has it: Claude's adapter sends
+// auth/status_update, of an RFD newer than the SDK, as each session starts.
+type quiet struct{ slog.Handler }
+
+// Handle writes r unless it is an unknown notification's.
+func (q quiet) Handle(ctx context.Context, r slog.Record) error {
+	unknown := false
+	r.Attrs(func(a slog.Attr) bool {
+		re, ok := a.Value.Any().(*acp.RequestError)
+		unknown = ok && re.Code == -32601 && r.Message == "failed to handle notification"
+		return !unknown
+	})
+	if unknown {
+		return nil
+	}
+	return q.Handler.Handle(ctx, r)
+}
+
+// WithAttrs keeps the filter on a logger given attributes.
+func (q quiet) WithAttrs(as []slog.Attr) slog.Handler { return quiet{q.Handler.WithAttrs(as)} }
+
+// WithGroup keeps the filter in a group.
+func (q quiet) WithGroup(name string) slog.Handler { return quiet{q.Handler.WithGroup(name)} }
 
 // client is deepcode's side of an agent's connection: it hands each session's
 // updates to the prompt waiting on it, refuses every permission the agent
@@ -48,6 +76,30 @@ type failure struct {
 	Title    string   `json:"title"`
 	Details  string   `json:"details"`
 	Actions  []string `json:"actions"`
+}
+
+// failed is the error of a failure the agent typed (design 5.5): signing in
+// is refused; a context or budget a new session would clear is an
+// ai.ErrContext; a quota, a rate limit, a service's or a connection's failure
+// may pass, so a later try may get through; anything else failed the answer.
+func (a *Agent) failed(f failure) error {
+	words := f.Title
+	if f.Details != "" {
+		words += ": " + f.Details
+	}
+	err := fmt.Errorf("%s: %s", a.Name(), words)
+	switch f.Category {
+	case "access":
+		return ai.Kinded(fmt.Errorf("%w: %s", err, signIn), ai.ErrRefused)
+	case "limit":
+		if slices.Contains(f.Actions, "new_session") {
+			return &ai.ErrContext{Err: err}
+		}
+		return ai.Kinded(err, ai.ErrUnavailable)
+	case "service", "connection":
+		return ai.Kinded(err, ai.ErrUnavailable)
+	}
+	return ai.Kinded(err, ai.ErrFailed)
 }
 
 // watch hands session id's updates to t until forget.

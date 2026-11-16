@@ -56,7 +56,7 @@ var defaults = map[string]any{
 	"acp_sessions":          2,     // the agent's prompts at a time
 	"acp_codex_home":        "",    // CODEX_HOME for the agent; "" leaves Codex its own (~/.codex)
 	"acp_claude_connectors": false, // Claude: the account's claude.ai connectors join each session
-	"acp_user_config":       false, // the user's own agent settings, instructions, MCP servers, plugins and skills join
+	"acp_user_config":       false, // the user's own agent settings, instructions, auto memory, MCP servers, plugins and skills join
 
 	"workers":     2,
 	"job_timeout": 2 * time.Hour,

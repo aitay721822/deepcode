@@ -40,11 +40,16 @@ func describe(chat ai.Chat) model {
 	w := chat.Window()
 	m := model{Provider: "openai", Name: chat.Name(), Context: w.Context, Overhead: w.Overhead, Scale: w.Scale}
 	if a, ok := chat.(*acp.Agent); ok {
-		s := a.Status()
-		m.Provider, m.Agent = "acp", &agent{Name: s.Name, Version: s.Version, Model: s.Model, Trouble: s.Trouble}
-		if !s.At.IsZero() {
-			m.Agent.At = s.At.UTC().Format(time.DateTime)
-		}
+		m.Provider, m.Agent = "acp", agentOf(a.Status())
 	}
 	return m
+}
+
+// agentOf is what an agent says of itself as the console shows it.
+func agentOf(s acp.Status) *agent {
+	a := &agent{Name: s.Name, Version: s.Version, Model: s.Model, Trouble: s.Trouble}
+	if !s.At.IsZero() {
+		a.At = s.At.UTC().Format(time.DateTime)
+	}
+	return a
 }

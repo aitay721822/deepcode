@@ -43,7 +43,7 @@ type Agent struct {
 	Effort     string // the value of its thought_level option; "" keeps its default
 	CodexHome  string // CODEX_HOME for the agent; "" leaves Codex its own
 	Connectors bool   // Claude: the account's claude.ai connectors join each session
-	UserConfig bool   // the user's own settings, instructions, MCP servers, plugins and skills join each session
+	UserConfig bool   // the user's own settings, instructions, auto memory, MCP servers, plugins and skills join each session
 	// Context is the context in tokens, 0 taking the agent's word for it;
 	// CompactRatio is ai.Window's Ratio.
 	Context      int
@@ -95,8 +95,9 @@ type running struct {
 // none (design 5.1).
 const recycle = 200
 
-// grace is how long an agent has to end once its input closes.
-const grace = 5 * time.Second
+// grace is how long an agent has to end once its input closes, or to end a
+// turn it was told to cancel (a variable, which tests shorten).
+var grace = 5 * time.Second
 
 // startLimit is the least time a start has, as a runner may download the
 // agent first (a variable, which tests shorten).
@@ -214,13 +215,15 @@ func (a *Agent) agent(ctx context.Context) (*running, error) {
 		var err error
 		r, err = a.start()
 		a.mu.Lock()
+		if a.closed { // a start Close stopped is no failure of the agent's
+			if err == nil {
+				go a.stop(r)
+			}
+			return nil, ai.Kinded(fmt.Errorf("%s: deepcode is shutting down", a.Name()), ai.ErrUnavailable)
+		}
 		if err != nil {
 			a.backoff(err)
 			return nil, err
-		}
-		if a.closed {
-			go a.stop(r)
-			return nil, ai.Kinded(fmt.Errorf("%s: deepcode is shutting down", a.Name()), ai.ErrUnavailable)
 		}
 		a.now = r // fails stay till it answers (note)
 	}
@@ -294,8 +297,9 @@ func (a *Agent) start() (*running, error) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), limit,
 		ai.Kinded(fmt.Errorf("%s: not started within %s: %w", a.Name(), limit, context.DeadlineExceeded), ai.ErrUnavailable))
 	defer cancel()
-	if err := os.MkdirAll(a.Dir, 0o700); err != nil {
-		return nil, ai.Kinded(fmt.Errorf("%s: %w", a.Name(), err), ai.ErrUnavailable)
+	dir, err := a.work(0) // the probe's folder, made before a process is: deepcode's disk, not the agent
+	if err != nil {
+		return nil, err
 	}
 	logPath := filepath.Join(a.Dir, "agent.log")
 	rotate(logPath)
@@ -303,18 +307,11 @@ func (a *Agent) start() (*running, error) {
 	if err != nil {
 		return nil, ai.Kinded(fmt.Errorf("%s: %w", a.Name(), err), ai.ErrUnavailable)
 	}
-	var extra []string
-	if a.CodexHome != "" {
-		extra = append(extra, "CODEX_HOME="+a.CodexHome)
-	}
-	if !a.UserConfig { // read by codex-acp alone: no skills of ~/.agents, no apps' instructions (design 5.1)
-		extra = append(extra, `CODEX_CONFIG={"features":{"skip_host_skill_discovery":true},"skills":{"include_instructions":false},"include_apps_instructions":false}`)
-	}
-	p, err := proc.Start(a.Command, proc.Env(extra...), stderr)
+	p, err := proc.Start(a.Command, a.env(), stderr)
 	if err != nil {
 		stderr.Close()
 		err = fmt.Errorf("%s: %w", a.Name(), err) // not the command line, which may hold a key
-		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, proc.ErrLine) {
 			return nil, ai.Kinded(err, ai.ErrRefused)
 		}
 		return nil, ai.Kinded(err, ai.ErrUnavailable)
@@ -329,11 +326,14 @@ func (a *Agent) start() (*running, error) {
 		return nil, ai.Kinded(fmt.Errorf("%s: deepcode is shutting down", a.Name()), ai.ErrUnavailable)
 	}
 	r.conn = acp.NewClientSideConnection(r.cl, p.Stdin, p.Stdout)
-	r.conn.SetLogger(slog.New(slog.NewTextHandler(log.Writer(), &slog.HandlerOptions{Level: slog.LevelWarn}))) // not each close
+	r.conn.SetLogger(slog.New(quiet{slog.NewTextHandler(log.Writer(), &slog.HandlerOptions{Level: slog.LevelWarn})})) // not each close
 	info, err := r.conn.Initialize(ctx, acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber,
 		ClientCapabilities: acp.ClientCapabilities{Meta: air}})
 	if err != nil {
 		a.stop(r)
+		if ctx.Err() != nil {
+			return nil, ai.Cause(ctx, err)
+		}
 		return nil, ai.Kinded(fmt.Errorf("%s: initialize: %w (its log: %s)", a.Name(), err, logPath), ai.ErrUnavailable)
 	}
 	r.kind, r.closes = kind(info, a.Command), info.AgentCapabilities.SessionCapabilities.Close != nil
@@ -341,7 +341,7 @@ func (a *Agent) start() (*running, error) {
 	a.info = info.AgentInfo
 	a.mu.Unlock()
 	a.warned.Do(func() { a.warn(r.kind) })
-	if err := a.probe(ctx, r); err != nil {
+	if err := a.probe(ctx, r, dir); err != nil {
 		a.stop(r)
 		return nil, err
 	}
@@ -403,19 +403,20 @@ var sample = func() string {
 	return b.String()
 }()
 
-// probe opens a session on r, which checks the options it is set to (open).
+// probe opens a session on r in dir, which checks the options it is set to
+// (open).
 // The first process also asks it probeAsk twice, the second time after
 // sample, each in the time a request has: the agent's count of the first
 // request less the local count of what it sent (with the instructions the
 // adapter took, bare for Claude's) is its Overhead, and what the second added
 // over the local count of what it added, its Scale (design 5.1). An agent
 // that counts nothing leaves them 0 and 1.
-func (a *Agent) probe(ctx context.Context, r *running) error {
+func (a *Agent) probe(ctx context.Context, r *running, dir string) error {
 	a.mu.Lock()
 	r.open, r.opened = r.open+1, r.opened+1 // as agent() counts a session: r is not yet a.now
 	probed := a.probed || a.Count == nil
 	a.mu.Unlock()
-	s, err := a.open(ctx, r, 0, "")
+	s, err := a.open(ctx, r, dir, "")
 	if err != nil {
 		a.release(r)
 		return ai.Cause(ctx, err) // the start's time ran out: why, an ai.ErrUnavailable

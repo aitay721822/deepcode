@@ -30,12 +30,9 @@ type report struct {
 	ChatSchema      string   `json:"chatSchema,omitempty"` // where a request for JSON gave its schema (ai.SchemaServer, ai.SchemaPrompt); "": before the setting
 	EmbedModel      string   `json:"embedModel,omitempty"` // "": lexical search only
 	Judged          bool     `json:"judged,omitempty"`     // its selfTalk and language are the judge's (judge_test.go); an older run's selfTalk is a detector's
+	JudgeModel      string   `json:"judgeModel,omitempty"` // DEEPCODE_JUDGE_MODEL; "": the chat model judged
 	Repos           []result `json:"repos"`
 }
-
-// schema is where the bench's requests for JSON give their schema:
-// DEEPCODE_CHAT_SCHEMA, as serve reads chat_schema, else ai.SchemaServer.
-func schema() string { return cmp.Or(os.Getenv("DEEPCODE_CHAT_SCHEMA"), ai.SchemaServer) }
 
 type result struct {
 	Repo string `json:"repo"`
@@ -160,7 +157,11 @@ func (rep report) write(dir string) error {
 func (rep report) markdown() string {
 	var b strings.Builder
 	p := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	p("# deepcode bench\n\nStarted %s · deepcode %s · model %s · reasoning effort %q · temperature %q · embeddings %s\n", rep.Started, rep.Deepcode, rep.Model, rep.ReasoningEffort, rep.Temperature, cmp.Or(rep.EmbedModel, "none"))
+	judge := ""
+	if rep.Judged {
+		judge = " · judge " + cmp.Or(rep.JudgeModel, rep.Model)
+	}
+	p("# deepcode bench\n\nStarted %s · deepcode %s · model %s · reasoning effort %q · temperature %q · embeddings %s%s\n", rep.Started, rep.Deepcode, rep.Model, rep.ReasoningEffort, rep.Temperature, cmp.Or(rep.EmbedModel, "none"), judge)
 	p("The first index's time includes fetching the repository from GitHub. A repository with errors (listed below the tables) has numbers that are partial.\n")
 	p("## Index and graph (head)\n\n| Repository | Files | Generated | Languages | Chunks | Symbols | Import edges | Diagram edges | First index | Errors |\n|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
@@ -474,11 +475,11 @@ func TestMarkdown(t *testing.T) {
 	ok.WikiRuns, ok.Tree = []wikiRun{{Parallel: 1, Seconds: 20}, {Parallel: 2, Seconds: 12}}, []string{"- 1 Overview", "- 2 Core", "  - 2.1 Mux"}
 	ok.Pages, ok.Topics, ok.CitationSpan, ok.PageCitations = 10, &coverage{Topics: 4, Covered: 3, Missing: []string{"SSE"}, ToolingPages: 2}, citationSpan{3, 40}, 7
 	uncited, uncounted := result{Repo: "uncited", Wiki: &wikiRun{EstInTokens: 90, OutTokens: 4, EstOutTokens: 2}}, result{Repo: "uncounted", Wiki: &wikiRun{}, Failed: []string{"page citations"}}
-	md := report{Repos: []result{ok, broken, uncited, uncounted}}.markdown()
+	md := report{Model: "m", Judged: true, JudgeModel: "j", Repos: []result{ok, broken, uncited, uncounted}}.markdown()
 	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 (1 by skeleton) |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
 		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 3.0 s | 9.5 s | 20.0 s | 2 | fail: no Mount | yes | other |", "| ok | u | 1.0 s | 1.0 s | 2.0 s | 1 | pass | not judged | not judged |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
 		"1 of 3 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language; 1 were not judged.",
-		"The judge is advisory, hand labels gate; its measured error: " + judgeError + ".",
+		"The judge is advisory, hand labels gate; its measured error: " + judgeError + ".", "embeddings none · judge j\n",
 		"Evidence budget: 4 hits evicted, 1 refused; 3 citation references resolved to a path that differs from the one written by leading folders.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |",
 		"Answer decode |\n|---|---|---|---|---|---|---|\n| ok | 2 | 1.0 | 1.0 s | 0.7 s | 2.0 s | 10.0 tokens/s |\n\n**broken errors:**", "| 0 | 0 | 7 | 3, at most 40 | 4.2 s, 9 requests |", "| 0 | 0 | failed | failed | 1.0 s, 2 requests |",
 		"| Repository | Pages | DeepWiki | Thin | Crowded | Projects without a page | Ceiling | Contracts |\n|---|---|---|---|---|---|---|---|\n", "| ok | 10 | 28 | 1 | 0 | 1: svc/ | 80 wanted, 64 planned (limit 64) | flat.json 1/0/0, section.missing 2/1/0 |", "| broken | 3 | 0 | 0 | 0 | 0 | – | none broken |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |",
@@ -493,8 +494,7 @@ func TestMarkdown(t *testing.T) {
 	}
 	tmp, _ := filepath.Glob(filepath.Join(dir, "*.tmp"))
 	runsTmp, _ := filepath.Glob(filepath.Join(dir, "runs", "*.tmp"))
-	tmp = append(tmp, runsTmp...)
-	if _, err := os.Stat(filepath.Join(dir, "runs", "20261107T000000Z.json")); err != nil || len(tmp) > 0 {
-		t.Fatalf("runs file: %v; left aside: %q", err, tmp)
+	if _, err := os.Stat(filepath.Join(dir, "runs", "20261107T000000Z.json")); err != nil || len(tmp)+len(runsTmp) > 0 {
+		t.Fatalf("runs file: %v; left aside: %q %q", err, tmp, runsTmp)
 	}
 }
