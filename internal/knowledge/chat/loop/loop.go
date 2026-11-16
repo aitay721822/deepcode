@@ -145,6 +145,7 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 	}
 	first.Dynamic += s.follow(ctx, req.First.Hits, follows)
 	ex := g.Model.Exchange(first, tools)
+	defer ex.Close()
 	told := slices.ContainsFunc(s.res.Refused, asked) // the model was told of a refusal
 	for stalls := 0; s.res.Stop == ""; {
 		if s.res.Rounds == req.Rounds {

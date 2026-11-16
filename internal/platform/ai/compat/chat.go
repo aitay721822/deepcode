@@ -18,9 +18,13 @@ import (
 )
 
 // Ask streams the model's answer to p, by the Responses API when API says so
-// and by Chat Completions otherwise, asking for s's JSON unless s is nil, and
-// relays its text as it comes. Reasoning is no part of the answer.
+// and by Chat Completions otherwise, asking the server for s's JSON when s is
+// not nil and the schema is the server's (SchemaMode), and relays its text as
+// it comes. Reasoning is no part of the answer.
 func (c *Client) Ask(ctx context.Context, p ai.Prompt, s *ai.JSONSchema, onDelta func(string)) (_ ai.Reply, err error) {
+	if c.SchemaMode() == ai.SchemaPrompt {
+		s = nil // the prompt holds it
+	}
 	ctx, cancel := ai.WithTimeout(ctx, c.Timeout, c.ModelName)
 	defer cancel()
 	defer func() { err = ai.Cause(ctx, err) }() // before cancel, which would end ctx too
@@ -133,6 +137,10 @@ type answered struct{ piece, at int }
 // Used is the last reply's Usage: InTokens as the server counted them, 0 when
 // it reported none.
 func (e *exchange) Used() ai.Usage { return e.used }
+
+// Close does nothing: every request carries the whole exchange, and the
+// server keeps none of it.
+func (e *exchange) Close() {}
 
 // Compact gives the calls short, by Key, the text short gives them in place
 // of their results, in the params as they stand: the replies and the other

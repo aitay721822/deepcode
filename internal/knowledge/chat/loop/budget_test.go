@@ -62,13 +62,15 @@ func shown(t *testing.T, s *state) []string {
 
 // TestBudgetStop: the first search's hits fit, with 20 bytes left; each read
 // is refused, the first told after its lines, so the second reply, which adds
-// nothing past a refusal told, ends the gathering.
+// nothing past a refusal told, ends the gathering, whose exchange is closed.
 func TestBudgetStop(t *testing.T) {
 	srv, asked := model(t, []call{{"read_file", `{"path":"src/tree.go","start_line":0,"end_line":0}`}}, []call{{"read_file", `{"path":"gen/big.go","start_line":0,"end_line":0}`}})
 	g, req := fixture(t, srv.URL)
 	req.Chars = size(req.First.Hits) + 20
-	if res := g.Gather(context.Background(), req, func(string, any) {}); res.Stop != StopBudget || res.Rounds != 2 || len(res.Hits) != 2 {
-		t.Errorf("stopped %q after %d rounds, evidence %q", res.Stop, res.Rounds, paths(res.Hits))
+	closed := 0
+	g.Model = closing{g.Model, &closed}
+	if res := g.Gather(context.Background(), req, func(string, any) {}); res.Stop != StopBudget || res.Rounds != 2 || len(res.Hits) != 2 || closed != 1 {
+		t.Errorf("stopped %q after %d rounds, evidence %q, closed %d times", res.Stop, res.Rounds, paths(res.Hits), closed)
 	}
 	if got := results(asked())["r0c0"]; !strings.HasPrefix(got, "src/tree.go, lines 1-30 of 30:\n") || !strings.HasSuffix(got, "20 bytes left of "+fmt.Sprint(req.Chars)+". Read a narrower range, or call done.\n") {
 		t.Errorf("the refused read was told %q", got)
@@ -437,4 +439,27 @@ func TestContext(t *testing.T) {
 	if res.Stop != StopContext || res.Rounds != 1 || len(asked) != 1 || compact != nil || !slices.Contains(paths(res.Hits), "gen/big.go:1-200") {
 		t.Errorf("full: stopped %q after %d rounds, %d asked, compact %q, evidence %q", res.Stop, res.Rounds, len(asked), compact, paths(res.Hits))
 	}
+}
+
+// closing is a Chat whose exchanges count their Close in closed.
+type closing struct {
+	ai.Chat
+	closed *int
+}
+
+// Exchange is the Chat's, its Close counted.
+func (c closing) Exchange(p ai.Prompt, tools []ai.Tool) ai.Exchange {
+	return closer{c.Chat.Exchange(p, tools), c.closed}
+}
+
+// closer is an Exchange that counts its Close.
+type closer struct {
+	ai.Exchange
+	closed *int
+}
+
+// Close counts, then closes.
+func (c closer) Close() {
+	*c.closed++
+	c.Exchange.Close()
 }

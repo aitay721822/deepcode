@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"deepcode/internal/platform/ai/usage"
@@ -78,7 +79,10 @@ type Chat interface {
 	// Name is the model's name in errors, logs and usage rows.
 	Name() string
 	// Ask streams the model's answer to p, relaying its text to onDelta as it
-	// comes; with s, asking for s's JSON as SchemaMode says. A failed answer
+	// comes; with s, the answer is s's JSON: under SchemaServer the backend
+	// asks the server for it, under SchemaPrompt the prompt already does and
+	// the backend may read the answer by it (an agent's loses the one fence it
+	// is wrapped in). A failed answer
 	// keeps the text that came before it failed. An answer that stopped at the
 	// output budget is no error but Spent; Stream and StreamJSON fail one with
 	// nothing said, or JSON cut short.
@@ -126,6 +130,9 @@ type Exchange interface {
 	Added() int
 	// Used is the last reply's Usage: InTokens 0 when the model counted none.
 	Used() Usage
+	// Close ends the exchange, letting go of what a backend holds open for it
+	// (an agent's session); a Next after it fails.
+	Close()
 }
 
 // Window is a model's context, as the backend knows it: Context tokens in
@@ -259,6 +266,42 @@ var ErrFailed = errors.New("the server failed the answer")
 
 // ErrSpent: a reply cut at the output budget, whose calls may be cut too.
 var ErrSpent = errors.New("the model's reply reached the output budget: raise DEEPCODE_MAX_OUTPUT_TOKENS")
+
+// Throttle spaces a backend's requests evenly to stay under its requests per
+// minute. A caller takes its turn only once it comes: turns booked ahead would
+// stay booked when their callers give up, so a burst of abandoned calls
+// (search queries past their timeout) would push every later call past its
+// own, long after the burst. The zero Throttle is ready.
+type Throttle struct {
+	mu   sync.Mutex
+	next time.Time
+}
+
+// Wait returns once the caller's turn under rpm a minute comes (at once when
+// rpm is 0), or with ctx's error when the caller gives up first.
+func (t *Throttle) Wait(ctx context.Context, rpm int) error {
+	if rpm <= 0 {
+		return nil
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err // a caller that has given up takes no turn, not even a free one
+		}
+		t.mu.Lock()
+		wait := time.Until(t.next)
+		if wait <= 0 {
+			t.next = time.Now().Add(time.Minute / time.Duration(rpm))
+			t.mu.Unlock()
+			return nil
+		}
+		t.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
 
 // Kinded is err, which is also kind (errors.Is), its message its own.
 func Kinded(err, kind error) error { return kinded{err, kind} }

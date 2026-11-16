@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -173,6 +172,11 @@ func TestFormat(t *testing.T) {
 		if _, err := ai.Generate(context.Background(), c, ai.Prompt{}); err != nil || strings.Contains(body.Load().(string), "schema") || strings.Contains(body.Load().(string), indented) {
 			t.Errorf("%s, no format: %v\n%s", api, err, body.Load())
 		}
+		inPrompt := &Client{BaseURL: srv.URL, ModelName: "m", API: api, Schema: ai.SchemaPrompt} // the schema in the prompt alone
+		if _, _, err := ai.StreamJSON(context.Background(), inPrompt, ai.Prompt{}, f, nil); err != nil || strings.Contains(body.Load().(string), `"json_schema"`) ||
+			!strings.Contains(body.Load().(string), ai.SchemaLine) {
+			t.Errorf("%s, schema in the prompt: %v\n%s", api, err, body.Load())
+		}
 		for m, says := range map[string]string{"prose": "m: the answer is not the JSON of plan", "shape": "m: the answer is not the JSON of plan", "refused": "400 Bad Request: {\"error\":{\"message\":\"response_format is not supported\"}}",
 			"cut": "m: the answer reached the output budget before its JSON ended"} {
 			mode.Store(m)
@@ -305,34 +309,6 @@ func TestEmbedOrder(t *testing.T) {
 	if _, err := (&Client{BaseURL: srv.URL, APIKey: "wrong", ModelName: "m", Meter: meter}).Embed(context.Background(), []string{"a"}); err == nil ||
 		calls.Load() != 2 || len(got) != 2 || got[1] != (ai.Usage{}) {
 		t.Fatalf("a refused key: %v, after %d requests in all, metered %+v", err, calls.Load(), got)
-	}
-}
-
-// TestThrottleForgetsAbandoned: callers that give up waiting for their turn
-// leave no gap behind, so the next caller is not pushed past its timeout; turns
-// stay spaced, and a caller that gave up before it came takes none.
-func TestThrottleForgetsAbandoned(t *testing.T) {
-	c := &Client{RPM: 600} // a turn every 100ms
-	stopped, stop := context.WithCancel(context.Background())
-	stop()
-	if c.throttle(stopped) == nil {
-		t.Fatal("a caller that had given up took the free turn")
-	}
-	gone, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	var wg sync.WaitGroup
-	for range 20 { // one gets the first turn; the rest give up
-		wg.Go(func() { c.throttle(gone) })
-	}
-	wg.Wait()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := c.throttle(ctx); err != nil {
-		t.Fatalf("the caller after 19 abandoned ones: %v", err)
-	}
-	start := time.Now()
-	if err := c.throttle(ctx); err != nil || time.Since(start) < 50*time.Millisecond {
-		t.Fatalf("the next turn came after %v: %v", time.Since(start), err)
 	}
 }
 

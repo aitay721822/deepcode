@@ -239,15 +239,10 @@ func (f Format[T]) Prompt(c Chat, p Prompt) Prompt {
 
 // StreamJSON streams c's answer to f.Prompt(c, p) in f's JSON, relaying its
 // text as it comes, and reads it into a T (Decode); reply is the answer as
-// written. Under SchemaPrompt it asks for no schema of the backend. An answer
-// that is not f's JSON is an error wrapping ErrSchema; one cut at the output
-// budget says so instead.
+// the backend gave it (Chat.Ask). An answer that is not f's JSON is an error
+// wrapping ErrSchema; one cut at the output budget says so instead.
 func StreamJSON[T any](ctx context.Context, c Chat, p Prompt, f Format[T], onDelta func(string)) (v T, reply string, err error) {
-	s := &f.JSONSchema
-	if c.SchemaMode() == SchemaPrompt {
-		s = nil
-	}
-	r, err := ask(ctx, c, f.Prompt(c, p), s, onDelta)
+	r, err := ask(ctx, c, f.Prompt(c, p), &f.JSONSchema, onDelta)
 	if reply = r.Text; err != nil {
 		return v, reply, err
 	}

@@ -34,15 +34,16 @@ var defaults = map[string]any{
 	"addr": "127.0.0.1:8080",
 	"data": "data",
 
+	"chat_provider":     "openai", // or acp: an agent (acp_command) on its user's subscription
 	"chat_base_url":     "https://api.openai.com/v1",
 	"chat_api_key":      "",
-	"chat_model":        "", // "" turns chat and the wiki off
+	"chat_model":        "", // "" turns chat and the wiki off; with acp, the agent's model option, "" its default
 	"chat_api":          "completions",
 	"chat_schema":       "server", // or prompt: a request's JSON schema in its system message, sending no response_format
 	"embed_base_url":    "",       // "" = chat_base_url
 	"embed_api_key":     "",       // "" = chat_api_key
 	"embed_model":       "",       // "" turns vector search off
-	"reasoning_effort":  "",       // "" leaves it to the server
+	"reasoning_effort":  "",       // "" leaves it to the server; with acp, the agent's thought_level option
 	"temperature":       nil,      // unset leaves it to the server; a number, as 0.2, in the file
 	"max_output_tokens": 0,        // 0 leaves it to the server
 	"chat_context":      0,        // the model's context in tokens; 0: unknown till a server reports it
@@ -50,6 +51,12 @@ var defaults = map[string]any{
 	"chat_tokenizer":    "",       // the chat model's tokenizer.json; "" counts its tokens by OpenAI's o200k_base
 	"llm_timeout":       5 * time.Minute,
 	"llm_rpm":           0, // 0 = unlimited
+
+	"acp_command":           "",    // the agent's command line, such as npx -y @agentclientprotocol/claude-agent-acp
+	"acp_sessions":          2,     // the agent's prompts at a time
+	"acp_codex_home":        "",    // CODEX_HOME for the agent; "" leaves Codex its own (~/.codex)
+	"acp_claude_connectors": false, // Claude: the account's claude.ai connectors join each session
+	"acp_user_config":       false, // the user's own agent settings, instructions, MCP servers, plugins and skills join
 
 	"workers":     2,
 	"job_timeout": 2 * time.Hour,
@@ -73,6 +80,17 @@ var defaults = map[string]any{
 // efforts are the reasoning_effort values OpenAI-compatible servers take.
 var efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 
+// providers are how the chat model is reached: an OpenAI-compatible server,
+// or an ACP agent (app.ProviderACP).
+var providers = []string{"openai", app.ProviderACP}
+
+// unusedByACP are the settings an agent takes no value of: set with
+// chat_provider acp, they are reported.
+var unusedByACP = []string{"chat_base_url", "chat_api_key", "chat_api", "temperature", "max_output_tokens"}
+
+// acpOnly are the settings only chat_provider acp reads.
+var acpOnly = []string{"acp_command", "acp_sessions", "acp_codex_home", "acp_claude_connectors", "acp_user_config"}
+
 // apis are the APIs a chat model can be asked by: Chat Completions and the
 // Responses API (compat.Completions, compat.Responses).
 var apis = []string{"completions", "responses"}
@@ -81,8 +99,9 @@ var apis = []string{"completions", "responses"}
 // or in its system message (ai.SchemaServer, ai.SchemaPrompt).
 var schemas = []string{"server", "prompt"}
 
-// secrets are never shown in an error, which ends up in the log.
-var secrets = []string{"chat_api_key", "embed_api_key", "admin_password", "secret_key"}
+// secrets are never shown in an error, which ends up in the log; an agent's
+// command line may hold a key.
+var secrets = []string{"chat_api_key", "embed_api_key", "admin_password", "secret_key", "acp_command"}
 
 // most bounds every whole number, so that MB << 20 cannot overflow.
 const most = 1 << 30
@@ -106,8 +125,16 @@ func Load() (cfg app.Config, addr string, err error) {
 		return app.Config{}, "", fmt.Errorf("config file %s: unknown setting %s (README.md lists them)", v.ConfigFileUsed(), strings.Join(unknown, ", "))
 	}
 	p := &parser{v: v}
+	provider := p.oneOf("chat_provider", providers)
 	chatURL := p.url("chat_base_url")
 	chatKey := p.str("chat_api_key")
+	embedURL, embedKey := cmp.Or(p.url("embed_base_url"), chatURL), cmp.Or(p.str("embed_api_key"), chatKey)
+	effort := p.str("reasoning_effort") // an agent lists its own values, checked once it starts
+	if provider == app.ProviderACP {
+		embedURL, embedKey = p.url("embed_base_url"), p.str("embed_api_key") // not the chat server's: an agent has none
+	} else {
+		effort = p.oneOf("reasoning_effort", efforts)
+	}
 	list, err := cast.ToStringSliceE(v.Get("trusted_proxies")) // a list in the file, else text
 	if err != nil {
 		p.fail("trusted_proxies", fmt.Sprint(v.Get("trusted_proxies")), "addresses or CIDRs, as a list or comma separated")
@@ -122,10 +149,10 @@ func Load() (cfg app.Config, addr string, err error) {
 		ChatURL: chatURL, ChatKey: chatKey, ChatModel: p.str("chat_model"),
 		ChatAPI:         p.oneOf("chat_api", apis),
 		ChatSchema:      p.oneOf("chat_schema", schemas),
-		EmbedURL:        cmp.Or(p.url("embed_base_url"), chatURL),
-		EmbedKey:        cmp.Or(p.str("embed_api_key"), chatKey),
+		EmbedURL:        embedURL,
+		EmbedKey:        embedKey,
 		EmbedModel:      p.str("embed_model"),
-		ReasoningEffort: p.oneOf("reasoning_effort", efforts),
+		ReasoningEffort: effort,
 		Temperature:     p.temperature("temperature"),
 		MaxOutputTokens: p.whole("max_output_tokens"),
 		ChatContext:     p.whole("chat_context"),
@@ -133,6 +160,13 @@ func Load() (cfg app.Config, addr string, err error) {
 		ChatTokenizer:   p.str("chat_tokenizer"),
 		LLMTimeout:      p.duration("llm_timeout"),
 		LLMRPM:          p.whole("llm_rpm"),
+
+		ChatProvider:  provider,
+		ACPCommand:    p.str("acp_command"),
+		ACPSessions:   p.whole("acp_sessions"),
+		ACPCodexHome:  p.str("acp_codex_home"),
+		ACPConnectors: p.boolean("acp_claude_connectors"),
+		ACPUserConfig: p.boolean("acp_user_config"),
 
 		Workers:    p.whole("workers"),
 		JobTimeout: p.duration("job_timeout"),
@@ -161,11 +195,43 @@ func Load() (cfg app.Config, addr string, err error) {
 	if cfg.SessionTTL > 0 && cfg.SessionTTL < time.Minute { // sessions expire in whole seconds
 		p.fail("session_ttl", v.GetString("session_ttl"), "1m or more")
 	}
+	p.provider(cfg)
 	if room := cfg.Room(); cfg.ChatContext > 0 && cfg.ChatContext <= room {
 		p.fail("chat_context", v.GetString("chat_context"), fmt.Sprintf("more tokens than the answer's room, %d (max_output_tokens, else its default): set max_output_tokens lower", room))
 	}
 	addr = p.str("addr") // before p.bad is read: Go leaves that order open in one return
 	return cfg, addr, errors.Join(p.bad...)
+}
+
+// provider reports the settings cfg's chat provider cannot use, and what
+// chat_provider acp needs: its command, and an embeddings server of its own
+// for an embedding model, as an agent has none.
+func (p *parser) provider(cfg app.Config) {
+	if cfg.ChatProvider != app.ProviderACP {
+		for _, k := range acpOnly {
+			if p.set(k) {
+				p.fail(k, p.v.GetString(k), "unset, as only chat_provider acp reads it")
+			}
+		}
+		return
+	}
+	for _, k := range unusedByACP {
+		if val := p.v.GetString(k); p.set(k) {
+			if strings.HasSuffix(k, "_url") {
+				val = notShown
+			}
+			p.fail(k, val, "unset with chat_provider acp, as an agent takes no value of it")
+		}
+	}
+	if p.set("chat_schema") && cfg.ChatSchema == "server" {
+		p.fail("chat_schema", cfg.ChatSchema, "prompt or unset with chat_provider acp, as an agent takes no response format")
+	}
+	if cfg.ACPCommand == "" {
+		p.fail("acp_command", "", "the agent's command line with chat_provider acp, such as npx -y @agentclientprotocol/claude-agent-acp")
+	}
+	if cfg.EmbedModel != "" && cfg.EmbedURL == "" {
+		p.fail("embed_base_url", "", "an embeddings server for embed_model with chat_provider acp, as an agent has none")
+	}
 }
 
 // DataDir reads only the data directory, for backup and passwd without
@@ -318,6 +384,22 @@ func (p *parser) temperature(key string) *float64 {
 		return nil
 	}
 	return &t
+}
+
+// boolean reads true or false.
+func (p *parser) boolean(key string) bool {
+	s, ok := p.get(key)
+	b, err := strconv.ParseBool(s)
+	if ok && err != nil {
+		p.fail(key, s, "true or false")
+	}
+	return b
+}
+
+// set reports whether key is set to a value, in the environment or in the
+// config file, rather than left to its default.
+func (p *parser) set(key string) bool {
+	return os.Getenv("DEEPCODE_"+strings.ToUpper(key)) != "" || p.v.InConfig(key) && fmt.Sprint(p.v.Get(key)) != ""
 }
 
 // ratio reads a share above 0 and at most 1, such as 0.8.

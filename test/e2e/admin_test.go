@@ -30,11 +30,11 @@ import (
 	"deepcode/internal/platform/storage"
 )
 
-// checkUsage: the console sums the tokens of the repository's model requests per model, its wiki's and its
-// answer's: the chat model's input, its cached input as DeepSeek counts it, and its output; the embedding
-// model's input; a request the fake refused (one with no source) a call it counted no tokens for, none
-// estimated as none was answered. The days asked for must be a number of days.
-func checkUsage(t *testing.T, admin *client, repoID string) {
+// checkUsage: the console sums the tokens of the repository's model requests per model, its wiki's and its answer's:
+// the chat model's (chat) input, its cached input as DeepSeek counts it, and its output; the embedding model's input;
+// a request the fake refused (one with no source) a call it counted no tokens for, none estimated as none was answered.
+// An agent's two probing requests are no repository's. The days asked for must be a number of days.
+func checkUsage(t *testing.T, admin *client, repoID, chat string) {
 	t.Helper()
 	var totals []usage.Total
 	if code := admin.get("/api/admin/usage?days=30", &totals); code != http.StatusOK {
@@ -42,17 +42,17 @@ func checkUsage(t *testing.T, admin *client, repoID string) {
 	}
 	byModel := map[string]usage.Total{}
 	for _, u := range totals {
-		if u.RepoPublicID == "" { // every request so far was one repository's: none may lose it
+		if u.RepoPublicID == "" && (u.Model != chat || chat == "fake-chat" || u.Calls != 2) { // every other request so far was one repository's
 			t.Fatalf("usage counted for no repository: %+v", totals)
 		}
 		if u.RepoPublicID == repoID && u.RepoOwner == "acme" && u.RepoName == "demo" {
 			byModel[u.Model] = u
 		}
 	}
-	chat, embed := byModel["fake-chat"], byModel["fake-embed"]
-	if counted := chat.Calls - chat.Unreported; counted < 5 || chat.Input != 20*counted || chat.Cached != 8*counted || chat.Output != 5*counted ||
+	model, embed := byModel[chat], byModel["fake-embed"]
+	if counted := model.Calls - model.Unreported; counted < 5 || model.Input != 20*counted || model.Cached != 8*counted || model.Output != 5*counted ||
 		embed.Calls == 0 || embed.Input < embed.Calls || embed.Cached != 0 || embed.Output != 0 || len(byModel) != 2 ||
-		chat.Unreported == 0 || chat.EstInput+chat.EstOutput+embed.Unreported+embed.EstInput != 0 {
+		model.Unreported == 0 || model.EstInput+model.EstOutput+embed.Unreported+embed.EstInput != 0 {
 		t.Fatalf("usage: %+v", totals)
 	}
 	if code := admin.get("/api/admin/usage?days=week", nil); code != http.StatusBadRequest {

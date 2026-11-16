@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -80,5 +82,33 @@ func TestPrompt(t *testing.T) {
 		if c[0] != c[1] {
 			t.Errorf("got %q, want %q", c[0], c[1])
 		}
+	}
+}
+
+// TestThrottleForgetsAbandoned: callers that give up waiting for their turn
+// leave no gap behind, so the next caller is not pushed past its timeout; turns
+// stay spaced, and a caller that gave up before it came takes none.
+func TestThrottleForgetsAbandoned(t *testing.T) {
+	var th Throttle // 600 a minute: a turn every 100ms
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+	if th.Wait(stopped, 600) == nil {
+		t.Fatal("a caller that had given up took the free turn")
+	}
+	gone, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	var wg sync.WaitGroup
+	for range 20 { // one gets the first turn; the rest give up
+		wg.Go(func() { th.Wait(gone, 600) })
+	}
+	wg.Wait()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := th.Wait(ctx, 600); err != nil {
+		t.Fatalf("the caller after 19 abandoned ones: %v", err)
+	}
+	start := time.Now()
+	if err := th.Wait(ctx, 600); err != nil || time.Since(start) < 50*time.Millisecond {
+		t.Fatalf("the next turn came after %v: %v", time.Since(start), err)
 	}
 }

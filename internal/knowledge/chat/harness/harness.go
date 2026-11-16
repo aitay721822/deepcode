@@ -90,7 +90,18 @@ func (f *Fit) threshold(window int) int {
 		return 0
 	}
 	w := f.model.Window()
-	return int(float64(min(int(cmp.Or(w.Ratio, defaultRatio)*float64(window)), window-w.Room)-w.Overhead) / max(w.Scale, 1))
+	return f.local(min(int(cmp.Or(w.Ratio, defaultRatio)*float64(window)), window-w.Room))
+}
+
+// local is n of the model's tokens, in a request the backend adds its
+// Overhead to, as the local tokenizer's: less the Overhead, over the Scale (0,
+// below 1 or NaN taken as 1).
+func (f *Fit) local(n int) int {
+	w := f.model.Window()
+	if !(w.Scale >= 1) {
+		w.Scale = 1
+	}
+	return int(float64(n-w.Overhead) / w.Scale)
 }
 
 // Context is the model's context in tokens, 0 when unknown.
@@ -216,7 +227,7 @@ func (f *Fit) Next(ctx context.Context, ex ai.Exchange, masks func() map[int]str
 			return "", nil, fmt.Errorf("%w: %w", ErrFull, err)
 		}
 		next, _ := ex.Size(f.tokens.Message) // a refused request added nothing to ex
-		f.overhead = max(prompt-next-perMessage*ex.Added(), 0)
+		f.overhead = max(f.local(prompt)-next-perMessage*ex.Added(), 0)
 	}
 }
 
@@ -233,11 +244,12 @@ func (f *Fit) size(ex ai.Exchange) int {
 }
 
 // anchor takes the template's tokens from the reply ex just had: those the
-// server counted in its request less the pieces it sent.
+// server counted in its request, as the local tokenizer's (local), less the
+// pieces it sent.
 func (f *Fit) anchor(ex ai.Exchange) {
 	if in := ex.Used().InTokens; in > 0 {
 		_, sent := ex.Size(f.tokens.Message)
-		f.overhead = max(in-sent, 0)
+		f.overhead = max(f.local(in)-sent, 0)
 	}
 }
 

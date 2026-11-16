@@ -5,12 +5,24 @@ import (
 	"fmt"
 	"hash/fnv"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
+	"testing"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/acp/acptest"
 )
+
+// TestMain runs this test binary as the fake agent when asked to: the end
+// to end test's agent, which asks fakeLLM every prompt (acptest -relay).
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "acpfake" {
+		acptest.Main(os.Args[2:])
+	}
+	os.Exit(m.Run())
+}
 
 // fakeAPI answers like the GitHub and GitLab REST APIs for the demo
 // repositories, and remembers the token GitLab was sent.
@@ -49,7 +61,8 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // fakeLLM is an OpenAI-compatible server: bag-of-words embeddings, a fixed
 // wiki plan, fixed search terms, and answers citing the first source in one
-// group with a made-up file. Each chat reply counts replyUsage's tokens, the cached
+// group with a made-up file; to an agent's gathering, which asks for its calls
+// in JSON, none, and OK to the agent's probe. Each chat reply counts replyUsage's tokens, the cached
 // ones as DeepSeek counts them; each embedding request its input's texts.
 type fakeLLM struct {
 	mu     sync.Mutex
@@ -110,7 +123,12 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reply := `{"overview":{"title":"Overview","terms":["main","server"]},"labels":{"stack":"Technology stack","otherFiles":"Other files","architecture":"Architecture","structure":"Repository structure"},` +
 		`"units":{"./":[{"title":"Server","terms":["Server","Handle"],"files":["main.go"]}],"web/":[{"title":"Web App","terms":["App","start","helper"],"files":["web/app.ts"]}],` +
 		`"tooling":[{"title":"Build and tooling","terms":["README"],"files":["README.md"]}]}}`
-	if strings.Contains(body.Messages[0].Content, "Turn its question into") {
+	last := body.Messages[len(body.Messages)-1].Content
+	if strings.Contains(body.Messages[0].Content, "You call tools by replying with only JSON") {
+		reply = `{"calls": []}`
+	} else if last == "Reply with OK." || strings.HasSuffix(last, "\n\nReply with OK.") {
+		reply = "OK"
+	} else if strings.Contains(body.Messages[0].Content, "Turn its question into") {
 		f.mu.Lock()
 		f.terms++
 		f.mu.Unlock()
@@ -120,7 +138,7 @@ func (f *fakeLLM) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.plans++
 		f.mu.Unlock()
 	} else {
-		m := sourceRe.FindStringSubmatch(body.Messages[len(body.Messages)-1].Content)
+		m := sourceRe.FindStringSubmatch(last)
 		if m == nil {
 			http.Error(w, "fakeLLM: the prompt carries no <source>", http.StatusBadRequest)
 			return

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"deepcode/internal/platform/ai/acp"
 	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/platform/events"
@@ -193,6 +194,15 @@ func TestProviders(t *testing.T) {
 	if chatP, embedP := Providers(Config{ChatContext: 524288}, meter, count); chatP != nil || embedP != nil {
 		t.Errorf("no model: %+v %+v", chatP, embedP)
 	}
+	cfg := Config{ChatProvider: ProviderACP, ACPCommand: "gemini --acp", ACPSessions: 3, ACPCodexHome: "/codex", ACPConnectors: true, ACPUserConfig: true,
+		ChatModel: "pro", ReasoningEffort: "high", DataDir: "data", ChatContext: 1000, CompactRatio: 0.5, LLMTimeout: time.Minute, LLMRPM: 9}
+	chatP, embedP = Providers(cfg, meter, count)
+	a, ok := chatP.(*acp.Agent)
+	if !ok || embedP != nil || a.Command != "gemini --acp" || a.Sessions != 3 || a.CodexHome != "/codex" || !a.Connectors || !a.UserConfig ||
+		a.Model != "pro" || a.Effort != "high" || a.Dir != filepath.Join("data", "acp") || a.Context != 1000 || a.CompactRatio != 0.5 ||
+		a.Timeout != time.Minute || a.RPM != 9 || a.Meter != meter || a.Count == nil || chatP.Name() != "gemini/pro" {
+		t.Errorf("an agent: %+v", chatP)
+	}
 }
 
 // TestBadSettingCreatesNoAdmin: a setting that stops the start, a proxy that
@@ -207,8 +217,9 @@ func TestBadSettingCreatesNoAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, cfg := range []Config{{DataDir: dir, TrustedProxies: []string{"proxy.local"}}, {DataDir: dir, ChatModel: "m", ChatTokenizer: filepath.Join(dir, "none.json")}} {
-		if _, err := New(ctx, cfg, db, http.NotFoundHandler(), true); err == nil || cfg.ChatModel != "" && !strings.Contains(err.Error(), "DEEPCODE_CHAT_TOKENIZER") {
+	for _, cfg := range []Config{{DataDir: dir, TrustedProxies: []string{"proxy.local"}}, {DataDir: dir, ChatModel: "m", ChatTokenizer: filepath.Join(dir, "none.json")},
+		{DataDir: dir, ChatProvider: ProviderACP, ChatTokenizer: filepath.Join(dir, "none.json")}} {
+		if _, err := New(ctx, cfg, db, http.NotFoundHandler(), true); err == nil || cfg.HasChat() && !strings.Contains(err.Error(), "DEEPCODE_CHAT_TOKENIZER") {
 			t.Fatalf("started with %+v: %v", cfg, err)
 		}
 	}

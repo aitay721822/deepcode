@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"deepcode/internal/knowledge/chat"
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/knowledge/wiki/view"
+	"deepcode/internal/platform/ai/acp"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/platform/storage"
 )
@@ -73,8 +75,17 @@ type repoView struct {
 // TestEndToEnd: sign in, import, index, wiki (triggered by
 // snapshot.published), search, chat with citation checks, the admin console
 // with live job output, role-based access, incremental sync and pruning (and
-// a pruned commit coming back), and a project on a self-hosted GitLab.
+// a pruned commit coming back), and a project on a self-hosted GitLab; with
+// the chat model reached through an OpenAI-compatible server, and through an
+// ACP agent (the fake agent, asking the same fake server).
 func TestEndToEnd(t *testing.T) {
+	for _, provider := range []string{"openai", app.ProviderACP} {
+		t.Run(provider, func(t *testing.T) { endToEnd(t, provider) })
+	}
+}
+
+// endToEnd is TestEndToEnd with the chat provider named.
+func endToEnd(t *testing.T, provider string) {
 	gin.SetMode(gin.TestMode)
 	remote := t.TempDir()
 	git(t, remote, "init", "-q", "-b", "main")
@@ -106,7 +117,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	defer db.Close()
 	spa := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "spa") })
-	a, err := app.New(ctx, app.Config{
+	cfg := app.Config{
 		DataDir: data,
 		ChatURL: llmSrv.URL + "/v1", ChatModel: "fake-chat",
 		EmbedURL: llmSrv.URL + "/v1", EmbedModel: "fake-embed",
@@ -114,7 +125,12 @@ func TestEndToEnd(t *testing.T) {
 		MaxRepoMB: 1, MaxFiles: 100, MaxFileKB: 1024, MaxIndexMB: 10,
 		WikiLanguage: "English", GitProtocols: "file",
 		AdminPassword: "admin-password", SessionTTL: time.Hour,
-	}, db, spa, true)
+	}
+	if provider == app.ProviderACP {
+		cfg.ChatProvider, cfg.ChatURL, cfg.ChatModel, cfg.ACPSessions = provider, "", "", 2
+		cfg.ACPCommand = fmt.Sprintf(`"%s" acpfake -name claude-agent-acp -relay %s/v1`, os.Args[0], llmSrv.URL)
+	}
+	a, err := app.New(ctx, cfg, db, spa, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +227,11 @@ func TestEndToEnd(t *testing.T) {
 		len(answer.Citations) != 1 || answer.Citations[0].Path != "main.go" {
 		t.Fatalf("answer: %+v", answer)
 	}
-	checkUsage(t, admin, repo.ID)
+	chatName := "fake-chat"
+	if provider == app.ProviderACP {
+		chatName = (&acp.Agent{Command: cfg.ACPCommand}).Name()
+	}
+	checkUsage(t, admin, repo.ID, chatName)
 	var conv struct {
 		ID         string `json:"id"`
 		SnapshotID string `json:"snapshotId"`

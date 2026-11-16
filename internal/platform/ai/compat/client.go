@@ -63,8 +63,8 @@ type Client struct {
 	Context      int
 	CompactRatio float64
 
+	turns   ai.Throttle // RPM's
 	mu      sync.Mutex
-	next    time.Time
 	learned int // the context a server reported (Learn)
 }
 
@@ -140,10 +140,10 @@ func (c *Client) options() []option.RequestOption {
 	}
 }
 
-// middleware gives each attempt its turn under RPM (throttle) and bounds the
+// middleware gives each attempt its turn under RPM and bounds the
 // answer's body by maxBody.
 func (c *Client) middleware(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-	if err := c.throttle(req.Context()); err != nil {
+	if err := c.turns.Wait(req.Context(), c.RPM); err != nil {
 		return nil, err
 	}
 	res, err := next(req)
@@ -236,32 +236,4 @@ func (c *Client) quote(msg []byte) string {
 		msg = bytes.ReplaceAll(msg, []byte(c.APIKey), bytes.Repeat([]byte("*"), len(c.APIKey)))
 	}
 	return strings.ToValidUTF8(string(bytes.TrimSpace(msg[:min(len(msg), 2048)])), "")
-}
-
-// throttle spaces requests evenly to stay under RPM. A caller takes its turn
-// only once it comes: turns booked ahead would stay booked when their callers
-// give up, so a burst of abandoned calls (search queries past their timeout)
-// would push every later call past its own, long after the burst.
-func (c *Client) throttle(ctx context.Context) error {
-	if c.RPM <= 0 {
-		return nil
-	}
-	for {
-		if err := ctx.Err(); err != nil {
-			return err // a caller that has given up takes no turn, not even a free one
-		}
-		c.mu.Lock()
-		wait := time.Until(c.next)
-		if wait <= 0 {
-			c.next = time.Now().Add(time.Minute / time.Duration(c.RPM))
-			c.mu.Unlock()
-			return nil
-		}
-		c.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(wait):
-		}
-	}
 }

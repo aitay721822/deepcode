@@ -40,8 +40,28 @@ func TestDefaults(t *testing.T) {
 		cfg.CacheMB != 64 || cfg.MaxRepoMB != 1024 || cfg.MaxFiles != 20000 || cfg.MaxFileKB != 512 || cfg.MaxIndexMB != 200 ||
 		cfg.WikiLanguage != "Traditional Chinese (Taiwan)" || cfg.SessionTTL != 720*time.Hour || cfg.GitProtocols != "http:https" || len(cfg.TrustedProxies) != 0 ||
 		cfg.MaxOutputTokens != 0 || cfg.LLMRPM != 0 || cfg.WikiParallel != 1 || cfg.WikiMaxPages != 64 || cfg.Temperature != nil ||
-		cfg.ChatAPI != "completions" || cfg.ChatSchema != "server" || cfg.ChatContext != 0 || cfg.CompactRatio != 0.8 {
+		cfg.ChatAPI != "completions" || cfg.ChatSchema != "server" || cfg.ChatContext != 0 || cfg.CompactRatio != 0.8 ||
+		cfg.ChatProvider != "openai" || cfg.ACPCommand != "" || cfg.ACPSessions != 2 || cfg.ACPConnectors || cfg.ACPUserConfig || cfg.HasChat() {
 		t.Errorf("defaults: addr %q, %+v", addr, cfg)
+	}
+}
+
+// TestACP: chat_provider acp reads its agent's settings, takes the model and
+// effort as values of the agent's options, which it checks itself, and lends
+// the embeddings no chat server.
+func TestACP(t *testing.T) {
+	clean(t)
+	write(t, File, "chat_provider: acp\nacp_command: npx -y @agentclientprotocol/claude-agent-acp\nacp_sessions: 4\nacp_codex_home: /codex\n"+
+		"acp_claude_connectors: true\nacp_user_config: \"1\"\nchat_model: sonnet\nreasoning_effort: max\nchat_schema: prompt\nembed_model: e\nembed_base_url: http://lm:1234/v1\n")
+	cfg, _, err := Load()
+	if err != nil || cfg.ChatProvider != "acp" || cfg.ACPCommand != "npx -y @agentclientprotocol/claude-agent-acp" || cfg.ACPSessions != 4 ||
+		cfg.ACPCodexHome != "/codex" || !cfg.ACPConnectors || !cfg.ACPUserConfig || cfg.ChatModel != "sonnet" || cfg.ReasoningEffort != "max" ||
+		cfg.EmbedURL != "http://lm:1234/v1" || cfg.EmbedKey != "" || !cfg.HasChat() {
+		t.Errorf("%+v, %v", cfg, err)
+	}
+	write(t, File, "chat_provider: acp\nacp_command: gemini --acp\n")
+	if cfg, _, err = Load(); err != nil || cfg.EmbedURL != "" || cfg.Room() != 8192 || !cfg.HasChat() {
+		t.Errorf("no embeddings: %+v, %v", cfg, err)
 	}
 }
 
@@ -120,6 +140,20 @@ func TestBadValues(t *testing.T) {
 		{name: "zero timeout", env: map[string]string{"DEEPCODE_JOB_TIMEOUT": "0"}, want: []string{`DEEPCODE_JOB_TIMEOUT="0"`}},
 		{name: "sync too often", env: map[string]string{"DEEPCODE_SYNC_EVERY": "30s"}, want: []string{`DEEPCODE_SYNC_EVERY="30s": want 0 (off) or 1m or more`}},
 		{name: "effort", env: map[string]string{"DEEPCODE_REASONING_EFFORT": "max"}, want: []string{`DEEPCODE_REASONING_EFFORT="max": want one of none, minimal, low`}},
+		{name: "provider", env: map[string]string{"DEEPCODE_CHAT_PROVIDER": "claude"}, want: []string{`DEEPCODE_CHAT_PROVIDER="claude": want one of openai, acp`}},
+		{name: "acp without a command", env: map[string]string{"DEEPCODE_CHAT_PROVIDER": "acp"}, want: []string{"acp_command in deepcode.yaml: want the agent's command line"}},
+		{name: "acp with a server's settings", file: "chat_provider: acp\nacp_command: agent\nchat_base_url: https://user:your-key@api.example/v1\n" +
+			"chat_api_key: your-key\nchat_api: responses\ntemperature: 0.2\nmax_output_tokens: 900\nchat_schema: server\n",
+			want: []string{`chat_base_url in deepcode.yaml="(not shown`, "chat_api_key in deepcode.yaml: want unset with chat_provider acp",
+				`chat_api in deepcode.yaml="responses": want unset`, `temperature in deepcode.yaml="0.2": want unset`, `max_output_tokens in deepcode.yaml="900": want unset`,
+				`chat_schema in deepcode.yaml="server": want prompt or unset`}, hide: "your-key"},
+		{name: "acp embeddings", env: map[string]string{"DEEPCODE_CHAT_PROVIDER": "acp", "DEEPCODE_ACP_COMMAND": "agent", "DEEPCODE_EMBED_MODEL": "e"},
+			want: []string{"embed_base_url in deepcode.yaml=\"\": want an embeddings server for embed_model"}},
+		{name: "acp settings without acp", env: map[string]string{"DEEPCODE_ACP_COMMAND": "agent --key k3y", "DEEPCODE_ACP_CLAUDE_CONNECTORS": "true", "DEEPCODE_ACP_SESSIONS": "3"},
+			want: []string{`DEEPCODE_ACP_COMMAND: want unset, as only chat_provider acp reads it`, `DEEPCODE_ACP_CLAUDE_CONNECTORS="true": want unset`,
+				`DEEPCODE_ACP_SESSIONS="3": want unset`}, hide: "k3y"},
+		{name: "acp switch", file: "chat_provider: acp\nacp_command: a\nacp_user_config: maybe\n", want: []string{`acp_user_config in deepcode.yaml="maybe": want true or false`}},
+		{name: "acp sessions", file: "chat_provider: acp\nacp_command: a\nacp_sessions: 0\n", want: []string{`acp_sessions in deepcode.yaml="0": want a whole number from 1`}},
 		{name: "api", env: map[string]string{"DEEPCODE_CHAT_API": "chat"}, want: []string{`DEEPCODE_CHAT_API="chat": want one of completions, responses`}},
 		{name: "schema", env: map[string]string{"DEEPCODE_CHAT_SCHEMA": "both"}, want: []string{`DEEPCODE_CHAT_SCHEMA="both": want one of server, prompt`}},
 		{name: "temperature", env: map[string]string{"DEEPCODE_TEMPERATURE": "3"}, want: []string{`DEEPCODE_TEMPERATURE="3": want a number from 0 to 2`}},

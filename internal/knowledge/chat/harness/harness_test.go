@@ -111,13 +111,40 @@ func TestOverhead(t *testing.T) {
 		{ai.Window{Context: 100000, Room: 8192, Ratio: 0.8, Overhead: 20000, Scale: 1.5}, 40000},
 		{ai.Window{Context: 100000, Room: 30000, Ratio: 0.8, Overhead: 20000, Scale: 2}, 25000},
 		{ai.Window{Context: 100000, Room: 8192, Ratio: 0.8, Overhead: 20000}, 60000},
+		{ai.Window{Context: 100000, Room: 8192, Ratio: 0.8, Overhead: 20000, Scale: math.NaN()}, 60000},
 	} {
 		f := New(windowed{w: tc.w}, o200k)
 		if sh, err := f.Share(1000, Shares{Evidence: 1 << 20}, false); f.Threshold() != tc.want || err != nil || sh.Evidence != tc.want-1000 {
 			t.Errorf("%+v: threshold %d, shares %+v %v", tc.w, f.Threshold(), sh, err)
 		}
 	}
+	// A reply's usage anchors the template in the local tokenizer's tokens: what the agent counted, less its Overhead,
+	// over its Scale, less the pieces sent.
+	f, ex := New(windowed{w: ai.Window{Context: 1 << 20, Overhead: 1000, Scale: 2}}, o200k), &counted{}
+	ex.Add(strings.Repeat("how does it route? ", 50))
+	ex.MarkSent(1)
+	sent, _ := ex.Size(o200k.Message)
+	ex.in = 1000 + 2*(sent+30)
+	if f.anchor(ex); f.overhead != 30 {
+		t.Errorf("anchored at %d, want 30", f.overhead)
+	}
 }
+
+// counted is an Exchange of pieces whose last request the model counted in tokens.
+type counted struct {
+	ai.Exchange
+	ai.Pieces
+	in int
+}
+
+// Used is the request's count.
+func (e *counted) Used() ai.Usage { return ai.Usage{InTokens: e.in} }
+
+// Size is the pieces'.
+func (e *counted) Size(count func(string) int) (int, int) { return e.Pieces.Size(count) }
+
+// Added is the pieces'.
+func (e *counted) Added() int { return e.Pieces.Added() }
 
 // TestSummaryRoom: a summary's request is sized as it is sent
 // (ai.Format.Prompt), its schema in it under ai.SchemaPrompt: a context that
