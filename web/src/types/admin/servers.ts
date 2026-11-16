@@ -1,7 +1,7 @@
 import type { Provider } from '../repo/repo'
 
 export type GitServer = {
-  id: number
+  id: string
   name: string
   kind: Provider
   baseUrl: string

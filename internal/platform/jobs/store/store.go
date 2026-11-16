@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"deepcode/internal/platform/storage"
 )
 
 // Store runs the queue's SQL.
@@ -22,7 +24,8 @@ const (
 )
 
 type Job struct {
-	ID        int64  `json:"id"`
+	ID        int64  `json:"-"`  // the row id
+	PublicID  string `json:"id"` // the CUID2 the API, the URLs and the UI show
 	Kind      string `json:"kind"`
 	RepoID    int64  `json:"-"` // the row id; Listed carries the public one
 	CommitSHA string `json:"commitSha"`
@@ -58,7 +61,7 @@ func (j Job) Finished() bool { return j.Status == StatusSucceeded || j.Status ==
 
 var ErrNotFound = errors.New("找不到工作")
 
-const jobColumns = `id, kind, repository_id, commit_sha, status, attempts, retries, stage, progress, total, error, run_after, created_at, updated_at`
+const jobColumns = `id, kind, repository_id, commit_sha, status, attempts, retries, stage, progress, total, error, run_after, created_at, updated_at, public_id`
 
 // listedColumns are jobColumns of jobs j plus the public id and name of its
 // repository r.
@@ -69,14 +72,14 @@ var listedColumns = "j." + strings.ReplaceAll(jobColumns, ", ", ", j.") + ", r.p
 
 func scanJob(row interface{ Scan(...any) error }) (Job, error) {
 	var j Job
-	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Retries, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.RunAfter, &j.CreatedAt, &j.UpdatedAt)
+	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Retries, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.RunAfter, &j.CreatedAt, &j.UpdatedAt, &j.PublicID)
 	return j, err
 }
 
 func scanListed(row interface{ Scan(...any) error }) (Listed, error) {
 	var l Listed
 	j := &l.Job
-	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Retries, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.RunAfter, &j.CreatedAt, &j.UpdatedAt,
+	err := row.Scan(&j.ID, &j.Kind, &j.RepoID, &j.CommitSHA, &j.Status, &j.Attempts, &j.Retries, &j.Stage, &j.Progress, &j.Total, &j.Error, &j.RunAfter, &j.CreatedAt, &j.UpdatedAt, &j.PublicID,
 		&l.RepoPublicID, &l.RepoOwner, &l.RepoName)
 	return l, err
 }
@@ -105,6 +108,15 @@ func (s *Store) ByKey(ctx context.Context, key string) (Job, error) {
 		return Job{}, ErrNotFound
 	}
 	return j, err
+}
+
+// ID is the row id of the job whose public id is publicID, or ErrNotFound.
+func (s *Store) ID(ctx context.Context, publicID string) (int64, error) {
+	id, err := storage.RowID(ctx, s.DB, "jobs", publicID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
 }
 
 func (s *Store) Get(ctx context.Context, id int64) (Job, error) {

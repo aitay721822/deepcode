@@ -21,7 +21,7 @@ export const listTokens = () => api<Token[]>('/api/auth/tokens')
 /** days 0: until revoked. The answer holds the secret, which the server never shows again. */
 export const createToken = (name: string, days: number) => post<NewToken>('/api/auth/tokens', { name, days })
 
-export const revokeToken = (id: number) => del(`/api/auth/tokens/${id}`)
+export const revokeToken = (id: string) => del(`/api/auth/tokens/${id}`)
 
 export const listApps = () => api<App[]>('/api/auth/apps')
 

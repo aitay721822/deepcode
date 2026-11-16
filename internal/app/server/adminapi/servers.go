@@ -30,7 +30,7 @@ func (a *API) createServer(c *gin.Context) {
 }
 
 func (a *API) updateServer(c *gin.Context) {
-	id, ok := httpx.PathID(c)
+	id, ok := httpx.PathID(c, a.Servers.ID)
 	var in gitserver.Input
 	if !ok || !httpx.Bind(c, &in) {
 		return
@@ -40,7 +40,7 @@ func (a *API) updateServer(c *gin.Context) {
 }
 
 func (a *API) deleteServer(c *gin.Context) {
-	if id, ok := httpx.PathID(c); ok {
+	if id, ok := httpx.PathID(c, a.Servers.ID); ok {
 		reply(c, http.StatusNoContent, nil, a.Servers.Delete(c.Request.Context(), id))
 	}
 }
@@ -49,7 +49,7 @@ func (a *API) deleteServer(c *gin.Context) {
 // its OAuth token endpoint, or a token this secret key cannot decrypt, is the
 // answer, not an error.
 func (a *API) testServer(c *gin.Context) {
-	id, ok := httpx.PathID(c)
+	id, ok := httpx.PathID(c, a.Servers.ID)
 	if !ok {
 		return
 	}
@@ -74,7 +74,7 @@ func (a *API) testServer(c *gin.Context) {
 // authorizeServer sends the admin's browser to the server's OAuth consent
 // page, which sends it back to oauthCallback.
 func (a *API) authorizeServer(c *gin.Context) {
-	id, ok := httpx.PathID(c)
+	id, ok := httpx.PathID(c, a.Servers.ID)
 	if !ok {
 		return
 	}

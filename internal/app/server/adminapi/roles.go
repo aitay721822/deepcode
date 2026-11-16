@@ -24,7 +24,7 @@ func (a *API) createRole(c *gin.Context) {
 }
 
 func (a *API) updateRole(c *gin.Context) {
-	id, ok := httpx.PathID(c)
+	id, ok := httpx.PathID(c, a.Roles.ID)
 	var in role.Input
 	if !ok || !httpx.Bind(c, &in) {
 		return
@@ -34,7 +34,7 @@ func (a *API) updateRole(c *gin.Context) {
 }
 
 func (a *API) deleteRole(c *gin.Context) {
-	if id, ok := httpx.PathID(c); ok {
+	if id, ok := httpx.PathID(c, a.Roles.ID); ok {
 		reply(c, http.StatusNoContent, nil, a.Roles.Delete(c.Request.Context(), id))
 	}
 }

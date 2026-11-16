@@ -4,10 +4,10 @@
 package httpx
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -70,11 +70,13 @@ func DomainError(c *gin.Context, err error) {
 	InternalError(c, err)
 }
 
-// PathID reads the :id route parameter.
-func PathID(c *gin.Context) (int64, bool) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+// PathID is the row id of what the :id route parameter names, by its public
+// id (a CUID2), as lookup finds it: the domain package's, whose not-found
+// error answers 404.
+func PathID(c *gin.Context, lookup func(context.Context, string) (int64, error)) (int64, bool) {
+	id, err := lookup(c.Request.Context(), c.Param("id"))
 	if err != nil {
-		Fail(c, http.StatusBadRequest, "無效的 ID")
+		DomainError(c, err)
 		return 0, false
 	}
 	return id, true

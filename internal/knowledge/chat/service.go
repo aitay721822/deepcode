@@ -81,7 +81,7 @@ func Explain(err error) (msg string, logIt bool) {
 
 type Request struct {
 	RepoID         int64  `json:"-"`              // the row id; the API takes the public id
-	ConversationID int64  `json:"conversationId"` // 0 starts one; else one of UserID's
+	ConversationID string `json:"conversationId"` // a public id: "" starts one; else one of UserID's
 	Question       string `json:"question"`
 	Deep           bool   `json:"deep"`    // search more rounds, read a wiki page first (deep.go), and with the model's context known gather all the evidence it holds
 	Codemap        bool   `json:"codemap"` // answer with a code map (package codemap), from deep evidence
@@ -152,11 +152,11 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	if r.Snapshot == nil {
 		return errIndexing
 	}
-	conv, err := s.open(ctx, req, catalog.Ref{ID: r.Snapshot.ID, CommitSHA: r.Snapshot.CommitSHA}, q)
+	conv, err := s.open(ctx, req, catalog.Ref{ID: r.Snapshot.ID, PublicID: r.Snapshot.PublicID, CommitSHA: r.Snapshot.CommitSHA}, q)
 	if err != nil {
 		return err
 	}
-	emit("conversation", map[string]any{"id": conv.id, "snapshotId": conv.snap.ID, "commitSha": conv.snap.CommitSHA})
+	emit("conversation", map[string]any{"id": conv.public, "snapshotId": conv.snap.PublicID, "commitSha": conv.snap.CommitSHA})
 
 	turns, err := s.history(ctx, conv.id)
 	if err != nil {

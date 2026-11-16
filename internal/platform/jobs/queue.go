@@ -86,6 +86,11 @@ var ErrNotFound = store.ErrNotFound
 // ErrFinished: the job has ended, so there is nothing to stop.
 var ErrFinished = errors.New("工作已結束")
 
+// ID is the row id of the job whose public id is publicID, or ErrNotFound.
+func (q *Queue) ID(ctx context.Context, publicID string) (int64, error) {
+	return q.Store.ID(ctx, publicID)
+}
+
 func (q *Queue) Get(ctx context.Context, id int64) (Job, error) { return q.Store.Get(ctx, id) }
 
 // LatestOf returns the newest job of each repository in ids that has one,

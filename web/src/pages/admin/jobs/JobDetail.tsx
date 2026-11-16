@@ -20,7 +20,7 @@ import { kindLabel, StatusBadge } from './StatusBadge'
 import { StreamNotice } from './StreamNotice'
 
 /** One job: what it is, its stages, and its output, followed live until it ends. */
-export function JobDetail({ id }: { id: number }) {
+export function JobDetail({ id }: { id: string }) {
   const { refresh, can } = useSession()
   const { data, error, status, reload } = useApi(`admin:job:${id}`, () => getJob(id))
   const [job, setJob] = useState<JobRow>()

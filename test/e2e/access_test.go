@@ -18,31 +18,51 @@ import (
 // checkAccess: a user sees and does only what their roles grant on which
 // repositories, never another user's conversations, and the admin console
 // keeps an administrator around.
-func checkAccess(t *testing.T, base string, admin *client, repoID string, adminConv int64) {
+func checkAccess(t *testing.T, base string, admin *client, repoID string, adminConv string) {
 	t.Helper()
 	var readers struct {
-		ID int64 `json:"id"`
+		ID string `json:"id"`
 	}
 	if code := admin.post("/api/admin/roles", `{"name":"readers","description":"read only","permissions":["repo.read","jobs.view"],"allRepositories":false,"repositoryIds":[]}`, &readers); code != http.StatusCreated {
 		t.Fatalf("create role: %d", code)
 	}
 	// repo.sync on no repository yet: dev holds the permission, but on none of the repositories.
 	var syncers struct {
-		ID int64 `json:"id"`
+		ID string `json:"id"`
 	}
 	if code := admin.post("/api/admin/roles", `{"name":"syncers","permissions":["repo.sync"],"repositoryIds":[]}`, &syncers); code != http.StatusCreated {
 		t.Fatalf("create role: %d", code)
 	}
 	var user struct {
-		ID int64 `json:"id"`
+		ID string `json:"id"`
 	}
-	body := fmt.Sprintf(`{"username":"dev","displayName":"Dev","password":"dev-password","roleIds":[%d,%d]}`, readers.ID, syncers.ID)
+	body := fmt.Sprintf(`{"username":"dev","displayName":"Dev","password":"dev-password","roleIds":[%q,%q]}`, readers.ID, syncers.ID)
 	if code := admin.post("/api/admin/users", body, &user); code != http.StatusCreated {
 		t.Fatalf("create user: %d", code)
 	}
 	dev := newClient(t, base)
 	if code := dev.login("DEV", "dev-password"); code != http.StatusOK {
 		t.Fatalf("dev sign in: %d", code)
+	}
+	// Ids are public ids: one naming no role is refused, and a user revokes only their own tokens.
+	for _, roles := range []string{`["zzzzzzzzzzzzzzzzzzzzzzzz"]`, `[1]`} {
+		if code := admin.post("/api/admin/users", `{"username":"nobody","password":"nobody-password","roleIds":`+roles+`}`, nil); code != http.StatusBadRequest {
+			t.Fatalf("a user with roles %s: %d, want 400", roles, code)
+		}
+	}
+	var adminToken struct {
+		Token struct {
+			ID string `json:"id"`
+		} `json:"token"`
+	}
+	if code := admin.post("/api/auth/tokens", `{"name":"admin's"}`, &adminToken); code != http.StatusCreated {
+		t.Fatalf("admin token: %d", code)
+	}
+	if code := dev.delete("/api/auth/tokens/" + adminToken.Token.ID); code != http.StatusNotFound {
+		t.Fatalf("dev revoked the admin's token: %d, want 404", code)
+	}
+	if code := admin.delete("/api/auth/tokens/" + adminToken.Token.ID); code != http.StatusNoContent {
+		t.Fatalf("the admin's token after dev's try: %d, want 204", code)
 	}
 	var me struct {
 		Username    string   `json:"username"`
@@ -58,13 +78,17 @@ func checkAccess(t *testing.T, base string, admin *client, repoID string, adminC
 	if dev.get("/api/repos", &list); len(list) != 0 {
 		t.Fatalf("dev sees %d repositories before any grant", len(list))
 	}
+	var allJobs []jobs.Listed
+	if admin.get("/api/admin/jobs", &allJobs); len(allJobs) == 0 {
+		t.Fatal("the admin sees no jobs")
+	}
 	for path, want := range map[string]int{
-		repo:                 http.StatusNotFound,
-		repo + "/wiki":       http.StatusNotFound,
-		repo + "/files":      http.StatusNotFound,
-		"/api/admin/users":   http.StatusForbidden,
-		"/api/admin/servers": http.StatusForbidden,
-		"/api/admin/jobs/1":  http.StatusNotFound, // a job of a repository dev cannot read
+		repo:                                     http.StatusNotFound,
+		repo + "/wiki":                           http.StatusNotFound,
+		repo + "/files":                          http.StatusNotFound,
+		"/api/admin/users":                       http.StatusForbidden,
+		"/api/admin/servers":                     http.StatusForbidden,
+		"/api/admin/jobs/" + allJobs[0].PublicID: http.StatusNotFound, // a job of a repository dev cannot read
 	} {
 		if code := dev.get(path, nil); code != want {
 			t.Fatalf("dev GET %s: %d, want %d", path, code, want)
@@ -83,7 +107,7 @@ func checkAccess(t *testing.T, base string, admin *client, repoID string, adminC
 
 	// Granted: readable, but asking and syncing need their own permissions on it,
 	// so the repository says dev may only read it.
-	if code := admin.patch(fmt.Sprintf("/api/admin/roles/%d", readers.ID), fmt.Sprintf(`{"repositoryIds":[%q]}`, repoID), nil); code != http.StatusOK {
+	if code := admin.patch("/api/admin/roles/"+readers.ID, fmt.Sprintf(`{"repositoryIds":[%q]}`, repoID), nil); code != http.StatusOK {
 		t.Fatalf("grant: %d", code)
 	}
 	if dev.get("/api/repos", &list); len(list) != 1 || fmt.Sprint(list[0].Permissions) != "[repo.read]" {
@@ -108,25 +132,36 @@ func checkAccess(t *testing.T, base string, admin *client, repoID string, adminC
 	if code := dev.post(repo+"/sync", `{}`, nil); code != http.StatusForbidden {
 		t.Fatalf("dev sync without repo.sync: %d", code)
 	}
-	if code := dev.get(fmt.Sprintf("/api/conversations/%d", adminConv), nil); code != http.StatusNotFound {
+	if code := dev.get("/api/conversations/"+adminConv, nil); code != http.StatusNotFound {
 		t.Fatalf("dev read the admin's conversation: %d", code)
 	}
 
 	// The admin console keeps an administrator, and disabling signs a user out.
 	var self struct {
-		ID int64 `json:"id"`
+		ID string `json:"id"`
 	}
 	admin.get("/api/auth/me", &self)
-	if code := admin.delete(fmt.Sprintf("/api/admin/users/%d", self.ID)); code != http.StatusConflict {
+	if code := admin.delete("/api/admin/users/" + self.ID); code != http.StatusConflict {
 		t.Fatalf("deleted yourself: %d", code)
 	}
-	if code := admin.patch(fmt.Sprintf("/api/admin/users/%d", self.ID), fmt.Sprintf(`{"roleIds":[%d]}`, readers.ID), nil); code != http.StatusConflict {
+	if code := admin.patch("/api/admin/users/"+self.ID, fmt.Sprintf(`{"roleIds":[%q]}`, readers.ID), nil); code != http.StatusConflict {
 		t.Fatalf("demoted the last admin: %d", code)
 	}
-	if code := admin.delete("/api/admin/roles/1"); code != http.StatusConflict {
+	var roles []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	admin.get("/api/admin/roles", &roles)
+	adminRole := ""
+	for _, r := range roles {
+		if r.Name == "admin" {
+			adminRole = r.ID
+		}
+	}
+	if code := admin.delete("/api/admin/roles/" + adminRole); adminRole == "" || code != http.StatusConflict {
 		t.Fatalf("deleted the admin role: %d", code)
 	}
-	if code := admin.patch(fmt.Sprintf("/api/admin/users/%d", user.ID), `{"disabled":true}`, nil); code != http.StatusOK {
+	if code := admin.patch("/api/admin/users/"+user.ID, `{"disabled":true}`, nil); code != http.StatusOK {
 		t.Fatalf("disable dev: %d", code)
 	}
 	if code := dev.get("/api/repos", nil); code != http.StatusUnauthorized {
@@ -192,12 +227,12 @@ func checkSignUp(t *testing.T, base string, admin *client) {
 func checkImportPolicy(t *testing.T, base string, admin *client, demoID string) (*client, string) {
 	t.Helper()
 	var importers struct {
-		ID int64 `json:"id"`
+		ID string `json:"id"`
 	}
 	if code := admin.post("/api/admin/roles", `{"name":"importers","permissions":["repo.read","repo.import"],"repositoryIds":[]}`, &importers); code != http.StatusCreated {
 		t.Fatalf("create role: %d", code)
 	}
-	if code := admin.post("/api/admin/users", fmt.Sprintf(`{"username":"ivy","password":"ivy-password","roleIds":[%d]}`, importers.ID), nil); code != http.StatusCreated {
+	if code := admin.post("/api/admin/users", fmt.Sprintf(`{"username":"ivy","password":"ivy-password","roleIds":[%q]}`, importers.ID), nil); code != http.StatusCreated {
 		t.Fatalf("create user: %d", code)
 	}
 	ivy := newClient(t, base)
@@ -222,7 +257,7 @@ func checkImportPolicy(t *testing.T, base string, admin *client, demoID string) 
 		}
 	}
 	var roles []struct {
-		ID            int64    `json:"id"`
+		ID            string   `json:"id"`
 		RepositoryIDs []string `json:"repositoryIds"`
 	}
 	admin.get("/api/admin/roles", &roles)
@@ -264,7 +299,7 @@ func checkJobErrors(t *testing.T, db *sql.DB, admin, reader *client, repoID stri
 		t.Fatalf("the reader's list: %+v", list)
 	}
 	var job jobs.Job
-	if reader.get(fmt.Sprintf("/api/jobs/%d", seen.Job.ID), &job); job.Error != seen.Job.Error {
+	if reader.get("/api/jobs/"+seen.Job.PublicID, &job); job.Error != seen.Job.Error {
 		t.Fatalf("the job itself shows the reader %q", job.Error)
 	}
 }
@@ -274,19 +309,19 @@ func checkJobErrors(t *testing.T, db *sql.DB, admin, reader *client, repoID stri
 // saying who stopped it, and a finished one has nothing to stop.
 func checkStop(t *testing.T, db *sql.DB, admin, reader *client, repoID, hiddenID string) {
 	t.Helper()
-	latest := func(repo string) (id int64) {
-		db.QueryRow(`SELECT max(id) FROM jobs WHERE repository_id = (SELECT id FROM repositories WHERE public_id = ?)`, repo).Scan(&id)
+	latest := func(repo string) (id string) {
+		db.QueryRow(`SELECT public_id FROM jobs WHERE id = (SELECT max(id) FROM jobs WHERE repository_id = (SELECT id FROM repositories WHERE public_id = ?))`, repo).Scan(&id)
 		return id
 	}
 	id := latest(repoID)
-	if _, err := db.Exec(`UPDATE jobs SET status = 'queued', run_after = datetime('now', '+1 hour') WHERE id = ?`, id); err != nil {
+	if _, err := db.Exec(`UPDATE jobs SET status = 'queued', run_after = datetime('now', '+1 hour') WHERE public_id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
-	stop := fmt.Sprintf("/api/jobs/%d/stop", id)
+	stop := "/api/jobs/" + id + "/stop"
 	if code := reader.post(stop, `{}`, nil); code != http.StatusForbidden {
 		t.Fatalf("a reader stops a job: %d", code)
 	}
-	if code := reader.post(fmt.Sprintf("/api/jobs/%d/stop", latest(hiddenID)), `{}`, nil); code != http.StatusNotFound {
+	if code := reader.post("/api/jobs/"+latest(hiddenID)+"/stop", `{}`, nil); code != http.StatusNotFound {
 		t.Fatalf("a job of a hidden repository: %d", code)
 	}
 	var job jobs.Job
@@ -304,13 +339,13 @@ func checkStop(t *testing.T, db *sql.DB, admin, reader *client, repoID, hiddenID
 func checkJobEvents(t *testing.T, base string, admin *client, hidden, visible string, during func()) {
 	t.Helper()
 	var watchers struct {
-		ID int64 `json:"id"`
+		ID string `json:"id"`
 	}
 	body := fmt.Sprintf(`{"name":"watchers","permissions":["repo.read","jobs.view"],"repositoryIds":[%q]}`, visible)
 	if code := admin.post("/api/admin/roles", body, &watchers); code != http.StatusCreated {
 		t.Fatalf("create role: %d", code)
 	}
-	if code := admin.post("/api/admin/users", fmt.Sprintf(`{"username":"wes","password":"wes-password","roleIds":[%d]}`, watchers.ID), nil); code != http.StatusCreated {
+	if code := admin.post("/api/admin/users", fmt.Sprintf(`{"username":"wes","password":"wes-password","roleIds":[%q]}`, watchers.ID), nil); code != http.StatusCreated {
 		t.Fatalf("create user: %d", code)
 	}
 	wes := newClient(t, base)
@@ -381,5 +416,17 @@ func checkPublicID(t *testing.T, admin *client, id string) {
 	}
 	if code, _ := admin.events(http.MethodPost, "/api/chat/stream", `{"repoId":"1","question":"hi"}`); code != http.StatusNotFound {
 		t.Fatalf("a question about row id 1: %d, want 404", code)
+	}
+	// Every other id is a public id too: row id 1, which each of these tables holds, names nothing.
+	for _, try := range []struct{ method, path string }{
+		{http.MethodGet, "/api/jobs/1"}, {http.MethodGet, "/api/admin/jobs/1"},
+		{http.MethodPatch, "/api/admin/users/1"}, {http.MethodDelete, "/api/admin/roles/1"}, {http.MethodPatch, "/api/admin/servers/1"},
+	} {
+		if code := admin.call(try.method, try.path, "{}", nil); code != http.StatusNotFound {
+			t.Fatalf("%s %s: %d, want 404", try.method, try.path, code)
+		}
+	}
+	if code := admin.post("/api/repos", `{"url":"https://github.com/acme/other","serverId":"zzzzzzzzzzzzzzzzzzzzzzzz"}`, nil); code != http.StatusNotFound {
+		t.Fatalf("an import from no such server: %d, want 404", code)
 	}
 }

@@ -26,7 +26,8 @@ const (
 
 // Snapshot is the snapshot a repository has published.
 type Snapshot struct {
-	ID             int64  `json:"id"`
+	ID             int64  `json:"-"`  // the row id
+	PublicID       string `json:"id"` // the CUID2 the API, the URLs and the UI show
 	CommitSHA      string `json:"commitSha"`
 	IndexedAt      string `json:"indexedAt"`
 	WikiStatus     string `json:"wikiStatus"` // one of the catalog's Wiki statuses
@@ -38,20 +39,21 @@ type Snapshot struct {
 // Repo is an imported repository with its published snapshot (nil until the
 // first index) and its latest job.
 type Repo struct {
-	ID            int64          `json:"-"`     // the row id, for joins and permissions
-	PublicID      string         `json:"id"`    // a CUID2: the id in the API, URLs and the UI
-	Owner         string         `json:"owner"` // GitLab: the group path, which may hold "/"
-	Name          string         `json:"name"`
-	URL           string         `json:"url"`      // the repository's web page
-	Provider      string         `json:"provider"` // its git server's kind: github | gitlab
-	ServerID      int64          `json:"serverId"`
-	ServerName    string         `json:"serverName"`
-	Description   string         `json:"description"`
-	Stars         int            `json:"stars"`
-	DefaultBranch string         `json:"defaultBranch"`
-	TrackedBranch string         `json:"trackedBranch"` // "" follows DefaultBranch
-	Snapshot      *Snapshot      `json:"snapshot"`
-	Job           *jobsstore.Job `json:"job"` // left for the catalog to fill in
+	ID             int64          `json:"-"`     // the row id, for joins and permissions
+	PublicID       string         `json:"id"`    // a CUID2: the id in the API, URLs and the UI
+	Owner          string         `json:"owner"` // GitLab: the group path, which may hold "/"
+	Name           string         `json:"name"`
+	URL            string         `json:"url"`      // the repository's web page
+	Provider       string         `json:"provider"` // its git server's kind: github | gitlab
+	ServerID       int64          `json:"-"`
+	ServerPublicID string         `json:"serverId"`
+	ServerName     string         `json:"serverName"`
+	Description    string         `json:"description"`
+	Stars          int            `json:"stars"`
+	DefaultBranch  string         `json:"defaultBranch"`
+	TrackedBranch  string         `json:"trackedBranch"` // "" follows DefaultBranch
+	Snapshot       *Snapshot      `json:"snapshot"`
+	Job            *jobsstore.Job `json:"job"` // left for the catalog to fill in
 }
 
 // NewRepo is a repository to add, from git server ServerID.
@@ -165,8 +167,8 @@ func (s *Store) Repo(ctx context.Context, id int64) (Repo, error) {
 
 func (s *Store) repos(ctx context.Context, visible func(int64) bool, where string, args ...any) ([]Repo, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT r.id, r.public_id, r.owner, r.name, r.url, g.kind, g.id, g.name, r.description, r.stars, r.default_branch, r.tracked_branch,
-			s.id, s.commit_sha, coalesce(s.indexed_at, ''), s.wiki_status, s.embedding_model, s.file_count, s.chunk_count
+		SELECT r.id, r.public_id, r.owner, r.name, r.url, g.kind, g.id, g.public_id, g.name, r.description, r.stars, r.default_branch, r.tracked_branch,
+			s.id, s.public_id, s.commit_sha, coalesce(s.indexed_at, ''), s.wiki_status, s.embedding_model, s.file_count, s.chunk_count
 		FROM repositories r JOIN git_servers g ON g.id = r.git_server_id LEFT JOIN snapshots s ON s.id = r.ready_snapshot_id
 		`+where+` ORDER BY r.id DESC`, args...)
 	if err != nil {
@@ -177,17 +179,17 @@ func (s *Store) repos(ctx context.Context, visible func(int64) bool, where strin
 	for rows.Next() {
 		var v Repo
 		var sid sql.NullInt64
-		var sha, indexed, wikiStatus, model sql.NullString
+		var spub, sha, indexed, wikiStatus, model sql.NullString
 		var files, chunks sql.NullInt64
-		if err := rows.Scan(&v.ID, &v.PublicID, &v.Owner, &v.Name, &v.URL, &v.Provider, &v.ServerID, &v.ServerName, &v.Description, &v.Stars, &v.DefaultBranch, &v.TrackedBranch,
-			&sid, &sha, &indexed, &wikiStatus, &model, &files, &chunks); err != nil {
+		if err := rows.Scan(&v.ID, &v.PublicID, &v.Owner, &v.Name, &v.URL, &v.Provider, &v.ServerID, &v.ServerPublicID, &v.ServerName, &v.Description, &v.Stars, &v.DefaultBranch, &v.TrackedBranch,
+			&sid, &spub, &sha, &indexed, &wikiStatus, &model, &files, &chunks); err != nil {
 			return nil, err
 		}
 		if visible != nil && !visible(v.ID) {
 			continue
 		}
 		if sid.Valid {
-			v.Snapshot = &Snapshot{sid.Int64, sha.String, indexed.String, wikiStatus.String, model.String, int(files.Int64), int(chunks.Int64)}
+			v.Snapshot = &Snapshot{sid.Int64, spub.String, sha.String, indexed.String, wikiStatus.String, model.String, int(files.Int64), int(chunks.Int64)}
 		}
 		out = append(out, v)
 	}

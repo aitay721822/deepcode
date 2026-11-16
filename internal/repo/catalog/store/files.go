@@ -9,6 +9,7 @@ import (
 // Ref names one snapshot of a repository.
 type Ref struct {
 	ID        int64
+	PublicID  string // the CUID2 the API shows
 	CommitSHA string
 }
 
@@ -16,18 +17,29 @@ type Ref struct {
 // ready (indexed and not pruned), or the published snapshot when id is 0; or
 // returns ErrNotFound.
 func (s *Store) Resolve(ctx context.Context, repoID, id int64) (Ref, error) {
-	q := `SELECT s.id, s.commit_sha FROM repositories r JOIN snapshots s ON s.id = r.ready_snapshot_id WHERE r.id = ?`
+	q := `SELECT s.id, s.public_id, s.commit_sha FROM repositories r JOIN snapshots s ON s.id = r.ready_snapshot_id WHERE r.id = ?`
 	args := []any{repoID}
 	if id != 0 {
-		q = `SELECT id, commit_sha FROM snapshots WHERE repository_id = ? AND id = ? AND status = 'ready'`
+		q = `SELECT id, public_id, commit_sha FROM snapshots WHERE repository_id = ? AND id = ? AND status = 'ready'`
 		args = append(args, id)
 	}
 	var ref Ref
-	err := s.DB.QueryRowContext(ctx, q, args...).Scan(&ref.ID, &ref.CommitSHA)
+	err := s.DB.QueryRowContext(ctx, q, args...).Scan(&ref.ID, &ref.PublicID, &ref.CommitSHA)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Ref{}, ErrNotFound
 	}
 	return ref, err
+}
+
+// SnapshotID is the row id of repository repoID's snapshot whose public id is
+// publicID, or ErrNotFound.
+func (s *Store) SnapshotID(ctx context.Context, repoID int64, publicID string) (int64, error) {
+	var id int64
+	err := s.DB.QueryRowContext(ctx, `SELECT id FROM snapshots WHERE repository_id = ? AND public_id = ?`, repoID, publicID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
 }
 
 // File is one file of a snapshot, as the file list shows it.

@@ -3,7 +3,7 @@ import type { Permission } from '../auth'
 export type Provider = 'github' | 'gitlab'
 
 export type Job = {
-  id: number
+  id: string
   kind: 'index' | 'wiki'
   commitSha: string
   status: 'queued' | 'running' | 'succeeded' | 'failed'
@@ -19,7 +19,7 @@ export type Job = {
 }
 
 type Snapshot = {
-  id: number
+  id: string
   commitSha: string
   indexedAt: string
   wikiStatus: 'none' | 'generating' | 'ready' | 'failed'
@@ -34,7 +34,7 @@ export type Repo = {
   name: string
   url: string // web URL, no .git
   provider: Provider
-  serverId: number
+  serverId: string
   serverName: string
   description: string
   stars: number
@@ -46,6 +46,6 @@ export type Repo = {
 }
 
 /** A git server repositories can be imported from. */
-export type ServerOption = { id: number; name: string; kind: Provider; baseUrl: string }
+export type ServerOption = { id: string; name: string; kind: Provider; baseUrl: string }
 
 export type Health = { status: 'ok'; chatModel: string; embeddingModel: string }

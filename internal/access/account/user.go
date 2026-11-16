@@ -33,11 +33,12 @@ type (
 // Input creates or changes a user; nil fields keep their value. The username
 // is set once, at creation.
 type Input struct {
-	Username    *string  `json:"username"`
-	DisplayName *string  `json:"displayName"`
-	Password    *string  `json:"password"`
-	Disabled    *bool    `json:"disabled"`
-	RoleIDs     *[]int64 `json:"roleIds"`
+	Username    *string   `json:"username"`
+	DisplayName *string   `json:"displayName"`
+	Password    *string   `json:"password"`
+	Disabled    *bool     `json:"disabled"`
+	Roles       *[]string `json:"roleIds"` // public ids
+	RoleIDs     *[]int64  `json:"-"`       // row ids: code's own (bootstrap, sign-up); Roles, when set, replaces them
 }
 
 var usernameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$`)

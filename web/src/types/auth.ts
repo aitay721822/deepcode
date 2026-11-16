@@ -12,7 +12,7 @@ export type SignUpState = { open: boolean }
 
 /** The signed-in user. */
 export type Me = {
-  id: number
+  id: string
   username: string
   displayName: string
   permissions: Permission[]
@@ -20,7 +20,7 @@ export type Me = {
 }
 
 /** A personal access token, as its owner sees it: never its secret. expiresAt null: until revoked. */
-export type Token = { id: number; name: string; createdAt: string; lastUsedAt: string | null; expiresAt: string | null }
+export type Token = { id: string; name: string; createdAt: string; lastUsedAt: string | null; expiresAt: string | null }
 
 /** A token just created, with its secret, which is shown this once. */
 export type NewToken = { token: Token; secret: string }

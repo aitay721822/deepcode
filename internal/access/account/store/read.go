@@ -13,6 +13,33 @@ func (s *Store) List(ctx context.Context) ([]User, error) {
 	return s.users(ctx, "ORDER BY username")
 }
 
+// ID is the row id of the user whose public id is publicID, or ErrNotFound.
+func (s *Store) ID(ctx context.Context, publicID string) (int64, error) {
+	var id int64
+	err := s.DB.QueryRowContext(ctx, `SELECT id FROM users WHERE public_id = ?`, publicID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
+}
+
+// RoleIDs are the row ids of the roles whose public ids are publicIDs, or
+// ErrNoRole when one names none.
+func (s *Store) RoleIDs(ctx context.Context, publicIDs []string) ([]int64, error) {
+	out := make([]int64, 0, len(publicIDs))
+	for _, p := range publicIDs {
+		id, err := (&rolestore.Store{DB: s.DB}).ID(ctx, p)
+		if errors.Is(err, rolestore.ErrNotFound) {
+			return nil, ErrNoRole
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
 func (s *Store) Get(ctx context.Context, id int64) (User, error) {
 	return s.one(ctx, "WHERE id = ?", id)
 }
@@ -74,7 +101,7 @@ func (s *Store) one(ctx context.Context, tail string, args ...any) (User, error)
 }
 
 func (s *Store) users(ctx context.Context, tail string, args ...any) ([]User, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, username, display_name, disabled, created_at FROM users `+tail, args...)
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, public_id, username, display_name, disabled, created_at FROM users `+tail, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +109,7 @@ func (s *Store) users(ctx context.Context, tail string, args ...any) ([]User, er
 	index := map[int64]int{}
 	for rows.Next() {
 		u := User{Roles: []RoleRef{}}
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Disabled, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.PublicID, &u.Username, &u.DisplayName, &u.Disabled, &u.CreatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -93,7 +120,7 @@ func (s *Store) users(ctx context.Context, tail string, args ...any) ([]User, er
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = s.DB.QueryContext(ctx, `SELECT ur.user_id, r.id, r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id ORDER BY r.builtin DESC, r.name`)
+	rows, err = s.DB.QueryContext(ctx, `SELECT ur.user_id, r.public_id, r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id ORDER BY r.builtin DESC, r.name`)
 	if err != nil {
 		return nil, err
 	}

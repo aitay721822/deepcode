@@ -1,5 +1,5 @@
 import { createFileRoute, notFound } from '@tanstack/react-router'
-import { isId, isRepoId } from '../../../lib/url'
+import { isId } from '../../../lib/url'
 import { SearchPage } from '../../repo/search/SearchPage'
 
 /**
@@ -9,8 +9,7 @@ import { SearchPage } from '../../repo/search/SearchPage'
 export const Route = createFileRoute('/repos/$id/search/{-$conversationId}')({
   params: {
     parse: (params) => {
-      if (!isRepoId(params.id) || (params.conversationId !== undefined && !isId(params.conversationId)))
-        throw notFound()
+      if (!isId(params.id) || (params.conversationId !== undefined && !isId(params.conversationId))) throw notFound()
       return params
     },
   },

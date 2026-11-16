@@ -4,7 +4,7 @@ import type { Provider } from '../repo/repo'
 export type PermissionInfo = { name: Permission; description: string }
 
 export type Role = {
-  id: number
+  id: string
   name: string
   description: string
   builtin: boolean

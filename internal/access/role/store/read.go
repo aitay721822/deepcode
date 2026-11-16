@@ -1,10 +1,24 @@
 package store
 
-import "context"
+import (
+	"context"
+	"database/sql"
+	"errors"
+)
 
 // List returns every role by name, built-in ones first.
 func (s *Store) List(ctx context.Context) ([]Role, error) {
 	return s.roles(ctx, "ORDER BY builtin DESC, name")
+}
+
+// ID is the row id of the role whose public id is publicID, or ErrNotFound.
+func (s *Store) ID(ctx context.Context, publicID string) (int64, error) {
+	var id int64
+	err := s.DB.QueryRowContext(ctx, `SELECT id FROM roles WHERE public_id = ?`, publicID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
 }
 
 func (s *Store) Get(ctx context.Context, id int64) (Role, error) {
@@ -19,7 +33,7 @@ func (s *Store) Get(ctx context.Context, id int64) (Role, error) {
 }
 
 func (s *Store) roles(ctx context.Context, tail string, args ...any) ([]Role, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, name, description, builtin, all_repositories,
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, public_id, name, description, builtin, all_repositories,
 		(SELECT count(*) FROM user_roles u WHERE u.role_id = roles.id) FROM roles `+tail, args...)
 	if err != nil {
 		return nil, err
@@ -28,7 +42,7 @@ func (s *Store) roles(ctx context.Context, tail string, args ...any) ([]Role, er
 	index := map[int64]int{}
 	for rows.Next() {
 		r := Role{Permissions: []Permission{}, RepositoryIDs: []string{}}
-		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Builtin, &r.AllRepositories, &r.UserCount); err != nil {
+		if err := rows.Scan(&r.ID, &r.PublicID, &r.Name, &r.Description, &r.Builtin, &r.AllRepositories, &r.UserCount); err != nil {
 			rows.Close()
 			return nil, err
 		}

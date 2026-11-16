@@ -23,17 +23,17 @@ const statuses: Job['status'][] = ['queued', 'running', 'succeeded', 'failed']
 const ALL = 'all' // the filter's value for every status
 
 /** The loaded list with the live changes laid over it (the newer of the two wins), newest job first. */
-function merge(loaded: JobRow[], live: Map<number, JobRow>) {
-  const rows = new Map(loaded.map((j) => [j.id, j]))
-  for (const j of live.values()) {
-    const old = rows.get(j.id)
-    if (!old || j.updatedAt >= old.updatedAt) rows.set(j.id, j)
+function merge(loaded: JobRow[], live: Map<string, JobRow>) {
+  // Live rows first: a job created in the same second as a loaded one (createdAt ties) is the newer.
+  const rows = new Map([...live.values()].map((j) => [j.id, j]))
+  for (const j of loaded) {
+    const now = rows.get(j.id)
+    if (!now || j.updatedAt > now.updatedAt) rows.set(j.id, j)
   }
-  return [...rows.values()].sort((a, b) => b.id - a.id)
+  return [...rows.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) // newest first, as the server lists them
 }
 
-const jobLink = (j: JobRow) =>
-  ({ to: '/admin/{-$section}/{-$id}', params: { section: 'jobs', id: String(j.id) } }) as const
+const jobLink = (j: JobRow) => ({ to: '/admin/{-$section}/{-$id}', params: { section: 'jobs', id: j.id } }) as const
 
 /** Recent jobs, kept live by the job event stream. */
 export function JobsSection() {
@@ -42,7 +42,7 @@ export function JobsSection() {
   const filterId = useId()
   const [status, setStatus] = useState<Job['status'] | ''>('')
   const { data, error, reload } = useApi(`admin:jobs:${status}`, () => listJobs(status))
-  const [live, setLive] = useState(() => new Map<number, JobRow>())
+  const [live, setLive] = useState(() => new Map<string, JobRow>())
   const [stream, setStream] = useState<StreamState>()
   const [attempt, setAttempt] = useState(0) // a new attempt opens a new stream
   useEffect(() => {

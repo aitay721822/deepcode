@@ -22,12 +22,13 @@ var (
 )
 
 type RoleRef struct {
-	ID   int64  `json:"id"`
+	ID   string `json:"id"` // the role's public id
 	Name string `json:"name"`
 }
 
 type User struct {
-	ID          int64     `json:"id"`
+	ID          int64     `json:"-"`  // the row id
+	PublicID    string    `json:"id"` // the CUID2 the API, the URLs and the UI show
 	Username    string    `json:"username"`
 	DisplayName string    `json:"displayName"`
 	Disabled    bool      `json:"disabled"`

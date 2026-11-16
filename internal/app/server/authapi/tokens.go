@@ -37,11 +37,7 @@ func (a *API) createToken(c *gin.Context) {
 }
 
 func (a *API) revokeToken(c *gin.Context) {
-	id, ok := httpx.PathID(c)
-	if !ok {
-		return
-	}
-	if err := a.Tokens.Revoke(c.Request.Context(), httpx.Principal(c).UserID, id); err != nil {
+	if err := a.Tokens.Revoke(c.Request.Context(), httpx.Principal(c).UserID, c.Param("id")); err != nil {
 		httpx.DomainError(c, err)
 		return
 	}

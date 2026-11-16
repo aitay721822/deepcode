@@ -20,7 +20,7 @@ type Store struct{ DB *sql.DB }
 
 // Token is a personal access token as its owner sees it: never its secret.
 type Token struct {
-	ID         int64   `json:"id"`
+	ID         string  `json:"id"` // its public id, a CUID2
 	Name       string  `json:"name"`
 	CreatedAt  string  `json:"createdAt"`
 	LastUsedAt *string `json:"lastUsedAt"`
@@ -29,10 +29,11 @@ type Token struct {
 
 // Holder is who a token signs in.
 type Holder struct {
-	UserID      int64
-	Username    string
-	DisplayName string
-	ExpiresAt   *string
+	UserID       int64
+	UserPublicID string
+	Username     string
+	DisplayName  string
+	ExpiresAt    *string
 }
 
 // Add stores a token for user id while they are enabled, lasting ttl (0: until
@@ -40,9 +41,9 @@ type Holder struct {
 // or disabled.
 func (s *Store) Add(ctx context.Context, userID int64, clientID, name, hash string, ttl time.Duration) (Token, error) {
 	var t Token
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO api_tokens(user_id, client_id, name, token_hash, expires_at)
-		SELECT id, NULLIF(?, ''), ?, ?, CASE WHEN ? > 0 THEN datetime('now', ?) END FROM users WHERE id = ? AND disabled = 0
-		RETURNING id, name, created_at, last_used_at, expires_at`,
+	err := s.DB.QueryRowContext(ctx, `INSERT INTO api_tokens(public_id, user_id, client_id, name, token_hash, expires_at)
+		SELECT cuid(), id, NULLIF(?, ''), ?, ?, CASE WHEN ? > 0 THEN datetime('now', ?) END FROM users WHERE id = ? AND disabled = 0
+		RETURNING public_id, name, created_at, last_used_at, expires_at`,
 		clientID, name, hash, int(ttl.Seconds()), fmt.Sprintf("+%d seconds", int(ttl.Seconds())), userID).
 		Scan(&t.ID, &t.Name, &t.CreatedAt, &t.LastUsedAt, &t.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -53,7 +54,7 @@ func (s *Store) Add(ctx context.Context, userID int64, clientID, name, hash stri
 
 // Personal lists user id's unexpired personal tokens, newest first.
 func (s *Store) Personal(ctx context.Context, userID int64) ([]Token, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, name, created_at, last_used_at, expires_at FROM api_tokens
+	rows, err := s.DB.QueryContext(ctx, `SELECT public_id, name, created_at, last_used_at, expires_at FROM api_tokens
 		WHERE user_id = ? AND client_id IS NULL AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP) ORDER BY id DESC`, userID)
 	if err != nil {
 		return nil, err
@@ -70,9 +71,9 @@ func (s *Store) Personal(ctx context.Context, userID int64) ([]Token, error) {
 	return out, rows.Err()
 }
 
-// Delete removes user id's personal token id, or reports ErrNotFound.
-func (s *Store) Delete(ctx context.Context, userID, id int64) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM api_tokens WHERE id = ? AND user_id = ? AND client_id IS NULL`, id, userID)
+// Delete removes user id's personal token whose public id is id, or reports ErrNotFound.
+func (s *Store) Delete(ctx context.Context, userID int64, id string) error {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM api_tokens WHERE public_id = ? AND user_id = ? AND client_id IS NULL`, id, userID)
 	if err != nil {
 		return err
 	}
@@ -86,9 +87,9 @@ func (s *Store) Delete(ctx context.Context, userID, id int64) error {
 // ErrNoToken, and marks the token used, at most once a minute.
 func (s *Store) Holder(ctx context.Context, hash string) (Holder, error) {
 	var h Holder
-	err := s.DB.QueryRowContext(ctx, `SELECT u.id, u.username, u.display_name, t.expires_at FROM api_tokens t JOIN users u ON u.id = t.user_id
+	err := s.DB.QueryRowContext(ctx, `SELECT u.id, u.public_id, u.username, u.display_name, t.expires_at FROM api_tokens t JOIN users u ON u.id = t.user_id
 		WHERE t.token_hash = ? AND (t.expires_at IS NULL OR t.expires_at > CURRENT_TIMESTAMP) AND u.disabled = 0`, hash).
-		Scan(&h.UserID, &h.Username, &h.DisplayName, &h.ExpiresAt)
+		Scan(&h.UserID, &h.UserPublicID, &h.Username, &h.DisplayName, &h.ExpiresAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return h, ErrNoToken
 	}

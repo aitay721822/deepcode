@@ -42,7 +42,7 @@ func (a *API) listJobs(c *gin.Context) {
 
 // job reads job :id, or answers 404 when the viewer may not read its repository.
 func (a *API) job(c *gin.Context) (jobs.Listed, bool) {
-	id, ok := httpx.PathID(c)
+	id, ok := httpx.PathID(c, a.Queue.ID)
 	if !ok {
 		return jobs.Listed{}, false
 	}

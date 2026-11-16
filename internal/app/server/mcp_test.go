@@ -107,7 +107,7 @@ func TestMCP(t *testing.T) {
 	send(t, browser, http.MethodPost, srv.URL+"/api/auth/login", map[string]string{"username": "admin", "password": "password-0"}, nil)
 	var personal struct {
 		Secret string `json:"secret"`
-		Token  struct{ ID int64 }
+		Token  struct{ ID string }
 	}
 	send(t, browser, http.MethodPost, srv.URL+"/api/auth/tokens", map[string]any{"name": "cli", "days": 30}, &personal)
 	if got, err := repositories(srv.URL, personal.Secret); err != nil || !strings.Contains(got, "acme/demo") {
@@ -169,8 +169,12 @@ func TestMCP(t *testing.T) {
 	}
 
 	// A member given no repository reads none of them.
+	var memberRole string
+	if err := db.QueryRow(`SELECT public_id FROM roles WHERE id = ?`, role.Member).Scan(&memberRole); err != nil {
+		t.Fatal(err)
+	}
 	send(t, browser, http.MethodPost, srv.URL+"/api/admin/users", map[string]any{"username": "dev", "password": "password-1",
-		"roleIds": []int64{role.Member}}, nil)
+		"roleIds": []string{memberRole}}, nil)
 	jar2, _ := cookiejar.New(nil)
 	member := &http.Client{Jar: jar2}
 	send(t, member, http.MethodPost, srv.URL+"/api/auth/login", map[string]string{"username": "dev", "password": "password-1"}, nil)
@@ -183,11 +187,11 @@ func TestMCP(t *testing.T) {
 		t.Errorf("a member read a repository not theirs: %v", err)
 	}
 	// A reader of the repository may not ask about it.
-	var readers struct{ ID int64 }
+	var readers struct{ ID string }
 	send(t, browser, http.MethodPost, srv.URL+"/api/admin/roles", map[string]any{"name": "readers", "permissions": []string{"repo.read"},
 		"repositoryIds": []string{"r1"}}, &readers)
 	send(t, browser, http.MethodPost, srv.URL+"/api/admin/users", map[string]any{"username": "reader", "password": "password-2",
-		"roleIds": []int64{readers.ID}}, nil)
+		"roleIds": []string{readers.ID}}, nil)
 	jar3, _ := cookiejar.New(nil)
 	reader := &http.Client{Jar: jar3}
 	send(t, reader, http.MethodPost, srv.URL+"/api/auth/login", map[string]string{"username": "reader", "password": "password-2"}, nil)
@@ -236,13 +240,13 @@ func TestMCP(t *testing.T) {
 	}
 
 	// Only a user's own personal tokens are theirs to revoke, not another's or an app's; revoking an app is for its own grants.
-	var appToken int64
-	if err := db.QueryRow(`SELECT id FROM api_tokens WHERE client_id = ?`, client.ID).Scan(&appToken); err != nil {
+	var appToken string
+	if err := db.QueryRow(`SELECT public_id FROM api_tokens WHERE client_id = ?`, client.ID).Scan(&appToken); err != nil {
 		t.Fatal(err)
 	}
-	for c, id := range map[*http.Client]int64{member: personal.Token.ID, browser: appToken} {
-		if status, _ := do(t, c, http.MethodDelete, fmt.Sprintf("%s/api/auth/tokens/%d", srv.URL, id), nil); status != http.StatusNotFound {
-			t.Errorf("revoked token %d: %d", id, status)
+	for c, id := range map[*http.Client]string{member: personal.Token.ID, browser: appToken} {
+		if status, _ := do(t, c, http.MethodDelete, fmt.Sprintf("%s/api/auth/tokens/%s", srv.URL, id), nil); status != http.StatusNotFound {
+			t.Errorf("revoked token %s: %d", id, status)
 		}
 	}
 	send(t, member, http.MethodDelete, srv.URL+"/api/auth/apps/"+client.ID, nil, nil)
@@ -257,7 +261,7 @@ func TestMCP(t *testing.T) {
 		}
 	}
 
-	send(t, browser, http.MethodDelete, fmt.Sprintf("%s/api/auth/tokens/%d", srv.URL, personal.Token.ID), nil, nil)
+	send(t, browser, http.MethodDelete, fmt.Sprintf("%s/api/auth/tokens/%s", srv.URL, personal.Token.ID), nil, nil)
 	send(t, browser, http.MethodDelete, srv.URL+"/api/auth/apps/"+client.ID, nil, nil)
 	for _, secret := range []string{personal.Secret, tokens.Access} {
 		if _, err := repositories(srv.URL, secret); err == nil {

@@ -53,12 +53,20 @@ func (a *API) getRepo(c *gin.Context) {
 func (a *API) importRepo(c *gin.Context) {
 	var body struct {
 		URL      string `json:"url"`
-		ServerID int64  `json:"serverId"`
+		ServerID string `json:"serverId"` // a public id; "" picks the server by the URL's host
 	}
 	if !httpx.Bind(c, &body) {
 		return
 	}
-	repo, created, err := a.Importer.Import(c.Request.Context(), httpx.Principal(c), body.URL, body.ServerID)
+	var server int64
+	if body.ServerID != "" {
+		var err error
+		if server, err = a.Servers.ID(c.Request.Context(), body.ServerID); err != nil {
+			httpx.DomainError(c, err)
+			return
+		}
+	}
+	repo, created, err := a.Importer.Import(c.Request.Context(), httpx.Principal(c), body.URL, server)
 	if err != nil {
 		httpx.DomainError(c, err)
 		return
@@ -93,14 +101,14 @@ func (a *API) listServers(c *gin.Context) {
 	}
 	out := make([]gin.H, len(list))
 	for i, s := range list {
-		out[i] = gin.H{"id": s.ID, "name": s.Name, "kind": s.Kind, "baseUrl": s.BaseURL}
+		out[i] = gin.H{"id": s.PublicID, "name": s.Name, "kind": s.Kind, "baseUrl": s.BaseURL}
 	}
 	c.JSON(http.StatusOK, out)
 }
 
 // job returns a job of a repository the user may read.
 func (a *API) job(c *gin.Context) {
-	id, ok := httpx.PathID(c)
+	id, ok := httpx.PathID(c, a.Queue.ID)
 	if !ok {
 		return
 	}
@@ -117,7 +125,7 @@ func (a *API) job(c *gin.Context) {
 
 // stopJob stops job :id for a user who may sync its repository.
 func (a *API) stopJob(c *gin.Context) {
-	id, ok := httpx.PathID(c)
+	id, ok := httpx.PathID(c, a.Queue.ID)
 	if !ok {
 		return
 	}

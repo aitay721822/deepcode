@@ -115,7 +115,7 @@ func (a *API) chatStream(c *gin.Context) {
 // conversation returns one of the user's conversations, while they may still
 // read its repository.
 func (a *API) conversation(c *gin.Context) {
-	id, ok := httpx.PathID(c)
+	id, ok := httpx.PathID(c, a.Chat.ID)
 	if !ok {
 		return
 	}

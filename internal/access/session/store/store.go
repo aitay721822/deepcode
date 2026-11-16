@@ -39,13 +39,13 @@ func (s *Store) Start(ctx context.Context, tokenHash string, id int64, checked s
 
 // User returns the enabled user holding the unexpired session of tokenHash,
 // or ErrNoSession.
-func (s *Store) User(ctx context.Context, tokenHash string) (id int64, username, displayName string, err error) {
-	err = s.DB.QueryRowContext(ctx, `SELECT u.id, u.username, u.display_name FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP AND u.disabled = 0`, tokenHash).Scan(&id, &username, &displayName)
+func (s *Store) User(ctx context.Context, tokenHash string) (id int64, publicID, username, displayName string, err error) {
+	err = s.DB.QueryRowContext(ctx, `SELECT u.id, u.public_id, u.username, u.display_name FROM sessions s JOIN users u ON u.id = s.user_id
+		WHERE s.token_hash = ? AND s.expires_at > CURRENT_TIMESTAMP AND u.disabled = 0`, tokenHash).Scan(&id, &publicID, &username, &displayName)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNoSession
 	}
-	return id, username, displayName, err
+	return id, publicID, username, displayName, err
 }
 
 // End deletes the session of tokenHash.

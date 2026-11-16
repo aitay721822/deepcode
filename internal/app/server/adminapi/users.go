@@ -24,7 +24,7 @@ func (a *API) createUser(c *gin.Context) {
 }
 
 func (a *API) updateUser(c *gin.Context) {
-	id, ok := httpx.PathID(c)
+	id, ok := httpx.PathID(c, a.Accounts.ID)
 	var in account.Input
 	if !ok || !httpx.Bind(c, &in) {
 		return
@@ -50,7 +50,7 @@ func (a *API) setSignUp(c *gin.Context) {
 }
 
 func (a *API) deleteUser(c *gin.Context) {
-	if id, ok := httpx.PathID(c); ok {
+	if id, ok := httpx.PathID(c, a.Accounts.ID); ok {
 		reply(c, http.StatusNoContent, nil, a.Accounts.Delete(c.Request.Context(), id, httpx.Principal(c).UserID))
 	}
 }

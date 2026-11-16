@@ -12,14 +12,14 @@ export const getRepo = (id: string) => api<Repo>(`/api/repos/${id}`)
 export const listServers = () => api<ServerOption[]>('/api/servers')
 
 /** url: owner/name, a web URL, or a path on serverId; answers the queued (or the already imported) repository, without permissions. */
-export const importRepo = (url: string, serverId?: number) =>
+export const importRepo = (url: string, serverId?: string) =>
   post<Omit<Repo, 'permissions'>>('/api/repos', { url, serverId })
 
 /** Indexes the latest commit; upToDate means there is nothing new. */
 export const syncRepo = (repoId: string) => post<{ upToDate?: boolean; job?: Job }>(`/api/repos/${repoId}/sync`, {})
 
 /** Stops a queued or running job, which then fails, saying who stopped it; Sync runs it again. */
-export const stopJob = (id: number) => post<Job>(`/api/jobs/${id}/stop`, {})
+export const stopJob = (id: string) => post<Job>(`/api/jobs/${id}/stop`, {})
 
 /** The remote's branches and the one the repository follows. */
 export const listBranches = (repoId: string) =>

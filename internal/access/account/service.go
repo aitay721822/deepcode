@@ -15,6 +15,24 @@ func (s *Service) List(ctx context.Context) ([]User, error) {
 	return s.Store.List(ctx)
 }
 
+// ID is the row id of the user whose public id is publicID, or ErrNotFound.
+func (s *Service) ID(ctx context.Context, publicID string) (int64, error) {
+	return s.Store.ID(ctx, publicID)
+}
+
+// roles sets in.RoleIDs from the public ids in.Roles names, when it names any.
+func (s *Service) roles(ctx context.Context, in *Input) error {
+	if in.Roles == nil {
+		return nil
+	}
+	ids, err := s.Store.RoleIDs(ctx, *in.Roles)
+	if err != nil {
+		return explain(err)
+	}
+	in.RoleIDs = &ids
+	return nil
+}
+
 func (s *Service) Get(ctx context.Context, id int64) (User, error) {
 	return s.Store.Get(ctx, id)
 }
@@ -30,6 +48,9 @@ func (s *Service) ByUsername(ctx context.Context, username string) (User, error)
 }
 
 func (s *Service) Create(ctx context.Context, in Input) (User, error) {
+	if err := s.roles(ctx, &in); err != nil {
+		return User{}, err
+	}
 	if in.Username == nil || !usernameRe.MatchString(strings.TrimSpace(*in.Username)) {
 		return User{}, failure{ErrInvalid, "使用者名稱必須為 2 到 32 個英文字母、數字、「.」、「_」或「-」，並以英文字母或數字開頭"}
 	}
@@ -58,6 +79,9 @@ func (s *Service) Create(ctx context.Context, in Input) (User, error) {
 // Update changes user id on behalf of actor, the signed-in user. A new
 // password or disabling the user signs them out everywhere.
 func (s *Service) Update(ctx context.Context, id, actor int64, in Input) (User, error) {
+	if err := s.roles(ctx, &in); err != nil {
+		return User{}, err
+	}
 	if in.Disabled != nil && *in.Disabled && id == actor {
 		return User{}, failure{ErrConflict, "你不能停用自己的帳號"}
 	}

@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+
+	"deepcode/internal/platform/storage"
 )
 
 // Store runs the git servers' SQL.
@@ -16,6 +18,7 @@ type Store struct{ DB *sql.DB }
 // are sealed, and APIURL holds only an override.
 type Server struct {
 	ID              int64
+	PublicID        string
 	Name            string
 	Kind            string
 	BaseURL         string
@@ -41,13 +44,13 @@ var (
 
 const columns = `g.id, g.name, g.kind, g.base_url, g.api_url, g.token, g.created_at,
 	(SELECT count(*) FROM repositories r WHERE r.git_server_id = g.id),
-	g.oauth_client_id, g.oauth_client_secret, g.oauth_refresh_token, g.oauth_redirect_uri, g.token_expires_at`
+	g.oauth_client_id, g.oauth_client_secret, g.oauth_refresh_token, g.oauth_redirect_uri, g.token_expires_at, g.public_id`
 
 // scan reads columns, after the values in first.
 func scan(row interface{ Scan(...any) error }, first ...any) (Server, error) {
 	var s Server
 	err := row.Scan(append(first, &s.ID, &s.Name, &s.Kind, &s.BaseURL, &s.APIURL, &s.Token, &s.CreatedAt, &s.RepositoryCount,
-		&s.ClientID, &s.ClientSecret, &s.Refresh, &s.Redirect, &s.Expires)...)
+		&s.ClientID, &s.ClientSecret, &s.Refresh, &s.Redirect, &s.Expires, &s.PublicID)...)
 	return s, err
 }
 
@@ -67,6 +70,15 @@ func (s *Store) List(ctx context.Context) ([]Server, error) {
 		out = append(out, srv)
 	}
 	return out, rows.Err()
+}
+
+// ID is the row id of the server whose public id is publicID, or ErrNotFound.
+func (s *Store) ID(ctx context.Context, publicID string) (int64, error) {
+	id, err := storage.RowID(ctx, s.DB, "git_servers", publicID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
 }
 
 // Get returns server id, or ErrNotFound.

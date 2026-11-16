@@ -32,8 +32,9 @@ func (s *Service) Adopt(ctx context.Context, user int64) error {
 // binding is the conversation a question belongs to and the snapshot it is
 // answered at.
 type binding struct {
-	id   int64
-	snap catalog.Ref
+	id     int64
+	public string // its public id
+	snap   catalog.Ref
 }
 
 // snapshot is where a conversation bound to snapshot id is shown and
@@ -50,13 +51,15 @@ func (s *Service) snapshot(ctx context.Context, repoID, id int64) (catalog.Ref, 
 // published snapshot, or continues one of theirs at its snapshot, which it
 // moves to when that changed.
 func (s *Service) open(ctx context.Context, req Request, published catalog.Ref, question string) (binding, error) {
-	b := binding{id: req.ConversationID, snap: published}
-	if b.id == 0 {
+	b := binding{public: req.ConversationID, snap: published}
+	if b.public == "" {
 		var err error
-		b.id, err = s.Store.Start(ctx, req.RepoID, published.ID, title(question), req.UserID)
+		b.id, b.public, err = s.Store.Start(ctx, req.RepoID, published.ID, title(question), req.UserID)
 		return b, err
 	}
-	bound, err := s.Store.Bound(ctx, b.id, req.RepoID, req.UserID)
+	var bound int64
+	var err error
+	b.id, bound, err = s.Store.Bound(ctx, b.public, req.RepoID, req.UserID)
 	if err != nil {
 		return b, err
 	}
@@ -155,6 +158,11 @@ func (s *Service) fit(ctx context.Context, a asking, evidence int) (fitted, erro
 	return fitted{history: r.Kept, background: r.Lead + a.page.Block(sh.Background, a.fit.Count), shares: sh}, nil
 }
 
+// ID is the row id of the conversation whose public id is publicID, or ErrNotFound.
+func (s *Service) ID(ctx context.Context, publicID string) (int64, error) {
+	return s.Store.ID(ctx, publicID)
+}
+
 // Get loads conversation id of user userID with all its messages, at the
 // snapshot its next question would be answered at.
 func (s *Service) Get(ctx context.Context, id, userID int64) (Conversation, error) {
@@ -166,7 +174,7 @@ func (s *Service) Get(ctx context.Context, id, userID int64) (Conversation, erro
 	if err != nil {
 		return c, err
 	}
-	c.SnapshotID, c.CommitSHA = ref.ID, ref.CommitSHA
+	c.SnapshotID, c.SnapshotPublicID, c.CommitSHA = ref.ID, ref.PublicID, ref.CommitSHA
 	c.Messages, err = s.Store.Messages(ctx, id)
 	return c, err
 }

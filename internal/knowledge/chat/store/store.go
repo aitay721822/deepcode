@@ -10,6 +10,7 @@ import (
 
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/storage"
 )
 
 // Store runs the conversations' SQL.
@@ -19,7 +20,8 @@ type Store struct{ DB *sql.DB }
 var ErrNotFound = errors.New("找不到這個對話")
 
 type Message struct {
-	ID        int64               `json:"id"`
+	ID        int64               `json:"-"`  // the row id
+	PublicID  string              `json:"id"` // the CUID2 the API shows
 	Role      string              `json:"role"`
 	Content   string              `json:"content"`
 	Citations []evidence.Citation `json:"citations"`
@@ -28,13 +30,15 @@ type Message struct {
 }
 
 type Conversation struct {
-	ID           int64     `json:"id"`
-	RepoID       int64     `json:"-"`      // the row id
-	RepoPublicID string    `json:"repoId"` // the repository's public id
-	SnapshotID   int64     `json:"snapshotId"`
-	CommitSHA    string    `json:"commitSha"`
-	Title        string    `json:"title"`
-	Messages     []Message `json:"messages"`
+	ID               int64     `json:"-"`      // the row id
+	PublicID         string    `json:"id"`     // the CUID2 the API, the URLs and the UI show
+	RepoID           int64     `json:"-"`      // the row id
+	RepoPublicID     string    `json:"repoId"` // the repository's public id
+	SnapshotID       int64     `json:"-"`
+	SnapshotPublicID string    `json:"snapshotId"`
+	CommitSHA        string    `json:"commitSha"`
+	Title            string    `json:"title"`
+	Messages         []Message `json:"messages"`
 }
 
 // Adopt gives user the conversations that have no owner.
@@ -44,24 +48,32 @@ func (s *Store) Adopt(ctx context.Context, user int64) error {
 }
 
 // Start adds a conversation of userID about repository repoID, bound to
-// snapshot snap, and returns its id.
-func (s *Store) Start(ctx context.Context, repoID, snap int64, title string, userID int64) (int64, error) {
-	var id int64
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO conversations(repository_id, snapshot_id, title, user_id) VALUES (?, ?, ?, ?) RETURNING id`,
-		repoID, snap, title, userID).Scan(&id)
-	return id, err
+// snapshot snap, and returns its row id and public id.
+func (s *Store) Start(ctx context.Context, repoID, snap int64, title string, userID int64) (id int64, publicID string, err error) {
+	err = s.DB.QueryRowContext(ctx, `INSERT INTO conversations(public_id, repository_id, snapshot_id, title, user_id) VALUES (cuid(), ?, ?, ?, ?)
+		RETURNING id, public_id`, repoID, snap, title, userID).Scan(&id, &publicID)
+	return id, publicID, err
 }
 
-// Bound returns the snapshot conversation id is bound to, or ErrNotFound
-// unless it is one of userID's about repository repoID.
-func (s *Store) Bound(ctx context.Context, id, repoID, userID int64) (int64, error) {
-	var bound int64
-	err := s.DB.QueryRowContext(ctx, `SELECT snapshot_id FROM conversations WHERE id = ? AND repository_id = ? AND user_id = ?`,
-		id, repoID, userID).Scan(&bound)
+// Bound returns the row id of the conversation whose public id is publicID
+// and the snapshot it is bound to, or ErrNotFound unless it is one of
+// userID's about repository repoID.
+func (s *Store) Bound(ctx context.Context, publicID string, repoID, userID int64) (id, bound int64, err error) {
+	err = s.DB.QueryRowContext(ctx, `SELECT id, snapshot_id FROM conversations WHERE public_id = ? AND repository_id = ? AND user_id = ?`,
+		publicID, repoID, userID).Scan(&id, &bound)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, ErrNotFound
+	}
+	return id, bound, err
+}
+
+// ID is the row id of the conversation whose public id is publicID, or ErrNotFound.
+func (s *Store) ID(ctx context.Context, publicID string) (int64, error) {
+	id, err := storage.RowID(ctx, s.DB, "conversations", publicID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
-	return bound, err
+	return id, err
 }
 
 // Rebind binds conversation id to snapshot snap.
@@ -119,8 +131,8 @@ func (s *Store) add(ctx context.Context, m Message, conv int64) (Message, error)
 	if m.Codemap != nil {
 		codemap = new(string(m.Codemap))
 	}
-	err = s.DB.QueryRowContext(ctx, `INSERT INTO messages(conversation_id, role, content, citations, codemap) VALUES (?, ?, ?, ?, ?)
-		RETURNING id, created_at`, conv, m.Role, m.Content, string(citesJSON), codemap).Scan(&m.ID, &m.CreatedAt)
+	err = s.DB.QueryRowContext(ctx, `INSERT INTO messages(public_id, conversation_id, role, content, citations, codemap) VALUES (cuid(), ?, ?, ?, ?, ?)
+		RETURNING id, public_id, created_at`, conv, m.Role, m.Content, string(citesJSON), codemap).Scan(&m.ID, &m.PublicID, &m.CreatedAt)
 	return m, err
 }
 
@@ -128,9 +140,9 @@ func (s *Store) add(ctx context.Context, m Message, conv int64) (Message, error)
 // at the snapshot it is bound to, or ErrNotFound.
 func (s *Store) Conversation(ctx context.Context, id, userID int64) (Conversation, error) {
 	var c Conversation
-	err := s.DB.QueryRowContext(ctx, `SELECT c.id, c.repository_id, r.public_id, c.snapshot_id, c.title
+	err := s.DB.QueryRowContext(ctx, `SELECT c.id, c.public_id, c.repository_id, r.public_id, c.snapshot_id, c.title
 		FROM conversations c JOIN repositories r ON r.id = c.repository_id WHERE c.id = ? AND c.user_id = ?`, id, userID).
-		Scan(&c.ID, &c.RepoID, &c.RepoPublicID, &c.SnapshotID, &c.Title)
+		Scan(&c.ID, &c.PublicID, &c.RepoID, &c.RepoPublicID, &c.SnapshotID, &c.Title)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -139,7 +151,7 @@ func (s *Store) Conversation(ctx context.Context, id, userID int64) (Conversatio
 
 // Messages returns all of the conversation's messages, oldest first.
 func (s *Store) Messages(ctx context.Context, conv int64) ([]Message, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, role, content, citations, codemap, created_at FROM messages WHERE conversation_id = ? ORDER BY id`, conv)
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, public_id, role, content, citations, codemap, created_at FROM messages WHERE conversation_id = ? ORDER BY id`, conv)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +161,7 @@ func (s *Store) Messages(ctx context.Context, conv int64) ([]Message, error) {
 		var m Message
 		var cites string
 		var codemap sql.NullString
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &cites, &codemap, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.PublicID, &m.Role, &m.Content, &cites, &codemap, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		if codemap.Valid && json.Valid([]byte(codemap.String)) {

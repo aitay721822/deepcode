@@ -38,7 +38,8 @@ type Box = secret.Box
 var OpenBox = secret.OpenBox
 
 type Server struct {
-	ID              int64  `json:"id"`
+	ID              int64  `json:"-"`  // the row id
+	PublicID        string `json:"id"` // the CUID2 the API, the URLs and the UI show
 	Name            string `json:"name"`
 	Kind            string `json:"kind"`
 	BaseURL         string `json:"baseUrl"`

@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -144,5 +145,40 @@ func TestPoll(t *testing.T) {
 	wiki, err := c.Sync(ctx, 1)
 	if again, _ := c.Sync(ctx, 1); err != nil || wiki == nil || wiki.Kind != jobs.KindWiki || again == nil || again.ID != wiki.ID {
 		t.Fatalf("Sync of a wiki left generating: %+v, then %+v, %v", wiki, again, err)
+	}
+}
+
+// TestSnapshotID: a snapshot's public id names it only under its own
+// repository: another repository's, a row id or an unknown one is not found.
+func TestSnapshotID(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "deepcode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range []string{
+		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/a/b', 'a', 'b'), (2, 'https://github.com/a/c', 'a', 'c')`,
+		`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (7, 1, 'abc', 'ready')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var pub string
+	if err := db.QueryRow(`SELECT public_id FROM snapshots WHERE id = 7`).Scan(&pub); err != nil {
+		t.Fatal(err)
+	}
+	c := &Catalog{Store: &store.Store{DB: db}}
+	if id, err := c.SnapshotID(ctx, 1, pub); err != nil || id != 7 {
+		t.Fatalf("its own repository's: %d %v", id, err)
+	}
+	for _, at := range []struct {
+		repo int64
+		id   string
+	}{{2, pub}, {1, "7"}, {1, "zzzzzzzzzzzzzzzzzzzzzzzz"}} {
+		if _, err := c.SnapshotID(ctx, at.repo, at.id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("snapshot %q of repository %d: %v", at.id, at.repo, err)
+		}
 	}
 }

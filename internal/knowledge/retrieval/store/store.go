@@ -17,7 +17,7 @@ import (
 type Store struct{ DB *sql.DB }
 
 type Hit struct {
-	ChunkID   int64  `json:"chunkId"`
+	ChunkID   int64  `json:"-"` // a row id: never shown outside
 	Path      string `json:"path"`
 	Symbol    string `json:"symbol"`
 	StartLine int    `json:"startLine"`

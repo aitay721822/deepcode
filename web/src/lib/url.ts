@@ -1,8 +1,5 @@
-/** A path segment naming a record: a positive integer written plainly (not 1e3, 0x10 or 007) and exact as a number. */
-export const isId = (s?: string) => !!s && /^[1-9]\d*$/.test(s) && Number.isSafeInteger(+s)
-
-/** A path segment naming a repository: its CUID2, a letter and 23 more letters or digits. */
-export const isRepoId = (s?: string) => !!s && /^[a-z][0-9a-z]{23}$/.test(s)
+/** A path segment naming a record (a repository, a conversation, a job…): its CUID2, a letter and 23 more letters or digits. */
+export const isId = (s?: string) => !!s && /^[a-z][0-9a-z]{23}$/.test(s)
 
 /** A route's validateSearch: the named query parameters that are present, as the strings the address holds. */
 export function queryParams<K extends string>(search: Record<string, unknown>, ...keys: K[]) {

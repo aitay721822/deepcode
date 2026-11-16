@@ -24,7 +24,7 @@ type Service struct {
 
 // fromRow is a server as stored: APIURL holds only an override.
 func fromRow(r store.Server) Server {
-	return Server{ID: r.ID, Name: r.Name, Kind: r.Kind, BaseURL: r.BaseURL, APIURL: r.APIURL, HasToken: r.Token != "",
+	return Server{ID: r.ID, PublicID: r.PublicID, Name: r.Name, Kind: r.Kind, BaseURL: r.BaseURL, APIURL: r.APIURL, HasToken: r.Token != "",
 		RepositoryCount: r.RepositoryCount, CreatedAt: r.CreatedAt, ClientID: r.ClientID, HasClientSecret: r.ClientSecret != "",
 		sealed: r.Token, oauth: r.OAuth}
 }
@@ -33,7 +33,7 @@ func fromRow(r store.Server) Server {
 func (s Server) row() store.Server {
 	o := s.oauth
 	o.ClientID = s.ClientID
-	return store.Server{ID: s.ID, Name: s.Name, Kind: s.Kind, BaseURL: s.BaseURL, APIURL: s.APIURL, Token: s.sealed,
+	return store.Server{ID: s.ID, PublicID: s.PublicID, Name: s.Name, Kind: s.Kind, BaseURL: s.BaseURL, APIURL: s.APIURL, Token: s.sealed,
 		CreatedAt: s.CreatedAt, RepositoryCount: s.RepositoryCount, OAuth: o}
 }
 
@@ -56,6 +56,11 @@ func (sv *Service) List(ctx context.Context) ([]Server, error) {
 		out[i] = fromRow(r).effective()
 	}
 	return out, nil
+}
+
+// ID is the row id of the server whose public id is publicID, or ErrNotFound.
+func (sv *Service) ID(ctx context.Context, publicID string) (int64, error) {
+	return sv.Store.ID(ctx, publicID)
 }
 
 // Get returns server id with its token unsealed.

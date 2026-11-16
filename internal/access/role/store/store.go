@@ -29,7 +29,8 @@ var (
 type Permission string
 
 type Role struct {
-	ID              int64        `json:"id"`
+	ID              int64        `json:"-"`  // the row id
+	PublicID        string       `json:"id"` // the CUID2 the API, the URLs and the UI show
 	Name            string       `json:"name"`
 	Description     string       `json:"description"`
 	Builtin         bool         `json:"builtin"`

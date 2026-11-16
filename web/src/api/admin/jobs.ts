@@ -6,7 +6,7 @@ import { api, listen, type StreamState } from '../client'
 export const listJobs = (status: Job['status'] | '') =>
   api<JobRow[]>(`/api/admin/jobs?limit=100${status ? `&status=${status}` : ''}`)
 
-export const getJob = (id: number) => api<JobDetail>(`/api/admin/jobs/${id}`)
+export const getJob = (id: string) => api<JobDetail>(`/api/admin/jobs/${id}`)
 
 /** Every job change, as it happens. Returns the closer. */
 export const watchJobs = (job: (j: JobRow) => void, state: (s: StreamState) => void) =>
@@ -14,7 +14,7 @@ export const watchJobs = (job: (j: JobRow) => void, state: (s: StreamState) => v
 
 /** The job's output lines after `after`, its changes, and `end` once it succeeded or failed. Returns the closer. */
 export const watchJobOutput = (
-  id: number,
+  id: string,
   after: number,
   on: { log: (l: LogLine) => void; job: (j: JobRow) => void; end: (j: JobRow) => void },
   state: (s: StreamState) => void,

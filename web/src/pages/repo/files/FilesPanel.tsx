@@ -15,7 +15,7 @@ export function FilesPanel({
   onOpen,
 }: {
   repo: Repo
-  snapshot: number
+  snapshot: string
   active: string | null
   onOpen: (path: string, start?: number, end?: number) => void
 }) {

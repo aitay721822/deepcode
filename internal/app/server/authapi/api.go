@@ -42,7 +42,7 @@ func (a *API) Mount(public, signedIn gin.IRouter) {
 
 // me is the signed-in user as the UI sees them.
 type me struct {
-	ID              int64             `json:"id"`
+	ID              string            `json:"id"` // the public id
 	Username        string            `json:"username"`
 	DisplayName     string            `json:"displayName"`
 	Permissions     []role.Permission `json:"permissions"`
@@ -50,7 +50,7 @@ type me struct {
 }
 
 func view(p *session.Principal) me {
-	return me{p.UserID, p.Username, p.DisplayName, p.Permissions(), p.AllRepositories()}
+	return me{p.UserPublicID, p.Username, p.DisplayName, p.Permissions(), p.AllRepositories()}
 }
 
 func (a *API) login(c *gin.Context) {

@@ -134,8 +134,15 @@ func TestAnswers(t *testing.T) {
 	}))
 	defer model.Close()
 	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
-	ask := func(conv int64, q string) (done Message) {
+	started := "" // the public id of the conversation the last ask started or went on with
+	ask := func(conv string, q string) (done Message) {
 		err := s.Ask(ctx, Request{RepoID: 1, ConversationID: conv, Question: q, UserID: 1}, func(event string, data any) {
+			if event == "conversation" { // public ids, the snapshot's too
+				d := data.(map[string]any)
+				if started = d["id"].(string); len(started) != 24 || len(d["snapshotId"].(string)) != 24 {
+					t.Errorf("%s: the conversation event: %v", q, d)
+				}
+			}
 			if event == "done" {
 				done = data.(Message)
 			}
@@ -145,20 +152,20 @@ func TestAnswers(t *testing.T) {
 		}
 		return done
 	}
-	if m := ask(0, "subscribe"); !strings.HasPrefix(m.Content, "It subscribes") || len(m.Citations) != 1 {
+	if m := ask("", "subscribe"); !strings.HasPrefix(m.Content, "It subscribes") || len(m.Citations) != 1 {
 		t.Fatalf("an answer: %+v", m)
 	}
-	if m := ask(1, "and then?"); !strings.HasPrefix(m.Content, "It subscribes") { // in conversation 1, just started
+	if m := ask(started, "and then?"); !strings.HasPrefix(m.Content, "It subscribes") { // in the conversation just started
 		t.Fatalf("a follow-up: %+v", m)
 	}
-	if m := ask(0, "zzzz qqqq"); m.Content != noEvidence || len(m.Citations) != 0 {
+	if m := ask("", "zzzz qqqq"); m.Content != noEvidence || len(m.Citations) != 0 {
 		t.Fatalf("no evidence: %+v", m)
 	}
 	if want := []string{"its language", "an answer in German. with 2 messages", "its language", "an answer in German. with 4 messages", "its language", "search terms"}; !slices.Equal(asked, want) { // none in kana or Han
 		t.Fatalf("the model was asked for %q, want %q", asked, want)
 	}
 	refuse = 1 // with the counts: the context learned, the request fitted again and sent once more
-	if m := ask(0, "subscribe"); !strings.HasPrefix(m.Content, "It subscribes") || s.Chat.Context() != 100000 || refuse != 0 {
+	if m := ask("", "subscribe"); !strings.HasPrefix(m.Content, "It subscribes") || s.Chat.Context() != 100000 || refuse != 0 {
 		t.Fatalf("refused once: %+v, context %d", m, s.Chat.Context())
 	}
 	refuse = 2 // twice: the asker is told to set the context

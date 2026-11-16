@@ -47,8 +47,8 @@ func (s *Store) Base(ctx context.Context, repoID, snap int64, language string) (
 
 // Shown is the snapshot whose wiki a repository shows.
 type Shown struct {
-	ID                               int64
-	CommitSHA, IndexedAt, WikiStatus string
+	ID                                         int64
+	PublicID, CommitSHA, IndexedAt, WikiStatus string
 }
 
 // Shown returns the snapshot whose wiki repository repoID shows: the newest
@@ -58,10 +58,10 @@ type Shown struct {
 func (s *Store) Shown(ctx context.Context, repoID int64) (Shown, error) {
 	var w Shown
 	err := s.DB.QueryRowContext(ctx, `
-		SELECT s.id, s.commit_sha, coalesce(s.indexed_at, ''), s.wiki_status FROM snapshots s
+		SELECT s.id, s.public_id, s.commit_sha, coalesce(s.indexed_at, ''), s.wiki_status FROM snapshots s
 		WHERE s.repository_id = ?1 AND s.status = 'ready' AND EXISTS (SELECT 1 FROM wiki_pages p WHERE p.snapshot_id = s.id)
 		ORDER BY s.wiki_status = ?2 DESC, s.id = (SELECT ready_snapshot_id FROM repositories WHERE id = ?1) DESC, s.id DESC
-		LIMIT 1`, repoID, catalogstore.WikiReady).Scan(&w.ID, &w.CommitSHA, &w.IndexedAt, &w.WikiStatus)
+		LIMIT 1`, repoID, catalogstore.WikiReady).Scan(&w.ID, &w.PublicID, &w.CommitSHA, &w.IndexedAt, &w.WikiStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Shown{}, ErrNotFound
 	}

@@ -120,6 +120,20 @@ func (c *client) login(username, password string) int {
 	return c.post("/api/auth/login", creds(username, password), nil)
 }
 
+// githubServer returns the public id of the built-in GitHub server.
+func githubServer(admin *client) string {
+	admin.t.Helper()
+	var list []struct{ ID, Kind string }
+	admin.get("/api/admin/servers", &list)
+	for _, s := range list {
+		if s.Kind == "github" {
+			return s.ID
+		}
+	}
+	admin.t.Fatalf("no GitHub server in %+v", list)
+	return ""
+}
+
 func creds(username, password string) string {
 	return fmt.Sprintf(`{"username":%q,"password":%q}`, username, password)
 }

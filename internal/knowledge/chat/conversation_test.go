@@ -32,7 +32,7 @@ func TestOpenOwnConversation(t *testing.T) {
 		`INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x'), (2, 'b', 'x')`,
 		`INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r'), (2, 'https://github.com/o/s', 'o', 's')`,
 		`INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'a', 'ready')`,
-		`INSERT INTO conversations(id, repository_id, snapshot_id, title, user_id) VALUES (1, 1, 1, 't', 1)`,
+		`INSERT INTO conversations(id, public_id, repository_id, snapshot_id, title, user_id) VALUES (1, 'c1', 1, 1, 't', 1)`,
 	} {
 		if _, err := db.ExecContext(ctx, q); err != nil {
 			t.Fatal(err)
@@ -40,10 +40,10 @@ func TestOpenOwnConversation(t *testing.T) {
 	}
 	s := service(db, nil)
 	at := catalog.Ref{ID: 1}
-	if b, err := s.open(ctx, Request{UserID: 1, RepoID: 1, ConversationID: 1}, at, "q"); err != nil || b.id != 1 {
+	if b, err := s.open(ctx, Request{UserID: 1, RepoID: 1, ConversationID: "c1"}, at, "q"); err != nil || b.id != 1 || b.public != "c1" {
 		t.Fatalf("the owner: %+v %v", b, err)
 	}
-	for _, req := range []Request{{UserID: 2, RepoID: 1, ConversationID: 1}, {UserID: 1, RepoID: 2, ConversationID: 1}} {
+	for _, req := range []Request{{UserID: 2, RepoID: 1, ConversationID: "c1"}, {UserID: 1, RepoID: 2, ConversationID: "c1"}, {UserID: 1, RepoID: 1, ConversationID: "1"}} {
 		if _, err := s.open(ctx, req, at, "q"); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("%+v: %v", req, err)
 		}
@@ -162,8 +162,10 @@ func TestRefitted(t *testing.T) {
 		s.Store.AddMessage(ctx, 1, "user", "subscribe", nil)
 		s.Store.AddMessage(ctx, 1, "assistant", strings.Repeat("word ", 600), nil)
 	}
+	var conv string // the first answer's conversation
+	db.QueryRowContext(ctx, `SELECT public_id FROM conversations WHERE id = 1`).Scan(&conv)
 	s = service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", Window: 25000, MaxTokens: 100}) // a threshold of 20,000
-	if err := s.Ask(ctx, Request{RepoID: 1, ConversationID: 1, Question: "subscribe", UserID: 1}, func(string, any) {}); err != nil || len(asked) != 3 || messages[2] != 8 {
+	if err := s.Ask(ctx, Request{RepoID: 1, ConversationID: conv, Question: "subscribe", UserID: 1}, func(string, any) {}); err != nil || len(asked) != 3 || messages[2] != 8 {
 		t.Errorf("a follow-up: %v, %d requests, %v messages", err, len(asked), messages)
 	}
 }

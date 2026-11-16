@@ -6,10 +6,10 @@ export const listUsers = () => api<User[]>('/api/admin/users')
 
 export const createUser = (user: NewUser) => post<User>('/api/admin/users', user)
 
-export const updateUser = (id: number, changes: UserChanges) => patch<User>(`/api/admin/users/${id}`, changes)
+export const updateUser = (id: string, changes: UserChanges) => patch<User>(`/api/admin/users/${id}`, changes)
 
 /** Opens or closes sign-up. */
 export const setSignUp = (open: boolean) => patch<SignUpState>('/api/admin/signup', { open })
 
 /** Fails with 409 when it would remove the last administrator. */
-export const deleteUser = (id: number) => del(`/api/admin/users/${id}`)
+export const deleteUser = (id: string) => del(`/api/admin/users/${id}`)

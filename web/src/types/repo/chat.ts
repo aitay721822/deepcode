@@ -27,16 +27,16 @@ export type Codemap = { title: string; description: string; traces: CodemapTrace
 
 /** codemap: an answer drawn as a code map, whose content is the map as text. */
 export type Message = {
-  id: number
+  id: string
   role: 'user' | 'assistant'
   content: string
   citations: Citation[]
   codemap?: Codemap
 }
 export type Conversation = {
-  id: number
+  id: string
   repoId: string
-  snapshotId: number
+  snapshotId: string
   commitSha: string
   title: string
   messages: Message[]

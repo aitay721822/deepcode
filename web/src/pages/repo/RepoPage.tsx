@@ -80,13 +80,13 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const job = repo.job
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
   // The file tree and symbol search list the published snapshot, so their files open there.
-  const openFile = (path: string, start?: number, end?: number, snapshot?: number) =>
+  const openFile = (path: string, start?: number, end?: number, snapshot?: string) =>
     navigate({
       ...here,
       search: {
         file: path,
         L: start ? `${start}-${end ?? start}` : undefined,
-        s: snapshot ? String(snapshot) : undefined,
+        s: snapshot || undefined,
       },
     })
   // A wiki citation points into the wiki's snapshot, which trails the published one while the next wiki is written.
@@ -94,7 +94,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     openFile(path, start, end, wiki && ready && wiki.snapshotId !== ready.id ? wiki.snapshotId : undefined)
   // The commit a file is shown at, known before (or without) the file loading: s= comes from the wiki's citations.
   const fileSha = fileSnapshot
-    ? wiki && String(wiki.snapshotId) === fileSnapshot
+    ? wiki && wiki.snapshotId === fileSnapshot
       ? wiki.commitSha
       : undefined
     : ready?.commitSha

@@ -25,6 +25,16 @@ func (c *Catalog) Resolve(ctx context.Context, repoID, id int64) (Ref, error) {
 	return ref, err
 }
 
+// SnapshotID is the row id of repository repoID's snapshot whose public id is
+// publicID, or ErrNotFound.
+func (c *Catalog) SnapshotID(ctx context.Context, repoID int64, publicID string) (int64, error) {
+	id, err := c.Store.SnapshotID(ctx, repoID, publicID)
+	if errors.Is(err, ErrNotFound) {
+		return 0, failf(ErrNotFound, "沒有這個版本")
+	}
+	return id, err
+}
+
 // FilesJSON lists the files of snapshot by path, as a JSON array of File.
 // A snapshot never changes, so the list is cached for an hour.
 func (c *Catalog) FilesJSON(ctx context.Context, snapshot int64) ([]byte, error) {
@@ -50,12 +60,12 @@ type Content struct {
 	Language   string `json:"language"`
 	Content    string `json:"content"`
 	CommitSHA  string `json:"commitSha"`
-	SnapshotID int64  `json:"snapshotId"`
+	SnapshotID string `json:"snapshotId"` // its public id
 }
 
 // File returns path as of snap, or an ErrNotFound error.
 func (c *Catalog) File(ctx context.Context, snap Ref, path string) (Content, error) {
-	f := Content{Path: path, CommitSHA: snap.CommitSHA, SnapshotID: snap.ID}
+	f := Content{Path: path, CommitSHA: snap.CommitSHA, SnapshotID: snap.PublicID}
 	var err error
 	f.Language, f.Content, err = c.Store.Content(ctx, snap.ID, path)
 	if errors.Is(err, ErrNotFound) {

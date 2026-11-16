@@ -18,7 +18,7 @@ import { parseTarget } from './parseTarget'
 import { RepoCard } from './RepoCard'
 import { useRepos } from './useRepos'
 
-const DEFAULT = 'default' // the select's value for the default server (server ids are numbers)
+const DEFAULT = 'default' // the select's value for the default server: no CUID2 server id can equal it
 
 const matches = (r: Repo, q: string) =>
   `${r.owner}/${r.name} ${r.url} ${r.serverName} ${r.description}`.toLowerCase().includes(q)
@@ -48,7 +48,7 @@ export function HomePage() {
     setBusy(true)
     setError('')
     try {
-      const repo = await importRepo(target, serverId ? +serverId : undefined) // an already imported one comes back as is
+      const repo = await importRepo(target, serverId || undefined) // an already imported one comes back as is
       navigate({ to: '/repos/$id', params: { id: repo.id } })
     } catch (e) {
       setError((e as Error).message)
@@ -110,7 +110,7 @@ export function HomePage() {
                 <SelectContent>
                   <SelectItem value={DEFAULT}>預設伺服器</SelectItem>
                   {servers.map((s) => (
-                    <SelectItem key={s.id} value={String(s.id)}>
+                    <SelectItem key={s.id} value={s.id}>
                       {s.name}
                     </SelectItem>
                   ))}

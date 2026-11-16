@@ -41,7 +41,7 @@ export function ServersSection() {
   const edit = useDialog<GitServer | 'new'>()
   const remove = useDialog<GitServer>()
   const removing = remove.item
-  const [tests, setTests] = useState<Record<number, ConnectionTest | 'busy'>>({})
+  const [tests, setTests] = useState<Record<string, ConnectionTest | 'busy'>>({})
   const epoch = useRef(0) // counts changes: a test started before one is about a server that is no more
   const test = async (s: GitServer) => {
     const started = epoch.current

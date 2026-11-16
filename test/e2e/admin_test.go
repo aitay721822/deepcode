@@ -78,7 +78,7 @@ func checkJobConsole(t *testing.T, admin *client, repoID string) {
 		Job  jobs.Listed    `json:"job"`
 		Logs []jobs.LogLine `json:"logs"`
 	}
-	admin.get(fmt.Sprintf("/api/admin/jobs/%d", wikiJob.ID), &detail)
+	admin.get("/api/admin/jobs/"+wikiJob.PublicID, &detail)
 	var text strings.Builder
 	for _, l := range detail.Logs {
 		text.WriteString(l.Line + "\n")
@@ -88,16 +88,16 @@ func checkJobConsole(t *testing.T, admin *client, repoID string) {
 			t.Fatalf("wiki job log lacks %q:\n%s", want, text.String())
 		}
 	}
-	code, events := admin.events(http.MethodGet, fmt.Sprintf("/api/admin/jobs/%d/output?after=%d", wikiJob.ID, detail.Logs[1].ID), "")
+	code, events := admin.events(http.MethodGet, fmt.Sprintf("/api/admin/jobs/%s/output?after=%d", wikiJob.PublicID, detail.Logs[1].ID), "")
 	if code != http.StatusOK || len(events["log"]) != len(detail.Logs)-2 || len(events["end"]) != 1 {
 		t.Fatalf("finished job's stream: %d, %d of %d lines, %d ends", code, len(events["log"]), len(detail.Logs)-2, len(events["end"]))
 	}
 }
 
 // checkLiveOutput follows a running job's output stream to its end.
-func checkLiveOutput(t *testing.T, admin *client, jobID int64) {
+func checkLiveOutput(t *testing.T, admin *client, jobID string) {
 	t.Helper()
-	_, events := admin.events(http.MethodGet, fmt.Sprintf("/api/admin/jobs/%d/output", jobID), "")
+	_, events := admin.events(http.MethodGet, "/api/admin/jobs/"+jobID+"/output", "")
 	var lines []string
 	for _, raw := range events["log"] {
 		var l jobs.LogLine
@@ -120,7 +120,7 @@ func checkLiveOutput(t *testing.T, admin *client, jobID int64) {
 func checkGitLab(t *testing.T, admin *client, api *fakeAPI, apiURL, sha string) {
 	t.Helper()
 	var srv struct {
-		ID       int64  `json:"id"`
+		ID       string `json:"id"`
 		HasToken bool   `json:"hasToken"`
 		APIURL   string `json:"apiUrl"`
 	}
@@ -132,7 +132,7 @@ func checkGitLab(t *testing.T, admin *client, api *fakeAPI, apiURL, sha string) 
 		OK     bool   `json:"ok"`
 		Detail string `json:"detail"`
 	}
-	if admin.post(fmt.Sprintf("/api/admin/servers/%d/test", srv.ID), `{}`, &check); !check.OK || !strings.Contains(check.Detail, "ci-bot") {
+	if admin.post("/api/admin/servers/"+srv.ID+"/test", `{}`, &check); !check.OK || !strings.Contains(check.Detail, "ci-bot") {
 		t.Fatalf("test connection: %+v", check)
 	}
 	var servers []map[string]any
@@ -158,7 +158,7 @@ func checkGitLab(t *testing.T, admin *client, api *fakeAPI, apiURL, sha string) 
 	if link := "https://gitlab.example.test/group/sub/app/-/blob/" + sha + "/"; !strings.Contains(wk.Pages[0].Content, link) {
 		t.Fatalf("GitLab wiki links: %s", wk.Pages[0].Content)
 	}
-	if code := admin.delete(fmt.Sprintf("/api/admin/servers/%d", srv.ID)); code != http.StatusConflict {
+	if code := admin.delete("/api/admin/servers/" + srv.ID); code != http.StatusConflict {
 		t.Fatalf("deleted a server in use: %d", code)
 	}
 }
@@ -181,7 +181,7 @@ func checkOAuth(t *testing.T, admin *client) {
 	}))
 	defer gl.Close()
 	var srv struct {
-		ID              int64  `json:"id"`
+		ID              string `json:"id"`
 		HasToken        bool   `json:"hasToken"`
 		ClientID        string `json:"clientId"`
 		HasClientSecret bool   `json:"hasClientSecret"`
@@ -204,7 +204,7 @@ func checkOAuth(t *testing.T, admin *client) {
 		}
 		return u
 	}
-	consent := location(fmt.Sprintf("/api/admin/servers/%d/oauth", srv.ID))
+	consent := location("/api/admin/servers/" + srv.ID + "/oauth")
 	q := consent.Query()
 	if !strings.HasPrefix(consent.String(), gl.URL+"/oauth/authorize?") || q.Get("redirect_uri") != callback || q.Get("client_id") != "cid" || q.Get("state") == "" {
 		t.Fatalf("consent page: %s", consent)
@@ -214,8 +214,8 @@ func checkOAuth(t *testing.T, admin *client) {
 		t.Fatalf("callback went to %s", done)
 	}
 	var list []struct {
-		ID       int64 `json:"id"`
-		HasToken bool  `json:"hasToken"`
+		ID       string `json:"id"`
+		HasToken bool   `json:"hasToken"`
 	}
 	admin.get("/api/admin/servers", &list)
 	if last := list[len(list)-1]; last.ID != srv.ID || !last.HasToken {
@@ -224,7 +224,7 @@ func checkOAuth(t *testing.T, admin *client) {
 	if again := location(back); again.Query().Get("oauth") == "ok" || again.Query().Get("oauth") == "" {
 		t.Fatalf("the state worked twice: %s", again)
 	}
-	if code := admin.delete(fmt.Sprintf("/api/admin/servers/%d", srv.ID)); code != http.StatusNoContent {
+	if code := admin.delete("/api/admin/servers/" + srv.ID); code != http.StatusNoContent {
 		t.Fatalf("delete the OAuth server: %d", code)
 	}
 }
@@ -427,9 +427,9 @@ func TestUpgrade(t *testing.T) {
 	}
 	defer db.Close()
 	var added int
-	db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE name IN ('migrations/022_job_progress.sql', 'migrations/023_llm_usage.sql')`).Scan(&added)
-	if added != 2 {
-		t.Fatalf("migrations added since v0.1.0 recorded: %d of 2", added)
+	db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE name IN ('migrations/022_job_progress.sql', 'migrations/023_llm_usage.sql', 'migrations/024_public_ids.sql')`).Scan(&added)
+	if added != 3 {
+		t.Fatalf("migrations added since v0.1.0 recorded: %d of 3", added)
 	}
 	a, err := app.New(ctx, app.Config{
 		DataDir: data,
@@ -455,7 +455,7 @@ func TestUpgrade(t *testing.T) {
 	if code := admin.login("admin", "admin-password"); code != http.StatusOK {
 		t.Fatalf("sign in with v0.1.0's admin: %d", code)
 	}
-	if code := admin.patch("/api/admin/servers/1", fmt.Sprintf(`{"apiUrl":%q}`, apiSrv.URL), nil); code != http.StatusOK {
+	if code := admin.patch("/api/admin/servers/"+githubServer(admin), fmt.Sprintf(`{"apiUrl":%q}`, apiSrv.URL), nil); code != http.StatusOK {
 		t.Fatalf("point GitHub at the fake API: %d", code)
 	}
 	var repo repoView
@@ -463,10 +463,13 @@ func TestUpgrade(t *testing.T) {
 	var stored chat.Conversation
 	admin.get(repoPath, &repo)
 	admin.get(repoPath+"/wiki", &wk)
-	admin.get("/api/conversations/1", &stored)
-	if repo.Snapshot == nil || repo.Snapshot.CommitSHA != sha1 || repo.Snapshot.WikiStatus != "ready" || repo.Snapshot.ChunkCount != 3 ||
+	var conv string // v0.1.0's one conversation, row 1, now known by the public id the migration gave it
+	db.QueryRow(`SELECT public_id FROM conversations WHERE id = 1`).Scan(&conv)
+	admin.get("/api/conversations/"+conv, &stored)
+	if repo.Snapshot == nil || len(repo.Snapshot.ID) != 24 || repo.Snapshot.CommitSHA != sha1 || repo.Snapshot.WikiStatus != "ready" || repo.Snapshot.ChunkCount != 3 ||
 		wk.Status != "ready" || len(wk.Pages) != 4 || wk.Pages[0].Title != "Overview" || wk.Pages[0].Content == "" ||
-		len(stored.Messages) != 2 || stored.CommitSHA != sha1 || stored.Messages[0].Content != "How does Server.Handle work?" ||
+		len(conv) != 24 || stored.PublicID != conv || stored.SnapshotPublicID != repo.Snapshot.ID ||
+		len(stored.Messages) != 2 || stored.CommitSHA != sha1 || len(stored.Messages[0].PublicID) != 24 || stored.Messages[0].Content != "How does Server.Handle work?" ||
 		len(stored.Messages[1].Citations) == 0 {
 		t.Fatalf("v0.1.0's data: repository %+v, wiki %s with %d pages, conversation %+v", repo, wk.Status, len(wk.Pages), stored)
 	}
@@ -487,7 +490,7 @@ func TestUpgrade(t *testing.T) {
 		return repo.Snapshot.CommitSHA == sha2 && repo.Snapshot.WikiStatus == "ready" && repo.Job.Finished()
 	})
 	var changed int
-	db.QueryRow(`SELECT count(*) FROM chunks WHERE snapshot_id = ? AND path = 'web/util.ts'`, repo.Snapshot.ID).Scan(&changed)
+	db.QueryRow(`SELECT count(*) FROM chunks WHERE snapshot_id = (SELECT id FROM snapshots WHERE public_id = ?) AND path = 'web/util.ts'`, repo.Snapshot.ID).Scan(&changed)
 	if got := llm.chunkInputs(); got != changed || changed == 0 || changed >= repo.Snapshot.ChunkCount {
 		t.Fatalf("the sync embedded %d chunks, want only the %d of the new file of %d", got, changed, repo.Snapshot.ChunkCount)
 	}

@@ -58,7 +58,7 @@ export function useChat(repoId: string, conversationId?: string) {
 
   // Open a stored conversation (but not the one this page just created): the one on screen is read as the address
   // changes, and its own changes are no reason to load again.
-  const onScreen = useEffectEvent((id: string) => String(conv?.id) === id)
+  const onScreen = useEffectEvent((id: string) => conv?.id === id)
   useEffect(() => {
     if (!conversationId || onScreen(conversationId)) return
     abort.current?.abort() // another conversation: stop the answer streaming into this one
@@ -112,7 +112,7 @@ export function useChat(repoId: string, conversationId?: string) {
       await streamChat(
         {
           repoId: repo.id,
-          conversationId: conv?.id ?? 0,
+          conversationId: conv?.id ?? '',
           question,
           deep: mode === 'deep',
           codemap: mode === 'codemap',
@@ -121,10 +121,10 @@ export function useChat(repoId: string, conversationId?: string) {
           if (event === 'conversation') {
             setConv(data)
             // The same page, now at its own address: no new history entry, and the reader stays where they are.
-            if (String(data.id) !== conversationId)
+            if (data.id !== conversationId)
               navigate({
                 to: '/repos/$id/search/{-$conversationId}',
-                params: { id: repo.id, conversationId: String(data.id) },
+                params: { id: repo.id, conversationId: data.id },
                 replace: true,
                 resetScroll: false,
               })

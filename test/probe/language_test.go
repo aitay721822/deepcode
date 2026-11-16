@@ -181,7 +181,7 @@ func TestLanguage(t *testing.T) {
 		res := langRun{Arm: arm, Run: run, Repo: name, Group: c.group, Ask: c.ask, Want: c.want, Page: page[c.ask]}
 		req := chat.Request{RepoID: 1, Question: c.ask, UserID: 1, Deep: c.group == "L3"}
 		if c.group == "L2" {
-			conv, err := store.Start(ctx, 1, snap, chineseTurn[name][0], 1)
+			conv, pub, err := store.Start(ctx, 1, snap, chineseTurn[name][0], 1)
 			for i, role := range []string{"user", "assistant"} {
 				if err == nil {
 					_, err = store.AddMessage(ctx, conv, role, chineseTurn[name][i], nil)
@@ -190,7 +190,7 @@ func TestLanguage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req.ConversationID = conv
+			req.ConversationID = pub
 		}
 		start := time.Now()
 		err := svc.Ask(ctx, req, func(event string, data any) {

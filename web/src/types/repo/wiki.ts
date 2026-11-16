@@ -14,4 +14,4 @@ export type WikiPage = {
   diagram?: string
   parent?: string
 }
-export type Wiki = { snapshotId: number; commitSha: string; indexedAt: string; status: string; pages: WikiPage[] }
+export type Wiki = { snapshotId: string; commitSha: string; indexedAt: string; status: string; pages: WikiPage[] }

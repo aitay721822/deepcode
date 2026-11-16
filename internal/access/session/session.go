@@ -25,9 +25,10 @@ var (
 
 // Principal is a signed-in user and what their roles allow.
 type Principal struct {
-	UserID      int64
-	Username    string
-	DisplayName string
+	UserID       int64
+	UserPublicID string // the CUID2 the API shows
+	Username     string
+	DisplayName  string
 	role.Grants
 }
 
@@ -142,7 +143,7 @@ func (s *Service) Authenticate(ctx context.Context, token string) (*Principal, e
 	}
 	p := &Principal{}
 	var err error
-	p.UserID, p.Username, p.DisplayName, err = s.Store.User(ctx, digest(token))
+	p.UserID, p.UserPublicID, p.Username, p.DisplayName, err = s.Store.User(ctx, digest(token))
 	if err != nil {
 		return nil, err
 	}

@@ -30,7 +30,7 @@ export function UserDialog({
   const [password, setPassword] = useState('')
   const [roleIds, setRoleIds] = useState(() => user?.roles.map((r) => r.id) ?? [])
   const [disabled, setDisabled] = useState(user?.disabled ?? false)
-  const toggle = (id: number) => setRoleIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]))
+  const toggle = (id: string) => setRoleIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]))
   const save = async () => {
     if (user) await updateUser(user.id, { displayName, roleIds, disabled, ...(password ? { password } : {}) })
     else await createUser({ username, displayName, password, roleIds })

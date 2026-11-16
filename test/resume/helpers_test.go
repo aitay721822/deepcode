@@ -209,7 +209,20 @@ func client(t *testing.T, base string) *http.Client {
 func importDemo(t *testing.T, base, api string) string {
 	t.Helper()
 	c := client(t, base)
-	if code := call(t, c, http.MethodPatch, base+"/api/admin/servers/1", fmt.Sprintf(`{"apiUrl":%q}`, api)); code != http.StatusOK {
+	var servers []struct{ ID, Kind string }
+	res, err := c.Get(base + "/api/admin/servers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	json.NewDecoder(res.Body).Decode(&servers)
+	res.Body.Close()
+	github := ""
+	for _, s := range servers {
+		if s.Kind == "github" {
+			github = s.ID
+		}
+	}
+	if code := call(t, c, http.MethodPatch, base+"/api/admin/servers/"+github, fmt.Sprintf(`{"apiUrl":%q}`, api)); github == "" || code != http.StatusOK {
 		t.Fatalf("point GitHub at the fake API: %d", code)
 	}
 	var repo struct {
@@ -217,7 +230,7 @@ func importDemo(t *testing.T, base, api string) string {
 	}
 	req, _ := http.NewRequest(http.MethodPost, base+"/api/repos", strings.NewReader(`{"url":"https://github.com/acme/demo"}`))
 	req.Header.Set("Content-Type", "application/json")
-	res, err := c.Do(req)
+	res, err = c.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

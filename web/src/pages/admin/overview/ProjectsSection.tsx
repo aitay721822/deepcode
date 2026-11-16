@@ -19,8 +19,7 @@ const wikiStatus: Record<NonNullable<Repo['snapshot']>['wikiStatus'], string> = 
   failed: '失敗',
 }
 
-const jobLink = (id: number) =>
-  ({ to: '/admin/{-$section}/{-$id}', params: { section: 'jobs', id: String(id) } }) as const
+const jobLink = (id: string) => ({ to: '/admin/{-$section}/{-$id}', params: { section: 'jobs', id } }) as const
 
 /**
  * Every repository the reader may read, as it stands: the commit it serves, its wiki, and its latest job, a job

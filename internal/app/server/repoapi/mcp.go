@@ -340,7 +340,7 @@ func (a *API) fileTool(ctx context.Context, req *mcp.CallToolRequest, in fileArg
 		return nil, nil, err
 	}
 	path := strings.TrimPrefix(strings.TrimPrefix(strings.ReplaceAll(strings.TrimSpace(in.Path), `\`, "/"), "./"), "/")
-	f, err := a.Catalog.File(ctx, catalog.Ref{ID: r.Snapshot.ID, CommitSHA: r.Snapshot.CommitSHA}, path)
+	f, err := a.Catalog.File(ctx, catalog.Ref{ID: r.Snapshot.ID, PublicID: r.Snapshot.PublicID, CommitSHA: r.Snapshot.CommitSHA}, path)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return nil, nil, fmt.Errorf("no file %q in the indexed snapshot; search_code finds paths", in.Path)
 	} else if err != nil {

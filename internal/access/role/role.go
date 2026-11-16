@@ -36,6 +36,11 @@ func (s *Service) List(ctx context.Context) ([]Role, error) {
 	return list, err
 }
 
+// ID is the row id of the role whose public id is publicID, or ErrNotFound.
+func (s *Service) ID(ctx context.Context, publicID string) (int64, error) {
+	return s.Store.ID(ctx, publicID)
+}
+
 func (s *Service) Get(ctx context.Context, id int64) (Role, error) {
 	r, err := s.Store.Get(ctx, id)
 	inOrder(r.Permissions)

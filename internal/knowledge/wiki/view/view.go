@@ -31,11 +31,12 @@ type Page struct {
 }
 
 type Wiki struct {
-	SnapshotID int64  `json:"snapshotId"`
-	CommitSHA  string `json:"commitSha"`
-	IndexedAt  string `json:"indexedAt"`
-	Status     string `json:"status"`
-	Pages      []Page `json:"pages"`
+	SnapshotID       int64  `json:"-"`          // the row id
+	SnapshotPublicID string `json:"snapshotId"` // the CUID2 the API shows
+	CommitSHA        string `json:"commitSha"`
+	IndexedAt        string `json:"indexedAt"`
+	Status           string `json:"status"`
+	Pages            []Page `json:"pages"`
 }
 
 // Reader reads the wikis that wiki.Generator writes.
@@ -58,7 +59,7 @@ func (r Reader) Load(ctx context.Context, repoID int64) (Wiki, error) {
 	if err != nil {
 		return Wiki{}, err
 	}
-	w.SnapshotID, w.CommitSHA, w.IndexedAt, w.Status = shown.ID, shown.CommitSHA, shown.IndexedAt, shown.WikiStatus
+	w.SnapshotID, w.SnapshotPublicID, w.CommitSHA, w.IndexedAt, w.Status = shown.ID, shown.PublicID, shown.CommitSHA, shown.IndexedAt, shown.WikiStatus
 	cites, err := r.Store.Citations(ctx, w.SnapshotID)
 	if err != nil {
 		return Wiki{}, err

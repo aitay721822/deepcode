@@ -77,8 +77,8 @@ func (s *Service) List(ctx context.Context, userID int64) ([]Token, error) {
 	return s.Store.Personal(ctx, userID)
 }
 
-// Revoke deletes user id's personal token id.
-func (s *Service) Revoke(ctx context.Context, userID, id int64) error {
+// Revoke deletes user id's personal token whose public id is id.
+func (s *Service) Revoke(ctx context.Context, userID int64, id string) error {
 	return s.Store.Delete(ctx, userID, id)
 }
 
@@ -95,7 +95,7 @@ func (s *Service) Authenticate(ctx context.Context, secret string) (*session.Pri
 			return nil, time.Time{}, err
 		}
 	}
-	p := &session.Principal{UserID: h.UserID, Username: h.Username, DisplayName: h.DisplayName}
+	p := &session.Principal{UserID: h.UserID, UserPublicID: h.UserPublicID, Username: h.Username, DisplayName: h.DisplayName}
 	p.Grants, err = s.Roles.GrantsOf(ctx, h.UserID)
 	return p, expires, err
 }

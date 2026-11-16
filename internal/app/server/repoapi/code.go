@@ -3,7 +3,6 @@ package repoapi
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -18,10 +17,10 @@ import (
 // published snapshot.
 func (a *API) snapshot(c *gin.Context) (catalog.Ref, bool) {
 	var id int64
-	if v := c.Query("snapshot"); v != "" {
+	if v := c.Query("snapshot"); v != "" { // a public id
 		var err error
-		if id, err = strconv.ParseInt(v, 10, 64); err != nil {
-			httpx.Fail(c, http.StatusBadRequest, "無效的版本")
+		if id, err = a.Catalog.SnapshotID(c.Request.Context(), httpx.RepoID(c), v); err != nil {
+			httpx.DomainError(c, err)
 			return catalog.Ref{}, false
 		}
 	}

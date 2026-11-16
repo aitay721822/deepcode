@@ -92,7 +92,7 @@
 1.0.0 起，以下只會新增，不會改名或移除；要移除的，會先在一個 minor 版本標為 deprecated 並在 log 警告，到 2.0 才移除：
 
 - 設定：`deepcode.yaml` 的鍵、對應的 `DEEPCODE_*` 環境變數，以及 `DEEPCODE_CONFIG`。
-- HTTP API 的路由，以及 MCP（`/mcp`）的工具和參數。
+- HTTP API 的路由，以及 MCP（`/mcp`）的工具和參數。路由與網址中資源的 id 一律是 24 字元的 CUID2（OAuth 應用的 client id 除外）；舊版的數字 id 不再有效，會回 404。
 - CLI 指令 `serve`、`backup`、`passwd` 和它們的旗標。
 - 資料庫：發佈過的 migration 不再修改，新版本只往前加；v0.1.0 的資料庫可以直接升級。
 

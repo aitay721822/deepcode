@@ -61,7 +61,7 @@ type repoView struct {
 	Provider string `json:"provider"`
 	Stars    int    `json:"stars"`
 	Snapshot *struct {
-		ID         int64  `json:"id"`
+		ID         string `json:"id"` // a CUID2
 		CommitSHA  string `json:"commitSha"`
 		WikiStatus string `json:"wikiStatus"`
 		ChunkCount int    `json:"chunkCount"`
@@ -135,7 +135,7 @@ func TestEndToEnd(t *testing.T) {
 	if code := admin.login("admin", "admin-password"); code != http.StatusOK {
 		t.Fatalf("sign in: %d", code)
 	}
-	if code := admin.patch("/api/admin/servers/1", fmt.Sprintf(`{"apiUrl":%q}`, apiSrv.URL), nil); code != http.StatusOK {
+	if code := admin.patch("/api/admin/servers/"+githubServer(admin), fmt.Sprintf(`{"apiUrl":%q}`, apiSrv.URL), nil); code != http.StatusOK {
 		t.Fatalf("point GitHub at the fake API: %d", code)
 	}
 
@@ -213,13 +213,18 @@ func TestEndToEnd(t *testing.T) {
 	}
 	checkUsage(t, admin, repo.ID)
 	var conv struct {
-		ID int64 `json:"id"`
+		ID         string `json:"id"`
+		SnapshotID string `json:"snapshotId"`
 	}
 	json.Unmarshal(events["conversation"][0], &conv)
 	var stored chat.Conversation
-	admin.get(fmt.Sprintf("/api/conversations/%d", conv.ID), &stored)
-	if len(stored.Messages) != 2 || stored.CommitSHA != sha1 {
+	admin.get("/api/conversations/"+conv.ID, &stored)
+	if len(conv.ID) != 24 || stored.PublicID != conv.ID || len(conv.SnapshotID) != 24 || stored.SnapshotPublicID != conv.SnapshotID ||
+		len(stored.Messages) != 2 || stored.CommitSHA != sha1 || len(stored.Messages[0].PublicID) != 24 {
 		t.Fatalf("conversation: %+v", stored)
+	}
+	if code := admin.get("/api/conversations/1", nil); code != http.StatusNotFound { // row 1 is this conversation
+		t.Fatalf("GET /api/conversations/1: %d, want 404", code)
 	}
 	checkAccess(t, srv.URL, admin, repo.ID, conv.ID)
 	checkSignUp(t, srv.URL, admin)
@@ -263,30 +268,30 @@ func TestEndToEnd(t *testing.T) {
 	if code := admin.post(repoPath+"/sync", `{}`, &synced); code != http.StatusAccepted || synced.Job == nil {
 		t.Fatalf("sync: %d %+v", code, synced)
 	}
-	checkLiveOutput(t, admin, synced.Job.ID)
+	checkLiveOutput(t, admin, synced.Job.PublicID)
 	waitFor(t, "index and wiki of the second commit", func() bool {
 		admin.get(repoPath, &repo)
 		failIfJobFailed(t, repo.Job)
 		return repo.Snapshot.CommitSHA == sha2 && repo.Snapshot.WikiStatus == "ready" && repo.Job.Finished()
 	})
 	var changed int
-	db.QueryRow(`SELECT count(*) FROM chunks WHERE snapshot_id = ? AND path IN ('web/app.ts', 'web/util.ts')`, repo.Snapshot.ID).Scan(&changed)
+	db.QueryRow(`SELECT count(*) FROM chunks WHERE snapshot_id = (SELECT id FROM snapshots WHERE public_id = ?) AND path IN ('web/app.ts', 'web/util.ts')`, repo.Snapshot.ID).Scan(&changed)
 	if got := llm.chunkInputs() - before; got != changed || changed == 0 || changed >= repo.Snapshot.ChunkCount {
 		t.Fatalf("sync embedded %d chunks, want only the %d changed of %d", got, changed, repo.Snapshot.ChunkCount)
 	}
 	var mainSymbols int
-	db.QueryRow(`SELECT count(*) FROM symbols WHERE snapshot_id = ? AND path = 'main.go'`, repo.Snapshot.ID).Scan(&mainSymbols)
+	db.QueryRow(`SELECT count(*) FROM symbols WHERE snapshot_id = (SELECT id FROM snapshots WHERE public_id = ?) AND path = 'main.go'`, repo.Snapshot.ID).Scan(&mainSymbols)
 	if mainSymbols != 3 {
 		t.Fatalf("unchanged main.go carried %d symbols into the new snapshot, want 3", mainSymbols)
 	}
 	var linked int
-	db.QueryRow(`SELECT count(*) FROM file_edges WHERE snapshot_id = ? AND src = 'web/app.ts' AND dst = 'web/util.ts'`, repo.Snapshot.ID).Scan(&linked)
+	db.QueryRow(`SELECT count(*) FROM file_edges WHERE snapshot_id = (SELECT id FROM snapshots WHERE public_id = ?) AND src = 'web/app.ts' AND dst = 'web/util.ts'`, repo.Snapshot.ID).Scan(&linked)
 	if linked != 1 {
 		t.Fatal("the new snapshot's import of web/util.ts was not linked")
 	}
 
 	// A follow-up stays on its conversation's commit while that is indexed.
-	_, events = admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"conversationId":%d,"question":"And the server?"}`, repo.ID, conv.ID))
+	_, events = admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"conversationId":%q,"question":"And the server?"}`, repo.ID, conv.ID))
 	if len(events["done"]) != 1 {
 		t.Fatalf("follow-up on the older commit: %v", events)
 	}
@@ -316,15 +321,15 @@ func TestEndToEnd(t *testing.T) {
 
 	// Reopened, the conversation on the pruned commit shows the published one,
 	// and its next question moves it there.
-	admin.get(fmt.Sprintf("/api/conversations/%d", conv.ID), &stored)
+	admin.get("/api/conversations/"+conv.ID, &stored)
 	if stored.CommitSHA != sha3 || len(stored.Messages) != 4 {
 		t.Fatalf("reopened conversation at %s with %d messages, want %s", stored.CommitSHA, len(stored.Messages), sha3)
 	}
 	var cited struct{ Content string }
-	if code := admin.get(fmt.Sprintf("%s/files/main.go?snapshot=%d", repoPath, stored.SnapshotID), &cited); code != http.StatusOK || cited.Content == "" {
-		t.Fatalf("cited file at the reopened conversation's snapshot %d: %d", stored.SnapshotID, code)
+	if code := admin.get(fmt.Sprintf("%s/files/main.go?snapshot=%s", repoPath, stored.SnapshotPublicID), &cited); code != http.StatusOK || cited.Content == "" {
+		t.Fatalf("cited file at the reopened conversation's snapshot %s: %d", stored.SnapshotPublicID, code)
 	}
-	_, events = admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"conversationId":%d,"question":"And main?"}`, repo.ID, conv.ID))
+	_, events = admin.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"conversationId":%q,"question":"And main?"}`, repo.ID, conv.ID))
 	if len(events["done"]) != 1 {
 		t.Fatalf("follow-up: %v", events)
 	}
@@ -334,7 +339,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	// A failed wiki is written again by Sync, without indexing again.
-	db.Exec(`UPDATE snapshots SET wiki_status = 'failed' WHERE id = ?`, repo.Snapshot.ID)
+	db.Exec(`UPDATE snapshots SET wiki_status = 'failed' WHERE public_id = ?`, repo.Snapshot.ID)
 	var rewrite struct {
 		Job *jobs.Job `json:"job"`
 	}
@@ -403,7 +408,7 @@ func checkPrunedCommitReturns(t *testing.T, db *sql.DB, admin *client, remote, r
 	admin.get(repoPath, &repo)
 	res, err := db.Exec(`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count)
 		SELECT s.id, f.path, f.language, f.content_hash, f.size, f.line_count FROM source_files f, snapshots s
-		WHERE f.snapshot_id = ? AND f.path = 'main.go' AND s.repository_id = (SELECT id FROM repositories WHERE public_id = ?) AND s.commit_sha = ? AND s.status = 'pruned'`,
+		WHERE f.snapshot_id = (SELECT id FROM snapshots WHERE public_id = ?) AND f.path = 'main.go' AND s.repository_id = (SELECT id FROM repositories WHERE public_id = ?) AND s.commit_sha = ? AND s.status = 'pruned'`,
 		repo.Snapshot.ID, repo.ID, sha)
 	if n, _ := res.RowsAffected(); err != nil || n != 1 {
 		t.Fatalf("leave a file row in the pruned snapshot: %d rows, %v", n, err)

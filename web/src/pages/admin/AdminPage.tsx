@@ -16,7 +16,7 @@ import { RolesSection } from './roles/RolesSection'
 import { ServersSection } from './servers/ServersSection'
 import { UsersSection } from './users/UsersSection'
 
-const sections: { path: string; label: string; permission: Permission; page: (id?: number) => ReactNode }[] = [
+const sections: { path: string; label: string; permission: Permission; page: (id?: string) => ReactNode }[] = [
   { path: 'projects', label: '專案', permission: 'jobs.view', page: () => <ProjectsSection /> },
   {
     path: 'jobs',
@@ -92,7 +92,7 @@ export function AdminPage({ section, id }: { section?: string; id?: string }) {
         >
           <AnimatePresence mode="wait" initial={false}>
             <motion.div key={`${section}/${id ?? ''}`} {...rise}>
-              {current.page(id ? +id : undefined)}
+              {current.page(id)}
             </motion.div>
           </AnimatePresence>
         </main>

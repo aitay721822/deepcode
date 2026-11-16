@@ -44,7 +44,7 @@ func TestBootstrap(t *testing.T) {
 	if err != nil || first != id {
 		t.Fatalf("sign in %d, first admin %d: %v", id, first, err)
 	}
-	if u, err := st.ByUsername(ctx, " Admin "); err != nil || u.ID != id || len(u.Roles) != 1 || u.Roles[0].ID != role.Admin {
+	if u, err := st.ByUsername(ctx, " Admin "); err != nil || u.ID != id || len(u.Roles) != 1 || u.Roles[0].Name != "admin" {
 		t.Fatalf("by username: %+v %v", u, err)
 	}
 	if _, _, err := st.Check(ctx, "admin", "wrong-password"); !errors.Is(err, ErrBadLogin) {

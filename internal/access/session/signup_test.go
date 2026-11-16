@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"deepcode/internal/access/account"
-	"deepcode/internal/access/role"
 )
 
 // TestSignUp: closed until opened; a sign-up gets the member role and a
@@ -28,7 +27,7 @@ func TestSignUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, err := s.Accounts.Get(ctx, p.UserID)
-	if err != nil || p.DisplayName != "Ann" || len(u.Roles) != 1 || u.Roles[0].ID != role.Member {
+	if err != nil || p.DisplayName != "Ann" || len(u.Roles) != 1 || u.Roles[0].Name != "member" {
 		t.Fatalf("signed up as %+v with roles %+v (%v)", p, u.Roles, err)
 	}
 	if again, err := s.Authenticate(ctx, token); err != nil || again.UserID != p.UserID {
