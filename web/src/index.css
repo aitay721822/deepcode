@@ -14,89 +14,90 @@
 }
 
 /*
- * The look: minimal. Grey-white (light) or graphite black (dark), hairline rules, serif headings and prose,
- * mono labels, and graphite as the one strong colour: buttons, links, citations, what is current.
+ * The look: minimal. Warm white (light) or black (dark), surfaces told apart by hairline rules rather than by
+ * tints, serif headings and prose, mono labels, and the ink itself (black on white, white on black) as the one
+ * strong colour: buttons, links, citations, what is current.
  */
 
-/* Light: grey-white. */
+/* Light: warm white, as paper, easier on the eyes than a pure white; ink a warm black. */
 :root {
   color-scheme: light;
   --radius: 0.625rem; /* lg; xs 4px, sm 6px, md 8px, xl 14px */
-  --background: #f3f3f4;
-  --foreground: #1a1b1e;
-  --card: #f9f9fa;
-  --card-foreground: #1a1b1e;
-  --popover: #ffffff;
-  --popover-foreground: #1a1b1e;
-  --primary: #232428; /* graphite buttons */
-  --primary-foreground: #fafafa;
-  --secondary: #e7e7e9;
-  --secondary-foreground: #1a1b1e;
-  --muted: #eaeaec;
-  --muted-foreground: #5b5e65;
-  --accent: #e4e4e7; /* hover, and the grey that marks the current or highlighted item */
-  --accent-foreground: #1a1b1e;
-  --destructive: #c0283a;
-  --destructive-foreground: #ffffff;
-  --border: #dcdde0;
-  --input: #85888f; /* control borders: 3:1 on the page, card and popover */
-  --ring: #232428;
+  --background: #faf8f3;
+  --foreground: #1c1a17;
+  --card: #fdfbf7;
+  --card-foreground: #1c1a17;
+  --popover: #fffdf9;
+  --popover-foreground: #1c1a17;
+  --primary: #1c1a17; /* warm black buttons */
+  --primary-foreground: #fdfbf7;
+  --secondary: #f1eee7;
+  --secondary-foreground: #1c1a17;
+  --muted: #f0ece4;
+  --muted-foreground: #5d584f;
+  --accent: #e8e2d6; /* hover, and the grey that marks the current or highlighted item */
+  --accent-foreground: #1c1a17;
+  --destructive: #b8283a;
+  --destructive-foreground: #fffdf9;
+  --border: #e4dfd5;
+  --input: #7f796d; /* control borders: 3:1 on the page, card and popover */
+  --ring: #1c1a17;
   /* deepcode's own */
-  --brand: #232428; /* the strong colour: links, citations, the ask box, the current item */
-  --brand-foreground: #fafafa;
-  --faint: #85888f; /* quiet marks: line and list numbers, list bullets, repo ids, the header slash */
-  --warning: #232428; /* work in progress: progress bars */
+  --brand: #1c1a17; /* the strong colour: links, citations, the ask box, the current item */
+  --brand-foreground: #fdfbf7;
+  --faint: #7f796d; /* quiet marks: line and list numbers, list bullets, repo ids, the header slash */
+  --warning: #1c1a17; /* work in progress: progress bars */
   --success: #1b6b44;
-  --code: #fcfcfc;
-  --chip: #e9e9eb;
-  --band: rgb(35 36 40 / 0.08); /* cited lines */
-  --overlay: rgb(0 0 0 / 0.4); /* behind dialogs */
-  --grid: rgb(26 27 30 / 0.08); /* dot grid */
-  --hatch: rgb(35 36 40 / 0.12);
+  --code: #fcfaf6;
+  --chip: #ede8de;
+  --band: rgb(28 26 23 / 0.06); /* cited lines */
+  --overlay: rgb(28 26 23 / 0.4); /* behind dialogs */
+  --grid: rgb(28 26 23 / 0.07); /* dot grid */
+  --hatch: rgb(28 26 23 / 0.1);
   --add-card: repeating-linear-gradient(135deg, var(--hatch) 0 1px, transparent 1px 9px);
   --syn-keyword: #a2324f;
   --syn-string: #3c6a2e;
-  --syn-comment: #5f636b;
+  --syn-comment: #625d54;
   --syn-title: #6b4796;
   --syn-number: #2b5d8c;
   --syn-type: #1f6a69;
 }
 
-/* Dark: graphite black, the default look on screen. A page prints with the light tokens: pale text would print on
-   white paper. */
+/* Dark: black, the default look on screen. A page prints with the light tokens: pale text would print on white
+   paper. */
 @media screen {
   .dark {
     color-scheme: dark;
-    --background: #131416;
-    --foreground: #e6e7e9;
-    --card: #18191c;
-    --card-foreground: #e6e7e9;
-    --popover: #1c1d20;
-    --popover-foreground: #e6e7e9;
-    --primary: #e6e7e9;
-    --primary-foreground: #131416;
-    --secondary: #202125;
-    --secondary-foreground: #e6e7e9;
-    --muted: #1e1f22;
-    --muted-foreground: #a2a5ac;
-    --accent: #28292d;
-    --accent-foreground: #e6e7e9;
+    --background: #0a0a0a;
+    --foreground: #ededed;
+    --card: #0f0f10;
+    --card-foreground: #ededed;
+    --popover: #141415;
+    --popover-foreground: #ededed;
+    --primary: #ededed;
+    --primary-foreground: #0a0a0a;
+    --secondary: #18181a;
+    --secondary-foreground: #ededed;
+    --muted: #151516;
+    --muted-foreground: #a0a1a7;
+    --accent: #28282c;
+    --accent-foreground: #ededed;
     --destructive: #f0707e;
-    --destructive-foreground: #131416;
-    --border: #2a2b2f;
-    --input: #6d7078;
-    --ring: #e6e7e9;
-    --brand: #e6e7e9;
-    --brand-foreground: #131416;
-    --faint: #74777e;
-    --warning: #e6e7e9;
+    --destructive-foreground: #0a0a0a;
+    --border: #242427;
+    --input: #68696f;
+    --ring: #ededed;
+    --brand: #ededed;
+    --brand-foreground: #0a0a0a;
+    --faint: #75767c;
+    --warning: #ededed;
     --success: #5ec48c;
-    --code: #0f1012;
-    --chip: #212226;
-    --band: rgb(230 231 233 / 0.08);
-    --overlay: rgb(0 0 0 / 0.6);
-    --grid: rgb(230 231 233 / 0.07);
-    --hatch: rgb(230 231 233 / 0.12);
+    --code: #0d0d0e;
+    --chip: #19191b;
+    --band: rgb(237 237 237 / 0.08);
+    --overlay: rgb(0 0 0 / 0.7);
+    --grid: rgb(237 237 237 / 0.07);
+    --hatch: rgb(237 237 237 / 0.12);
     --syn-keyword: #e899ad;
     --syn-string: #a6c995;
     --syn-comment: #8f939b;

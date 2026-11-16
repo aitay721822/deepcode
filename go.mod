@@ -4,6 +4,7 @@ go 1.27.1
 
 require (
 	github.com/ThreeDotsLabs/watermill v1.5.3
+	github.com/dop251/goja v0.0.0-20261110204830-f493a2b600d6
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/invopop/jsonschema v0.13.0
@@ -34,7 +35,7 @@ require (
 	github.com/bytedance/sonic/loader v0.5.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
-	github.com/dlclark/regexp2/v2 v2.5.1 // indirect
+	github.com/dlclark/regexp2/v2 v2.11.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
@@ -42,9 +43,11 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.1 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
+	github.com/google/pprof v0.0.0-20261016150608-1facf8f91b50 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -85,7 +88,7 @@ require (
 	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

@@ -18,7 +18,7 @@ export function Toc({ items }: { items: TocItem[] }) {
             <a
               href={`#${i.id}`}
               className={cn(
-                'flex gap-2.5 py-[5px] text-[13px] leading-snug [overflow-wrap:anywhere] text-muted-foreground transition-colors hover:text-foreground',
+                'flex gap-2.5 py-1.5 text-[13px] leading-[1.45] [overflow-wrap:anywhere] text-muted-foreground transition-colors hover:text-foreground',
                 i.level === 3 && 'pl-[22px]',
               )}
               onClick={(e) => {

@@ -34,7 +34,7 @@ function TableRow({ className, ...props }: HTMLMotionProps<'tr'>) {
   return (
     <motion.tr
       data-slot="table-row"
-      className={cn('border-b transition-colors hover:bg-accent/45 data-[state=selected]:bg-muted', className)}
+      className={cn('border-b transition-colors hover:bg-accent/60 data-[state=selected]:bg-muted', className)}
       variants={item}
       {...props}
     />
@@ -46,7 +46,7 @@ function TableHead({ className, ...props }: ComponentProps<'th'>) {
     <th
       data-slot="table-head"
       className={cn(
-        'h-10 px-3 text-left align-middle font-mono text-[10.5px] font-medium tracking-[0.14em] whitespace-nowrap text-muted-foreground uppercase',
+        'h-11 px-3 text-left align-middle font-mono text-[10.5px] font-medium tracking-[0.14em] whitespace-nowrap text-muted-foreground uppercase',
         className,
       )}
       {...props}
@@ -58,7 +58,7 @@ function TableCell({ className, ...props }: ComponentProps<'td'>) {
   return (
     <td
       data-slot="table-cell"
-      className={cn('px-3 py-2.5 align-middle whitespace-nowrap tabular-nums', className)}
+      className={cn('px-3 py-3 align-middle whitespace-nowrap tabular-nums', className)}
       {...props}
     />
   )

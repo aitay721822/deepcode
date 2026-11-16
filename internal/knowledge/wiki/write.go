@@ -148,7 +148,7 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 			w.Headings = append(w.Headings, h.Name)
 		}
 		for r, c := range w.Contracts {
-			w.Repaired = w.Repaired || r != "skeleton.unsourced" && c.First > 0 // every rule a first reply broke is asked again
+			w.Repaired = w.Repaired || r != "skeleton.unsourced" && r != skeleton.IntroDiagram && c.First > 0 // every other rule a first reply broke is asked again; code drops an opening paragraph's diagram
 		}
 		g.Written(w)
 	}

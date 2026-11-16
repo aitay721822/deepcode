@@ -54,7 +54,7 @@ func TestCheck(t *testing.T) {
 	if got := broken(Check(sk, cited)(d)); !slices.Equal(got, []string{"write.empty@Guide", "write.heading@Step", "write.uncited@Router", "write.uncited@More"}) {
 		t.Errorf("Check = %q", got)
 	}
-	if got := Check(sk, cited)(Draft{Intro: "I", Sections: []Section{{"Guide", 2, "g [ok]"}, {"Step", 3, "~~~~mermaid\ns\n~~~~"}, {"Router", 2, "r [ok]"}}}); len(got) != 0 {
+	if got := Check(sk, cited)(Draft{Intro: "I", Sections: []Section{{"Guide", 2, "g [ok]"}, {"Step", 3, "~~~~mermaid\nsequenceDiagram\n  A->>B: hi\n~~~~"}, {"Router", 2, "r [ok]"}}}); len(got) != 0 {
 		t.Errorf("a whole draft breaks %q", broken(got))
 	}
 	if got := Check(sk, cited)(Draft{Sections: []Section{{"Guide", 2, ""}, {"Step", 3, "s [ok]"}, {"Router", 2, "r [ok]"}}}); len(got) != 0 {
@@ -63,7 +63,7 @@ func TestCheck(t *testing.T) {
 	if got := broken(Check(nil, cited)(Draft{Intro: "I", Sections: []Section{{"A", 2, "a"}}})); !slices.Equal(got, []string{"write.uncited@"}) {
 		t.Errorf("an uncited page with no skeleton: %q", got)
 	}
-	if got := broken(Check(nil, cited)(Draft{Sections: []Section{{"A", 2, "a [ok]"}, {"B", 2, "b"}, {"C", 2, "```mermaid\nc\n```\nc"}, {"D", 2, "```go\nd\n```"}}})); !slices.Equal(got, []string{"write.uncited@B", "write.uncited@C", "write.uncited@D"}) {
+	if got := broken(Check(nil, cited)(Draft{Sections: []Section{{"A", 2, "a [ok]"}, {"B", 2, "b"}, {"C", 2, "```mermaid\ngraph TD\n```\nc"}, {"D", 2, "```go\nd\n```"}}})); !slices.Equal(got, []string{"write.uncited@B", "write.uncited@C", "write.uncited@D"}) {
 		t.Errorf("a page with no skeleton: %q", got)
 	}
 }
@@ -132,5 +132,49 @@ func TestListed(t *testing.T) {
 	}
 	if got := Listed(nil, nil); got != "The page has no listed headings.\n" {
 		t.Errorf("no headings: %q", got)
+	}
+}
+
+// TestDiagram: a section's diagram Mermaid cannot read is named, in the
+// parser's words, the opening paragraph's as Minor (code drops it); Fix drops
+// each such diagram, a block left open to the end too, keeps the diagrams
+// Mermaid reads and other code, and then a section left with no text; the
+// note asks for the section once, with how to write the diagram, and asks
+// nothing for the opening paragraph's.
+func TestDiagram(t *testing.T) {
+	bad, good := "```mermaid\nflowchart TD\n  A[foo(bar)] --> B\n```", "```mermaid\nflowchart TD\n  A[\"foo(bar)\"] --> B\n```"
+	d := Draft{Intro: "I\n\n" + bad, Sections: []Section{
+		{"Guide", 2, "g [ok]\n\n" + good},
+		{"Step", 3, "s [ok]\n\n" + bad + "\n\nmore [ok]"},
+		{"Router", 2, bad},
+		{"Extra", 2, "e [ok]\n\n```go\nA[foo(bar)] --> B\n```\n\n~~~mermaid\nsequenceDiagram\n  alt x\n"},
+	}}
+	vs := Check(sk, cited)(d)
+	if got := broken(vs); !slices.Equal(got, []string{"write.diagram@Step", "write.diagram@Router", "write.diagram@Extra", "write.diagram.intro@" + intro}) {
+		t.Errorf("Check = %q", got)
+	}
+	if !strings.Contains(vs[0].Detail, "Mermaid cannot read: Parse error on line 2") || vs[0].Minor || !vs[3].Minor {
+		t.Errorf("Check said %+v", vs)
+	}
+	Fix(&d)
+	want := Draft{Intro: "I", Sections: []Section{
+		{"Guide", 2, "g [ok]\n\n" + good},
+		{"Step", 3, "s [ok]\n\n\nmore [ok]"},
+		{"Extra", 2, "e [ok]\n\n```go\nA[foo(bar)] --> B\n```"},
+	}}
+	if !reflect.DeepEqual(d, want) {
+		t.Errorf("Fix =\n%+v\nwant\n%+v", d, want)
+	}
+	if got := broken(Check(sk, cited)(d)); !slices.Equal(got, []string{"write.heading@Router"}) { // only a diagram, now gone
+		t.Errorf("after Fix, Check = %q", got)
+	}
+	md := Note(sk, "[a.go:1-9]")(append(vs, aicontract.Violation{Rule: Uncited, Where: "Router", Detail: "cites nothing that can be checked"}))
+	for _, want := range []string{"Parse error on line 2", "each node's label in double quotes", "\n### Step\n## Router\n## Extra"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("the note lacks %q:\n%s", want, md)
+		}
+	}
+	if strings.Contains(md, "opening paragraph") || strings.Count(md, "## Router") != 1 {
+		t.Errorf("the note asks for the opening paragraph, or for Router twice:\n%s", md)
 	}
 }

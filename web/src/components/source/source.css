@@ -58,7 +58,7 @@
 .markdown {
   font-family: var(--font-serif);
   font-size: 17px;
-  line-height: 1.7;
+  line-height: 1.75; /* 30px: a citation chip (20px) sits in a line with room above and below */
   overflow-wrap: break-word;
 }
 
@@ -146,12 +146,12 @@
 }
 
 .markdown li + li {
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 .markdown li > ul,
 .markdown li > ol {
-  margin: 4px 0 0; /* a nested list sits inside its item, spaced like the items */
+  margin: 6px 0 0; /* a nested list sits inside its item, spaced like the items */
 }
 
 .markdown .task-list-item {
@@ -229,12 +229,12 @@
   border-collapse: collapse;
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.75; /* 24.5px: a cell's chips (20px) and code on wrapped lines do not touch */
 }
 
 .markdown th,
 .markdown td {
-  padding: 9px 10px;
+  padding: 11px 12px;
   border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: top;

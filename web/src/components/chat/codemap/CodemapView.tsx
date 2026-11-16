@@ -177,7 +177,7 @@ function TraceBlock({
           <div id={guideId}>
             <AnimatePresence initial={false}>
               {guide && (
-                <motion.div className="mt-2 rounded-lg bg-muted/60 px-4 py-3 text-[14px]" {...rise}>
+                <motion.div className="mt-2 rounded-lg border bg-muted/60 px-4 py-3 text-[14px]" {...rise}>
                   <Markdown
                     text={trace.guide}
                     citations={[]}

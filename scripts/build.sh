@@ -5,6 +5,9 @@ cd "$(dirname "$0")/.."
 npm --prefix web ci
 npm --prefix web run check # Biome: format, lint and import order
 npm --prefix web run build
+# The Mermaid parser web/ draws with, which the wiki checks a page's diagrams with before writing it.
+NODE_ENV=production web/node_modules/.bin/rolldown -c scripts/mermaid/rolldown.config.mjs
+gzip -9 -f internal/knowledge/wiki/outline/skeleton/mermaid/dist/parse.js
 rm -rf internal/app/server/webui/dist
 mkdir -p internal/app/server/webui/dist
 cp -R web/dist/. internal/app/server/webui/dist/

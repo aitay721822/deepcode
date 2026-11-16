@@ -6,4 +6,6 @@
 /web/dist/
 /internal/app/server/webui/dist/*
 !/internal/app/server/webui/dist/.gitkeep
+/internal/knowledge/wiki/outline/skeleton/mermaid/dist/*
+!/internal/knowledge/wiki/outline/skeleton/mermaid/dist/.gitkeep
 /.claude/worktrees/

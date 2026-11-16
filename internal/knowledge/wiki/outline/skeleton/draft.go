@@ -1,11 +1,13 @@
 package skeleton
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 
+	"deepcode/internal/knowledge/wiki/outline/skeleton/mermaid"
 	aicontract "deepcode/internal/platform/ai/contract"
 )
 
@@ -24,12 +26,20 @@ type Section struct {
 }
 
 // The rules a page's text is held to: each heading of its skeleton is there,
-// with text, and each section with text cites a line that checks out.
+// with text, each section with text cites a line that checks out, and each
+// Mermaid diagram is one Mermaid reads (a section's is asked for again, the
+// opening paragraph's is only dropped: a repair rewrites sections).
 const (
-	Missing aicontract.Rule = "write.heading"
-	Empty   aicontract.Rule = "write.empty"
-	Uncited aicontract.Rule = "write.uncited"
+	Missing      aicontract.Rule = "write.heading"
+	Empty        aicontract.Rule = "write.empty"
+	Uncited      aicontract.Rule = "write.uncited"
+	Diagram      aicontract.Rule = "write.diagram"
+	IntroDiagram aicontract.Rule = "write.diagram.intro"
 )
+
+// intro names the opening paragraph where a violation says where: no heading
+// is named so, and none can be, as a heading is one line.
+const intro = "\n(opening paragraph)"
 
 // find is the index of the heading named name, case and wrapping aside; -1
 // for none.
@@ -149,8 +159,61 @@ func Check(s Skeleton, cited func(string) int) func(Draft) []aicontract.Violatio
 				out = append(out, aicontract.Violation{Rule: Uncited, Where: x.Name, Detail: "cites nothing that can be checked"})
 			}
 		}
+		for _, x := range d.Sections {
+			if errs, _ := unread(x.Body); len(errs) > 0 {
+				out = append(out, aicontract.Violation{Rule: Diagram, Where: x.Name, Detail: "has a Mermaid diagram that Mermaid cannot read: " + errs[0].Error()})
+			}
+		}
+		if errs, _ := unread(d.Intro); len(errs) > 0 {
+			out = append(out, aicontract.Violation{Rule: IntroDiagram, Where: intro, Detail: "has a Mermaid diagram that Mermaid cannot read: " + errs[0].Error(), Minor: true})
+		}
 		return out
 	}
+}
+
+// unread is the error of each Mermaid block of text that Mermaid cannot read,
+// and text without those blocks. A block left open runs to the end, as
+// Markdown reads it.
+func unread(text string) ([]error, string) {
+	var errs []error
+	var out, held, code strings.Builder // held: the open diagram, fences and all
+	mark, open := "", false
+	settle := func() {
+		// A binary scripts/build.sh did not build holds no parser: its diagrams stay, unchecked (mermaid logs it).
+		if err := mermaid.Check(code.String()); err != nil && !errors.Is(err, mermaid.ErrUnbuilt) {
+			errs = append(errs, err)
+		} else {
+			out.WriteString(held.String())
+		}
+		held.Reset()
+		code.Reset()
+		open = false
+	}
+	for line := range strings.Lines(text) {
+		m := fence(line)
+		switch {
+		case m != nil && mark == "":
+			mark, open = m[1], strings.HasPrefix(strings.TrimSpace(m[2]), "mermaid")
+		case m != nil && m[1][0] == mark[0] && len(m[1]) >= len(mark) && strings.TrimSpace(m[2]) == "":
+			mark = ""
+			if open {
+				held.WriteString(line)
+				settle()
+				continue
+			}
+		case open:
+			code.WriteString(line)
+		}
+		if open {
+			held.WriteString(line)
+		} else {
+			out.WriteString(line)
+		}
+	}
+	if open {
+		settle()
+	}
+	return errs, out.String()
 }
 
 // diagram reports whether body is only a fenced mermaid block.
@@ -200,11 +263,16 @@ func Merge(s Skeleton) func(first, fix Draft, vs []aicontract.Violation) Draft {
 	}
 }
 
-// Fix is code's fix of draft d: a heading with no text (empty) goes, the
-// skeleton's or the model's, as code writes no text for the model and a bare
-// heading says nothing. A missing heading of the skeleton stays missing, an
-// uncited one stays, both counted.
+// Fix is code's fix of draft d: a Mermaid diagram Mermaid cannot read goes,
+// so the wiki holds none the page cannot draw; then a heading with no text
+// (empty) goes, the skeleton's or the model's, as code writes no text for the
+// model and a bare heading says nothing. A missing heading of the skeleton
+// stays missing, an uncited one stays, both counted.
 func Fix(d *Draft) {
+	d.Intro = drawable(d.Intro)
+	for i := range d.Sections {
+		d.Sections[i].Body = drawable(d.Sections[i].Body)
+	}
 	var kept []Section
 	for i, x := range d.Sections {
 		if !d.empty(i) {
@@ -212,6 +280,16 @@ func Fix(d *Draft) {
 		}
 	}
 	d.Sections = kept
+}
+
+// drawable is text without the Mermaid diagrams Mermaid cannot read; the
+// blank lines one leaves Markdown reads as one.
+func drawable(text string) string {
+	errs, kept := unread(text)
+	if len(errs) == 0 {
+		return text
+	}
+	return strings.TrimSpace(kept)
 }
 
 // Lacking are the headings of s that d does not hold.
@@ -241,15 +319,24 @@ func Note(s Skeleton, cite string) func([]aicontract.Violation) string {
 		}
 		var lines, heads []string
 		for _, v := range vs {
+			if v.Minor { // code fixes it: nothing to ask
+				continue
+			}
 			line := fmt.Sprintf("- %q %s", v.Where, v.Detail)
-			if v.Rule == Uncited {
+			switch v.Rule {
+			case Uncited:
 				line += fmt.Sprintf(": cite after each statement the lines it rests on as [path:start-end], with the path and lines a <source> block shows, as in %s", cite)
+			case Diagram:
+				line += "\nKeep the section's text and citations, and write the diagram again so Mermaid reads it: each node's label in double quotes with no double quote inside, each alt, loop, opt, par, rect and subgraph closed by end; or leave the diagram out"
 			}
 			level := 2
 			if k := s.find(v.Where); k >= 0 {
 				level = s[k].Level
 			}
-			lines, heads = append(lines, line+"."), append(heads, strings.Repeat("#", level)+" "+v.Where)
+			lines = append(lines, line+".")
+			if head := strings.Repeat("#", level) + " " + v.Where; !slices.Contains(heads, head) { // a section may break two rules
+				heads = append(heads, head)
+			}
 		}
 		return "Some sections of your page need repair:\n" + strings.Join(lines, "\n") +
 			"\n\nWrite only these sections again, each as a Markdown block under its heading exactly as given here, nothing else:\n" + strings.Join(heads, "\n")
