@@ -14,12 +14,23 @@ import (
 	"testing"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
+	"deepcode/internal/platform/ai/tokens"
 )
+
+// o200k counts the tests' requests: OpenAI's o200k_base, the built-in.
+var o200k = func() *tokens.Counter {
+	t, err := tokens.Load("")
+	if err != nil {
+		panic(err)
+	}
+	return t
+}()
 
 // model is a Chat Completions server answering each request with the next of
 // answers, an HTTP status and a body (a streamed answer's whole stream), the
 // last again once they run out; it keeps every request's body.
-func model(t *testing.T, answers ...string) (*ai.OpenAI, func() []string) {
+func model(t *testing.T, answers ...string) (*compat.Client, func() []string) {
 	var mu sync.Mutex
 	var bodies []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +47,7 @@ func model(t *testing.T, answers ...string) (*ai.OpenAI, func() []string) {
 		w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return &ai.OpenAI{BaseURL: srv.URL, ModelName: "m", MaxTokens: 100}, func() []string { mu.Lock(); defer mu.Unlock(); return bodies }
+	return &compat.Client{BaseURL: srv.URL, ModelName: "m", MaxTokens: 100}, func() []string { mu.Lock(); defer mu.Unlock(); return bodies }
 }
 
 // reply is a whole reply calling search with the given call id, or ("") none,
@@ -69,12 +80,12 @@ func TestThreshold(t *testing.T) {
 		ratio        float64
 		want         int
 	}{{0, 0, 0, 0}, {524288, 0, 0, 419430}, {16000, 0, 0, 7808}, {8192, 2048, 0.8, 6144}, {8192, 1024, 0.5, 4096}} {
-		f := New(&ai.OpenAI{Window: tc.window, MaxTokens: tc.room, CompactRatio: tc.ratio}, o200k)
+		f := New(&compat.Client{Context: tc.window, MaxTokens: tc.room, CompactRatio: tc.ratio}, o200k)
 		if got := f.Threshold(); got != tc.want || tc.window == 0 && f.Room() != math.MaxInt || tc.window > 0 && f.Room() != tc.want {
 			t.Errorf("%+v: threshold %d, room %d", tc, got, f.Room())
 		}
 	}
-	if n := New(&ai.OpenAI{}, o200k).Prompt(ai.Prompt{Static: "hello", Dynamic: "world"}); n != 2+2*perMessage {
+	if n := New(&compat.Client{}, o200k).Prompt(ai.Prompt{Static: "hello", Dynamic: "world"}); n != 2+2*perMessage {
 		t.Errorf("a prompt of two messages: %d tokens", n)
 	}
 }
@@ -84,10 +95,10 @@ func TestThreshold(t *testing.T) {
 // leaves its one message 60 tokens asks the model, a token less does not.
 func TestSummaryRoom(t *testing.T) {
 	for _, schema := range []string{ai.SchemaServer, ai.SchemaPrompt} {
-		need := o200k.Count(summedFormat.Prompt(&ai.OpenAI{Schema: schema}, ai.Prompt{Static: summaryPrompt}).Static) + 300 + 60
+		need := o200k.Count(summedFormat.Prompt(&compat.Client{Schema: schema}, ai.Prompt{Static: summaryPrompt}).Static) + 300 + 60
 		for room, asked := range map[int]bool{need: true, need - 1: false} {
 			m, sent := model(t, `400 {"error":{"message":"no"}}`)
-			m.Schema, m.Window, m.CompactRatio = schema, room+m.MaxTokens, 1
+			m.Schema, m.Context, m.CompactRatio = schema, room+m.MaxTokens, 1
 			if _, err := New(m, o200k).summarize(context.Background(), "", []ai.Message{{Role: "user", Content: "q"}}); err == nil || len(sent()) > 0 != asked {
 				t.Errorf("%s, a room of %d: %v, %d asked", schema, room, err, len(sent()))
 			}
@@ -103,7 +114,7 @@ func TestSummaryRoom(t *testing.T) {
 // what the conversation and the background leave whole: never less than
 // without, so at 16,000 and 32,000 it is the same.
 func TestShare(t *testing.T) {
-	want, m := Shares{Evidence: 64000, History: 33000, Background: 6300}, &ai.OpenAI{Window: 524288}
+	want, m := Shares{Evidence: 64000, History: 33000, Background: 6300}, &compat.Client{Context: 524288}
 	f := New(m, o200k)
 	if got, err := f.Share(5000, want, false); err != nil || got != want {
 		t.Errorf("524K: %+v %v", got, err)
@@ -111,7 +122,7 @@ func TestShare(t *testing.T) {
 	if got, err := f.Share(5000, want, true); err != nil || got != (Shares{Evidence: 419430 - 5000 - 33000 - 6300, History: 33000, Background: 6300}) {
 		t.Errorf("524K, the rest: %+v %v", got, err)
 	}
-	m.Window = 16000 // 7808 tokens
+	m.Context = 16000 // 7808 tokens
 	for _, rest := range []bool{false, true} {
 		if got, err := f.Share(1500, want, rest); err != nil || got != (Shares{Evidence: 5708, History: 600}) {
 			t.Errorf("16K, rest %v: %+v %v", rest, got, err)
@@ -120,30 +131,30 @@ func TestShare(t *testing.T) {
 	if got, err := f.Share(5000, want, false); err != nil || got != (Shares{Evidence: minEvidence, History: 308}) {
 		t.Errorf("16K, the least evidence: %+v %v", got, err)
 	}
-	m.Window = 32000 // 23,808 tokens: a conversation of 16,500 and a page of 6,000 leave the evidence less than its share
+	m.Context = 32000 // 23,808 tokens: a conversation of 16,500 and a page of 6,000 leave the evidence less than its share
 	if got, err := f.Share(1500, Shares{Evidence: 64000, History: 16500, Background: 6000}, true); err != nil || got != (Shares{Evidence: 21708, History: 600}) {
 		t.Errorf("32K, the rest: %+v %v", got, err)
 	}
-	m.Window = 12000
+	m.Context = 12000
 	var small *ErrSmall
 	if _, err := f.Share(1500, want, true); !errors.As(err, &small) || small.Need != 12192 || !strings.Contains(err.Error(), "DEEPCODE_CHAT_CONTEXT 都要至少 12192 tokens") {
 		t.Fatalf("12K: %v", err)
 	}
 	for window, fits := range map[int]bool{12192: true, 12191: false} {
-		if m.Window = window; fits != (func() bool { _, err := f.Share(1500, want, false); return err == nil })() {
+		if m.Context = window; fits != (func() bool { _, err := f.Share(1500, want, false); return err == nil })() {
 			t.Errorf("%d tokens: fits %v", window, !fits)
 		}
 	}
 	m.CompactRatio, f.slack = 0.7, 33 // the ratio bound, its floor, and slack a refusal taught
 	for fixed := 40000; fixed < 40200; fixed++ {
-		m.Window = 9000
+		m.Context = 9000
 		_, err := f.Share(fixed, want, false)
 		if !errors.As(err, &small) {
 			t.Fatal(err)
 		}
-		m.Window = small.Need
+		m.Context = small.Need
 		_, fits := f.Share(fixed, want, false)
-		m.Window = small.Need - 1
+		m.Context = small.Need - 1
 		if _, short := f.Share(fixed, want, false); fits != nil || short == nil {
 			t.Fatalf("%d fixed: %d tokens fit %v, one fewer %v", fixed, small.Need, fits == nil, short == nil)
 		}
@@ -180,19 +191,19 @@ func TestUnset(t *testing.T) {
 // past ours, the most of any refusal; one without them, or another error,
 // teaches nothing. A context set smaller than the one reported takes over.
 func TestLearn(t *testing.T) {
-	m := &ai.OpenAI{Window: 16000, MaxTokens: 1000}
+	m := &compat.Client{Context: 16000, MaxTokens: 1000}
 	f := New(m, o200k)
 	if f.Learn(errors.New("502"), 900) || f.Learn(&ai.ErrContext{}, 900) || f.slack != 0 {
 		t.Fatal("learned from no counts")
 	}
-	if !f.Learn(fmt.Errorf("asked: %w", &ai.ErrContext{Prompt: 9000, Context: 8192}), 8500) || m.Context() != 8192 || f.slack != 500 || f.Room() != 6553-500 || f.Over(6553) { // a gathering's count has no slack
-		t.Fatalf("context %d, slack %d", m.Context(), f.slack)
+	if !f.Learn(fmt.Errorf("asked: %w", &ai.ErrContext{Prompt: 9000, Context: 8192}), 8500) || m.Window().Context != 8192 || f.slack != 500 || f.Room() != 6553-500 || f.Over(6553) { // a gathering's count has no slack
+		t.Fatalf("context %d, slack %d", m.Window().Context, f.slack)
 	}
 	if f.Learn(&ai.ErrContext{Prompt: 9000, Context: 8192}, 8900); f.slack != 500 {
 		t.Errorf("slack %d after a closer count", f.slack)
 	}
-	if m.Window = 4096; m.Context() != 4096 {
-		t.Errorf("a smaller window set: %d", m.Context())
+	if m.Context = 4096; m.Window().Context != 4096 {
+		t.Errorf("a smaller window set: %d", m.Window().Context)
 	}
 }
 
@@ -204,7 +215,7 @@ func TestLearn(t *testing.T) {
 // without the counts, is ErrFull. A reply's usage anchors the template's tokens.
 func TestNext(t *testing.T) {
 	long, short := strings.Repeat("route ", 600), "search found a.go:1-9 Find"
-	start := func(answers ...string) (*Fit, *ai.Exchange, func() []string) {
+	start := func(answers ...string) (*Fit, ai.Exchange, func() []string) {
 		m, sent := model(t, append([]string{reply("c1")}, answers...)...)
 		f, ex := New(m, o200k), m.Exchange(ai.Prompt{Dynamic: strings.Repeat("how does it route? ", 50)}, nil)
 		_, calls, err := f.Next(context.Background(), ex, nil)
@@ -220,24 +231,24 @@ func TestNext(t *testing.T) {
 	whole := f.size(ex)
 	masked := whole - o200k.Message(long) + o200k.Message(short)
 	window := func(threshold int) int { return int(math.Ceil(float64(threshold) / 0.8)) } // past 500 tokens, MaxTokens 100 binds no threshold
-	if f.model.Window = window(masked); f.Threshold() < masked || f.Threshold() >= whole || whole != o200k.Message(strings.Repeat("how does it route? ", 50))+o200k.Message("search{}")+o200k.Message(long)+2*perMessage+toolsNote {
+	if f.model.(*compat.Client).Context = window(masked); f.Threshold() < masked || f.Threshold() >= whole || whole != o200k.Message(strings.Repeat("how does it route? ", 50))+o200k.Message("search{}")+o200k.Message(long)+2*perMessage+toolsNote {
 		t.Fatalf("whole %d, masked %d, threshold %d", whole, masked, f.Threshold())
 	}
 	f, ex, sent := start(reply(""))
-	f.model.Window = window(masked)
+	f.model.(*compat.Client).Context = window(masked)
 	if _, _, err := f.Next(context.Background(), ex, masks); err != nil || f.Masked != 1 || len(sent()) != 2 || !strings.Contains(sent()[1], short) || strings.Contains(sent()[1], long) {
 		t.Errorf("masked: %v, %d masked, %d sent", err, f.Masked, len(sent()))
 	}
 	f, ex, sent = start(reply(""))
-	if f.model.Window = window(masked) - 2; f.Threshold() >= masked {
+	if f.model.(*compat.Client).Context = window(masked) - 2; f.Threshold() >= masked {
 		t.Fatalf("threshold %d", f.Threshold())
 	}
 	if _, _, err := f.Next(context.Background(), ex, masks); !errors.Is(err, ErrFull) || len(sent()) != 1 {
 		t.Errorf("too large masked: %v, %d sent", err, len(sent()))
 	}
 	f, ex, sent = start(over(whole+5, window(masked+5)), reply("")) // the server counted 5 more: the template is toolsNote and 5
-	if _, _, err := f.Next(context.Background(), ex, masks); err != nil || f.Masked != 1 || f.model.Context() != window(masked+5) || f.overhead != toolsNote+5 || f.slack != 0 || len(sent()) != 3 || !strings.Contains(sent()[2], short) {
-		t.Errorf("learned: %v, %d masked, context %d, template %d, slack %d, %d sent", err, f.Masked, f.model.Context(), f.overhead, f.slack, len(sent()))
+	if _, _, err := f.Next(context.Background(), ex, masks); err != nil || f.Masked != 1 || f.model.Window().Context != window(masked+5) || f.overhead != toolsNote+5 || f.slack != 0 || len(sent()) != 3 || !strings.Contains(sent()[2], short) {
+		t.Errorf("learned: %v, %d masked, context %d, template %d, slack %d, %d sent", err, f.Masked, f.model.Window().Context, f.overhead, f.slack, len(sent()))
 	}
 	f, ex, sent = start(over(whole+5, window(masked+5)), over(masked+500, window(masked+5)))
 	if _, _, err := f.Next(context.Background(), ex, masks); !errors.Is(err, ErrFull) || !errors.As(err, new(*ai.ErrContext)) || len(sent()) != 3 {
@@ -249,7 +260,7 @@ func TestNext(t *testing.T) {
 	}
 	asked := o200k.Count(strings.Repeat("q", 1000)) // and the template's 52, as the server counts
 	m, _ := model(t, reply("c1", asked+52))
-	m.Window = 524288
+	m.Context = 524288
 	g, q := New(m, o200k), m.Exchange(ai.Prompt{Dynamic: strings.Repeat("q", 1000)}, nil)
 	if size := g.size(q); size != asked+perMessage+toolsNote {
 		t.Errorf("before a reply: %d", size)
@@ -292,8 +303,8 @@ func TestQwenOnO200k(t *testing.T) {
 		w.Write([]byte(reply(map[bool]string{true: "c1"}[first], n)[4:]))
 	}))
 	defer srv.Close()
-	m, longest := &ai.OpenAI{BaseURL: srv.URL, ModelName: "m", Window: 16000}, 0
-	f, ex := New(m, Counting("o200k, the longest text kept", func(s string) int { longest = max(longest, len(s)); return o200k.Count(s) })),
+	m, longest := &compat.Client{BaseURL: srv.URL, ModelName: "m", Context: 16000}, 0
+	f, ex := New(m, tokens.Counting("o200k, the longest text kept", func(s string) int { longest = max(longest, len(s)); return o200k.Count(s) })),
 		m.Exchange(ai.Prompt{Dynamic: strings.Repeat("How is a request routed? ", 20)}, nil)
 	_, calls, err := f.Next(context.Background(), ex, nil)
 	if err != nil || len(calls) != 1 {
@@ -336,9 +347,9 @@ func TestRecall(t *testing.T) {
 		for _, m := range r.Kept {
 			kept = append(kept, Turn{Message: m})
 		}
-		return New(&ai.OpenAI{}, o200k).History(kept)+o200k.Count(r.Lead) <= share
+		return New(&compat.Client{}, o200k).History(kept)+o200k.Count(r.Lead) <= share
 	}
-	f := New(&ai.OpenAI{}, o200k)
+	f := New(&compat.Client{}, o200k)
 	share := f.History(turns[2:]) + summaryRoom // the last two turns and a summary
 	for name, tc := range map[string]struct {
 		stored        Summary
@@ -384,7 +395,7 @@ func TestRecall(t *testing.T) {
 	if r, err := New(m, o200k).Recall(context.Background(), turns, share, stored(Summary{})); err != nil || len(r.Fresh.Text) > maxSummary || !strings.HasPrefix(r.Fresh.Text, "Named: nnn") {
 		t.Errorf("a long summary stored: %d bytes, %v", len(r.Fresh.Text), err)
 	}
-	if r, err := New(&ai.OpenAI{}, o200k).Recall(context.Background(), turns, 0, stored(Summary{})); r.Kept != nil || r.Lead != "" || err != nil {
+	if r, err := New(&compat.Client{}, o200k).Recall(context.Background(), turns, 0, stored(Summary{})); r.Kept != nil || r.Lead != "" || err != nil {
 		t.Errorf("no room: %+v %v", r, err)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/knowledge/retrieval/twins"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/jobs"
 	jobstore "deepcode/internal/platform/jobs/store"
 	"deepcode/internal/platform/storage"
@@ -88,8 +89,7 @@ func seed(t *testing.T, model string, fs []file, stmts ...string) (Gatherer, Req
 				f.path, c[2], start, end, strings.Join(lines[start-1:end], "\n"), fmt.Sprint(f.path, start))
 		}
 	}
-	r := &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}}
-	g := Gatherer{Model: &ai.OpenAI{BaseURL: model, ModelName: "m"}, Retriever: r,
+	g := Gatherer{Model: &compat.Client{BaseURL: model, ModelName: "m"}, Retriever: &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}},
 		Catalog: &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: &jobs.Queue{Store: &jobstore.Store{DB: db}}}}
 	return g, Request{Snapshot: catalog.Ref{ID: 1, CommitSHA: "abc"}, Repo: "o/r", Question: "How is a route found?", Limits: Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}, Converge: true}}
 }

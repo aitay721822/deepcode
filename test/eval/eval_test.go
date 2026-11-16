@@ -11,7 +11,7 @@ import (
 
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
-	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
@@ -82,7 +82,7 @@ func source(t *testing.T, c Corpus) string {
 // index indexes the repository in the git directory dir at sha, as an index
 // job does with cmd/deepcode's default limits and embed (nil: no vectors),
 // into a database of its own, and returns that and the snapshot.
-func index(t *testing.T, dir, sha string, embed *ai.OpenAI) (*sql.DB, int64) {
+func index(t *testing.T, dir, sha string, embed *compat.Client) (*sql.DB, int64) {
 	ctx, tmp := context.Background(), t.TempDir()
 	db, err := storage.Open(ctx, filepath.Join(tmp, "deepcode.db"))
 	if err != nil {

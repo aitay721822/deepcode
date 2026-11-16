@@ -22,6 +22,8 @@ import (
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
+	"deepcode/internal/platform/ai/tokens"
 	"deepcode/internal/platform/jobs"
 	jobstore "deepcode/internal/platform/jobs/store"
 	"deepcode/internal/platform/storage"
@@ -72,10 +74,10 @@ func TestAskLimit(t *testing.T) {
 	}
 }
 
-var tokens, _ = harness.LoadTokens("") // OpenAI's o200k_base, the built-in
+var o200k, _ = tokens.Load("") // OpenAI's o200k_base, the built-in
 // service is the chat service on db, asking model (nil: none), counting its tokens by tokens.
-func service(db *sql.DB, model *ai.OpenAI) *Service {
-	return &Service{Store: &store.Store{DB: db}, Chat: model, Tokens: tokens,
+func service(db *sql.DB, model *compat.Client) *Service {
+	return &Service{Store: &store.Store{DB: db}, Chat: model, Tokens: o200k,
 		Catalog:   &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: &jobs.Queue{Store: &jobstore.Store{DB: db}}},
 		Retriever: &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}}}
 }
@@ -133,7 +135,7 @@ func TestAnswers(t *testing.T) {
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
-	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
+	s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m"})
 	started := "" // the public id of the conversation the last ask started or went on with
 	ask := func(conv string, q string) (done Message) {
 		err := s.Ask(ctx, Request{RepoID: 1, ConversationID: conv, Question: q, UserID: 1}, func(event string, data any) {
@@ -165,14 +167,14 @@ func TestAnswers(t *testing.T) {
 		t.Fatalf("the model was asked for %q, want %q", asked, want)
 	}
 	refuse = 1 // with the counts: the context learned, the request fitted again and sent once more
-	if m := ask("", "subscribe"); !strings.HasPrefix(m.Content, "It subscribes") || s.Chat.Context() != 100000 || refuse != 0 {
-		t.Fatalf("refused once: %+v, context %d", m, s.Chat.Context())
+	if m := ask("", "subscribe"); !strings.HasPrefix(m.Content, "It subscribes") || s.Chat.Window().Context != 100000 || refuse != 0 {
+		t.Fatalf("refused once: %+v, context %d", m, s.Chat.Window().Context)
 	}
 	refuse = 2 // twice: the asker is told to set the context
 	if msg, logIt := Explain(s.Ask(ctx, Request{RepoID: 1, Question: "subscribe", UserID: 1}, func(string, any) {})); msg != errContext.Error() || !logIt || refuse != 0 {
 		t.Fatalf("refused twice: %s", msg)
 	}
-	if msg, _ := Explain(service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", Window: 9000}).Ask(ctx, Request{RepoID: 1, Question: "subscribe", UserID: 1}, func(string, any) {})); !strings.Contains(msg, "DEEPCODE_CHAT_CONTEXT 都要至少") {
+	if msg, _ := Explain(service(db, &compat.Client{BaseURL: model.URL, ModelName: "m", Context: 9000}).Ask(ctx, Request{RepoID: 1, Question: "subscribe", UserID: 1}, func(string, any) {})); !strings.Contains(msg, "DEEPCODE_CHAT_CONTEXT 都要至少") {
 		t.Fatalf("a context of 808 tokens past the answer's room: %s", msg)
 	}
 }
@@ -240,7 +242,7 @@ func TestGathered(t *testing.T) {
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
-	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", Window: 524288})
+	s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m", Context: 524288})
 	var events []string
 	var done Message
 	var shown map[string]any // the evidence event as sent, before JSON
@@ -302,7 +304,7 @@ func TestGathered(t *testing.T) {
 	}
 	for _, window := range []int{0, 20000} { // a deep answer with no context known: the fixed budget, the big file refused; with a small one, past its tokens, and no room for the page
 		var deep map[string]any
-		if err := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", Window: window}).Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", Deep: true, UserID: 1}, func(event string, data any) {
+		if err := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m", Context: window}).Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", Deep: true, UserID: 1}, func(event string, data any) {
 			if event == "evidence" {
 				deep = data.(map[string]any)
 			}
@@ -349,7 +351,7 @@ func TestConverges(t *testing.T) {
 	defer model.Close()
 	for deep, want := range map[bool]string{false: loop.StopConverged, true: loop.StopStalled} {
 		var stop any
-		err := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"}).Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", Deep: deep, UserID: 1}, func(event string, data any) {
+		err := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m"}).Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", Deep: deep, UserID: 1}, func(event string, data any) {
 			if event == "evidence" {
 				stop = data.(map[string]any)["stop"]
 			}
@@ -375,7 +377,7 @@ func TestEvidenceEvent(t *testing.T) {
 		Refused: []loop.Out{{Hit: retrieval.Hit{Path: "e.go", StartLine: 7, EndLine: 9}, Round: 2, Tool: "read_file"}},
 		Rounds:  2, Calls: map[string]int{"read_file": 1}, Stop: "rounds"}
 	sources, used, _ := evidence.Format(got.Hits, evidence.Limit{Chars: 80}) // a.go's block fits, b.go's does not
-	parts, fit := fitted{shares: harness.Shares{Evidence: 80, History: 10, Background: 5}}, harness.New(&ai.OpenAI{Window: 524288}, tokens)
+	parts, fit := fitted{shares: harness.Shares{Evidence: 80, History: 10, Background: 5}}, harness.New(&compat.Client{Context: 524288}, o200k)
 	fit.Masked = 2
 	b, _ := json.Marshal(evidenceEvent(got, used, len(sources), evidence.Limit{Chars: 80}, parts, fit))
 	want := fmt.Sprintf(`{"calls":{"read_file":1},"chars":{"budget":80,"rendered":%d},`+
@@ -428,7 +430,7 @@ func TestCodemap(t *testing.T) {
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
-	s := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
+	s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m"})
 	var events []string
 	var done Message
 	err := s.Ask(ctx, Request{RepoID: 1, Question: "How is a Page rendered?", Codemap: true, UserID: 1}, func(event string, data any) {
@@ -449,7 +451,7 @@ func TestCodemap(t *testing.T) {
 		}
 	}
 	m := codemap.Request{Repo: "o/r", Commit: "abc", Question: "How is a Page rendered?", Language: "English"} // as Ask asks
-	if err := service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", MaxTokens: 100, Window: (codemap.Fixed(m, &ai.OpenAI{}, harness.New(&ai.OpenAI{}, tokens).Prompt) + 2000) * 10 / 8}).Ask(ctx, Request{RepoID: 1, Question: m.Question, Codemap: true, UserID: 1}, func(string, any) {}); !errors.As(err, new(*harness.ErrSmall)) {
+	if err := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m", MaxTokens: 100, Context: (codemap.Fixed(m, &compat.Client{}, harness.New(&compat.Client{}, o200k).Prompt) + 2000) * 10 / 8}).Ask(ctx, Request{RepoID: 1, Question: m.Question, Codemap: true, UserID: 1}, func(string, any) {}); !errors.As(err, new(*harness.ErrSmall)) {
 		t.Fatalf("a context without the retry's room: %v", err)
 	}
 }

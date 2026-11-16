@@ -26,6 +26,7 @@ import (
 	"deepcode/internal/knowledge/wiki/outline/place"
 	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
@@ -105,8 +106,9 @@ func TestPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.ChatAPI = ai.Completions
-	model, _ := app.Providers(cfg)
+	cfg.ChatAPI = compat.Completions
+	chat, _ := app.Providers(cfg, nil)
+	model, _ := chat.(*compat.Client)
 	if model == nil {
 		t.Fatal("the probe needs DEEPCODE_CHAT_MODEL")
 	}
@@ -185,7 +187,7 @@ func refuseWrites(t *testing.T, target string) string {
 // indexed is the base snapshot of the repository in the bare clone src at
 // sha, indexed as an index job does with cmd/deepcode's limits and, with
 // embed, vectors, into a database in work, which a later run reuses.
-func indexed(t *testing.T, work, src, owner, name, sha string, embed *ai.OpenAI) (*sql.DB, int64) {
+func indexed(t *testing.T, work, src, owner, name, sha string, embed *compat.Client) (*sql.DB, int64) {
 	ctx := context.Background()
 	if err := os.MkdirAll(work, 0o700); err != nil {
 		t.Fatal(err)

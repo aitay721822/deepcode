@@ -30,7 +30,6 @@ import (
 	"deepcode/internal/app/server/repoapi"
 	"deepcode/internal/app/server/repoapi/hooks"
 	"deepcode/internal/knowledge/chat"
-	"deepcode/internal/knowledge/chat/harness"
 	chatstore "deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
@@ -38,6 +37,8 @@ import (
 	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
+	"deepcode/internal/platform/ai/tokens"
 	"deepcode/internal/platform/ai/usage"
 	usagestore "deepcode/internal/platform/ai/usage/store"
 	"deepcode/internal/platform/cache"
@@ -80,16 +81,11 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	if err != nil {
 		return nil, err
 	}
-	chatP, embedP := Providers(cfg)
 	meter := &usage.Manager{Store: &usagestore.Store{DB: db}} // every model request's tokens, for the admin console
-	for _, m := range []*ai.OpenAI{chatP, embedP} {
-		if m != nil {
-			m.Meter = meter
-		}
-	}
-	var counter *harness.Tokens
+	chatP, embedP := Providers(cfg, meter)
+	var counter *tokens.Counter
 	if chatP != nil {
-		if counter, err = harness.LoadTokens(cfg.ChatTokenizer); err != nil {
+		if counter, err = tokens.Load(cfg.ChatTokenizer); err != nil {
 			return nil, fmt.Errorf("chat tokenizer (DEEPCODE_CHAT_TOKENIZER): %w", err)
 		}
 		log.Printf("chat: the model's tokens are counted by %s", counter.Name) // o200k_base: set chat_tokenizer for a model with its own
@@ -108,7 +104,7 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	accounts := &account.Service{Store: &accountstore.Store{DB: db}}
 	roles := &role.Service{Store: &rolestore.Store{DB: db}}
 	sessions := session.New(&sessionstore.Store{DB: db}, accounts, roles, cfg.SessionTTL)
-	tokens := &token.Service{Store: &tokenstore.Store{DB: db}, Roles: roles}
+	apiTokens := &token.Service{Store: &tokenstore.Store{DB: db}, Roles: roles}
 
 	p := pipeline{queue: queue, catalog: cat, syncEvery: cfg.SyncEvery, indexer: &indexer.Indexer{
 		Store: &indexstore.Store{DB: db}, Graph: graphs,
@@ -124,8 +120,8 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 			Parallel: cfg.WikiParallel, MaxPages: cfg.WikiMaxPages}
 	}
 	handler, err := server.Router(
-		&authapi.API{Sessions: sessions, Tokens: tokens, OAuth: &oauth.Service{Store: &oauthstore.Store{DB: db}, Tokens: tokens}},
-		&repoapi.API{Sessions: sessions, Tokens: tokens, Catalog: cat, Importer: &importer.Service{Catalog: cat}, Servers: servers, Queue: queue,
+		&authapi.API{Sessions: sessions, Tokens: apiTokens, OAuth: &oauth.Service{Store: &oauthstore.Store{DB: db}, Tokens: apiTokens}},
+		&repoapi.API{Sessions: sessions, Tokens: apiTokens, Catalog: cat, Importer: &importer.Service{Catalog: cat}, Servers: servers, Queue: queue,
 			Retriever: retriever, Chat: conversations, Wiki: view.Reader{Store: wikis, Graph: graphs},
 			Webhooks: &hooks.API{Catalog: cat, Box: box}},
 		&adminapi.API{Sessions: sessions, Accounts: accounts, Roles: roles, Servers: servers, Catalog: cat, Queue: queue, Bus: bus, Usage: meter},
@@ -159,17 +155,18 @@ func (a *App) Run(ctx context.Context) error {
 	return a.bus.Run(ctx)
 }
 
-// Providers builds the configured model clients; nil means turned off. The
-// retrieval eval and the bench embed with the same client (test/eval Embedder).
-func Providers(cfg Config) (chatP, embedP *ai.OpenAI) {
+// Providers builds the configured models, each telling meter its requests'
+// usage; nil means turned off. The retrieval eval and the bench embed with the
+// same client (test/eval Embedder).
+func Providers(cfg Config, meter usage.Meter) (chatP ai.Chat, embedP *compat.Client) {
 	if cfg.ChatModel != "" {
-		chatP = &ai.OpenAI{BaseURL: cfg.ChatURL, APIKey: cfg.ChatKey, ModelName: cfg.ChatModel, API: cfg.ChatAPI, Schema: cfg.ChatSchema,
+		chatP = &compat.Client{BaseURL: cfg.ChatURL, APIKey: cfg.ChatKey, ModelName: cfg.ChatModel, API: cfg.ChatAPI, Schema: cfg.ChatSchema,
 			MaxTokens: cfg.MaxOutputTokens, ReasoningEffort: cfg.ReasoningEffort, Temperature: cfg.Temperature, Timeout: cfg.LLMTimeout, RPM: cfg.LLMRPM,
-			Window: cfg.ChatContext, CompactRatio: cfg.CompactRatio}
+			Context: cfg.ChatContext, CompactRatio: cfg.CompactRatio, Meter: meter}
 	}
 	if cfg.EmbedModel != "" {
-		embedP = &ai.OpenAI{BaseURL: cfg.EmbedURL, APIKey: cfg.EmbedKey, ModelName: cfg.EmbedModel,
-			Timeout: cfg.LLMTimeout, RPM: cfg.LLMRPM}
+		embedP = &compat.Client{BaseURL: cfg.EmbedURL, APIKey: cfg.EmbedKey, ModelName: cfg.EmbedModel,
+			Timeout: cfg.LLMTimeout, RPM: cfg.LLMRPM, Meter: meter}
 	}
 	return chatP, embedP
 }

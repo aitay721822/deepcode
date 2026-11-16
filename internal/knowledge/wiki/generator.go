@@ -37,7 +37,7 @@ type Generator struct {
 	Graph     *graph.Graph // the imports: how the code divides into sections, and what a change reaches
 	Catalog   *catalog.Catalog
 	Retriever *retrieval.Retriever
-	Chat      *ai.OpenAI
+	Chat      ai.Chat
 	Language  string
 	Parallel  int // pages planned or written at a time; 0 is one
 	MaxPages  int // the cost ceiling: the most pages a wiki gets, never a target; 0 is defaultMaxPages

@@ -15,6 +15,8 @@ import (
 	"deepcode/internal/knowledge/chat/background"
 	"deepcode/internal/knowledge/chat/harness"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
+	"deepcode/internal/platform/ai/tokens"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/catalog"
 )
@@ -71,15 +73,15 @@ func TestOpenOwnConversation(t *testing.T) {
 	}))
 	defer srv.Close()
 	turns, _ := s.history(ctx, 1)
-	a := asking{conv: 1, fit: harness.New(&ai.OpenAI{BaseURL: srv.URL, ModelName: "m", Window: 524288}, tokens), fixed: 419430 - 2520, turns: turns, page: background.Of("Store", strings.Repeat("a", 900)), emit: func(event string, data any) { told = append(told, fmt.Sprint(event, " ", data)) }}
-	if parts, err := s.fit(ctx, asking{conv: 1, fit: harness.New(&ai.OpenAI{}, tokens), fixed: 1 << 20, turns: turns, page: a.page, emit: a.emit}, evidenceChars); err != nil || calls+len(told) != 0 ||
-		len(parts.history) != len(turns) || parts.background != a.page.Block(1<<62, tokens.Count) || parts.shares != (harness.Shares{Evidence: evidenceChars, History: a.fit.History(turns), Background: tokens.Count(parts.background)}) {
+	a := asking{conv: 1, fit: harness.New(&compat.Client{BaseURL: srv.URL, ModelName: "m", Context: 524288}, o200k), fixed: 419430 - 2520, turns: turns, page: background.Of("Store", strings.Repeat("a", 900)), emit: func(event string, data any) { told = append(told, fmt.Sprint(event, " ", data)) }}
+	if parts, err := s.fit(ctx, asking{conv: 1, fit: harness.New(&compat.Client{}, o200k), fixed: 1 << 20, turns: turns, page: a.page, emit: a.emit}, evidenceChars); err != nil || calls+len(told) != 0 ||
+		len(parts.history) != len(turns) || parts.background != a.page.Block(1<<62, o200k.Count) || parts.shares != (harness.Shares{Evidence: evidenceChars, History: a.fit.History(turns), Background: o200k.Count(parts.background)}) {
 		t.Fatalf("no context known: %v %+v", err, parts)
 	}
 	for range 2 {
 		parts, err := s.fit(ctx, a, evidenceChars)
 		through, text, _ := s.Store.Summary(ctx, 1)
-		if err != nil || calls != 1 || parts.shares.Evidence != 2500 || len(parts.history) != 0 || !strings.HasPrefix(parts.background, "Earlier in") || tokens.Count(parts.background) > 20 ||
+		if err != nil || calls != 1 || parts.shares.Evidence != 2500 || len(parts.history) != 0 || !strings.HasPrefix(parts.background, "Earlier in") || o200k.Count(parts.background) > 20 ||
 			through != turns[len(turns)-1].ID || text != "Named: none. Topics: m. Open: none." || !slices.Equal(told, []string{"compact map[summarized:11]"}) {
 			t.Fatalf("%v: %d calls, %+v, stored %d %q, told %q", err, calls, parts, through, text, told)
 		}
@@ -141,10 +143,10 @@ func TestRefitted(t *testing.T) {
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	defer model.Close()
-	longest, again, times, s := 0, 0, map[string]int{}, service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m"})
-	s.Tokens = harness.Counting("o200k, the longest text kept", func(text string) int {
+	longest, again, times, s := 0, 0, map[string]int{}, service(db, &compat.Client{BaseURL: model.URL, ModelName: "m"})
+	s.Tokens = tokens.Counting("o200k, the longest text kept", func(text string) int {
 		longest, again, times[text] = max(longest, len(text)), again+times[text], times[text]+1
-		return tokens.Count(text)
+		return o200k.Count(text)
 	})
 	var done Message
 	err = s.Ask(ctx, Request{RepoID: 1, Question: "subscribe", UserID: 1}, func(event string, data any) {
@@ -152,8 +154,8 @@ func TestRefitted(t *testing.T) {
 			done = data.(Message)
 		}
 	})
-	if err != nil || len(asked) != 2 || asked[1] != asked[0] || strings.Count(asked[0], "<source") != 3 || len(done.Citations) != 1 || s.Chat.Context() != 524288 {
-		t.Fatalf("%v: %d answer requests, the context %d, %+v", err, len(asked), s.Chat.Context(), done)
+	if err != nil || len(asked) != 2 || asked[1] != asked[0] || strings.Count(asked[0], "<source") != 3 || len(done.Citations) != 1 || s.Chat.Window().Context != 524288 {
+		t.Fatalf("%v: %d answer requests, the context %d, %+v", err, len(asked), s.Chat.Window().Context, done)
 	}
 	if len(asked[0]) <= len(systemPrompt) || longest >= len(strings.TrimSpace(asked[0])) || again != 0 {
 		t.Errorf("%d bytes counted at once, %d texts counted again; the request's message is %d, the system prompt %d", longest, again, len(asked[0]), len(systemPrompt))
@@ -164,7 +166,7 @@ func TestRefitted(t *testing.T) {
 	}
 	var conv string // the first answer's conversation
 	db.QueryRowContext(ctx, `SELECT public_id FROM conversations WHERE id = 1`).Scan(&conv)
-	s = service(db, &ai.OpenAI{BaseURL: model.URL, ModelName: "m", Window: 25000, MaxTokens: 100}) // a threshold of 20,000
+	s = service(db, &compat.Client{BaseURL: model.URL, ModelName: "m", Context: 25000, MaxTokens: 100}) // a threshold of 20,000
 	if err := s.Ask(ctx, Request{RepoID: 1, ConversationID: conv, Question: "subscribe", UserID: 1}, func(string, any) {}); err != nil || len(asked) != 3 || messages[2] != 8 {
 		t.Errorf("a follow-up: %v, %d requests, %v messages", err, len(asked), messages)
 	}
@@ -243,7 +245,7 @@ func TestAnswerLanguage(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	ctx, s := context.Background(), &Service{Chat: &ai.OpenAI{BaseURL: srv.URL, ModelName: "m"}}
+	ctx, s := context.Background(), &Service{Chat: &compat.Client{BaseURL: srv.URL, ModelName: "m"}}
 	if got := s.answerLanguage(ctx, "Mount 如何運作？", nil); got != chinese || len(asked) != 0 {
 		t.Errorf("Han: %q after %d messages sent", got, len(asked))
 	}

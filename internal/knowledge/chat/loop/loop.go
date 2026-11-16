@@ -103,7 +103,7 @@ type Emit func(event string, data any)
 // reading files through Catalog: the snapshot's indexed content alone. Fit,
 // when set, fits each request to the model's context (harness.Next).
 type Gatherer struct {
-	Model     *ai.OpenAI
+	Model     ai.Chat
 	Retriever *retrieval.Retriever
 	Catalog   *catalog.Catalog
 	Fit       *harness.Fit
@@ -228,7 +228,7 @@ func start(g Gatherer, req Request) *state {
 // has one: a request that would not fit the model's context has the results
 // answered before the last reply masked to their short lines, which a compact
 // event counts.
-func (s *state) next(ctx context.Context, ex *ai.Exchange, emit Emit) (string, []ai.ToolCall, error) {
+func (s *state) next(ctx context.Context, ex ai.Exchange, emit Emit) (string, []ai.ToolCall, error) {
 	if s.g.Fit == nil {
 		return ex.Next(ctx)
 	}

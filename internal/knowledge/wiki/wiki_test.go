@@ -24,6 +24,7 @@ import (
 	"deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/knowledge/wiki/view"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	aicontract "deepcode/internal/platform/ai/contract"
 	"deepcode/internal/platform/jobs"
 	jobstore "deepcode/internal/platform/jobs/store"
@@ -35,7 +36,7 @@ import (
 )
 
 // generator is a generator of English wikis on db, asking model (nil: none).
-func generator(db *sql.DB, model *ai.OpenAI) *Generator {
+func generator(db *sql.DB, model *compat.Client) *Generator {
 	graphs := &graph.Graph{Store: &graphstore.Store{DB: db}}
 	return &Generator{Store: &store.Store{DB: db}, Graph: graphs, Chat: model, Language: "English",
 		Catalog:   &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: &jobs.Queue{Store: &jobstore.Store{DB: db}}},
@@ -71,7 +72,7 @@ func runWiki(t *testing.T, db *sql.DB, model http.Handler, sha string, set ...fu
 	t.Helper()
 	srv := httptest.NewServer(model)
 	t.Cleanup(srv.Close)
-	g := generator(db, &ai.OpenAI{BaseURL: srv.URL, ModelName: "m"})
+	g := generator(db, &compat.Client{BaseURL: srv.URL, ModelName: "m"})
 	for _, s := range set {
 		s(g)
 	}
@@ -363,7 +364,7 @@ func TestRunOutcomes(t *testing.T) {
 	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready')`)
 	g := generator(db, nil)
 	g.Language, g.Planned = "", func(p Planning) { planned = p }
-	run := func(model *ai.OpenAI) (string, error) {
+	run := func(model *compat.Client) (string, error) {
 		g.Chat = model
 		status, err := "", g.Run(ctx, 1, "abc", jobs.Progress{})
 		db.QueryRow(`SELECT wiki_status FROM snapshots WHERE id = 1`).Scan(&status)
@@ -389,7 +390,7 @@ func TestRunOutcomes(t *testing.T) {
 		}))
 		must(t, db, `DELETE FROM wiki_pages`)
 		must(t, db, `UPDATE snapshots SET wiki_status = 'failed'`)
-		status, err := run(&ai.OpenAI{BaseURL: srv.URL, ModelName: "m"})
+		status, err := run(&compat.Client{BaseURL: srv.URL, ModelName: "m"})
 		if schema := reply != "" && reply[0] != '{'; errors.Is(err, ai.ErrSchema) != schema || (status == catalog.WikiFailed) != (schema || reply == "") ||
 			!maps.Equal(planned.Contracts, want) {
 			t.Fatalf("%q: %v, wiki %q, planned %+v", reply, err, status, planned)

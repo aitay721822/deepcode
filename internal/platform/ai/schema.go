@@ -16,7 +16,7 @@ import (
 // request.
 var ErrSchema = errors.New("the model's answer is not the JSON its schema asks for")
 
-// Where a request for JSON gives its schema (OpenAI.Schema).
+// Where a request for JSON gives its schema (Chat.SchemaMode).
 const (
 	// SchemaServer sends it as response_format, OpenAI's structured outputs:
 	// the default.
@@ -33,11 +33,11 @@ const SchemaLine = "Reply with only JSON matching this JSON schema:"
 
 // Format is a structured output: answers asked for in the JSON schema of a T
 // and read into a T.
-type Format[T any] struct{ schema }
+type Format[T any] struct{ JSONSchema }
 
-// schema is a JSON schema, under the name a request gives it, as its JSON
+// JSONSchema is a JSON schema, under the name a request gives it, as its JSON
 // text, and resolved to check answers by.
-type schema struct {
+type JSONSchema struct {
 	Name  string
 	JSON  map[string]any
 	text  string
@@ -89,20 +89,20 @@ func Dynamic[T any](name string, js map[string]any) (Format[T], error) {
 
 // compile is the schema data names, resolved; its JSON is kept raw, so no
 // number is rounded through float64.
-func compile(name string, data []byte) (schema, error) {
+func compile(name string, data []byte) (JSONSchema, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return schema{}, err
+		return JSONSchema{}, err
 	}
 	var c checker.Schema
 	if err := json.Unmarshal(data, &c); err != nil {
-		return schema{}, err
+		return JSONSchema{}, err
 	}
 	check, err := c.Resolve(nil)
 	if err != nil {
-		return schema{}, err
+		return JSONSchema{}, err
 	}
-	s := schema{Name: name, JSON: make(map[string]any, len(raw)), text: string(data), check: check}
+	s := JSONSchema{Name: name, JSON: make(map[string]any, len(raw)), text: string(data), check: check}
 	for k, v := range raw {
 		s.JSON[k] = v
 	}
@@ -225,8 +225,8 @@ const indented = "Write the JSON indented, each key on a line of its own."
 // is sized by: its instructions end, under SchemaPrompt, with SchemaLine and
 // f's schema, then with indented. The first request and a repair after it
 // hold the same instructions, so a prompt cache keeps them.
-func (f Format[T]) Prompt(c *OpenAI, p Prompt) Prompt {
-	if c.Schema == SchemaPrompt {
+func (f Format[T]) Prompt(c Chat, p Prompt) Prompt {
+	if c.SchemaMode() == SchemaPrompt {
 		p.Static += "\n\n" + SchemaLine + "\n" + f.text
 	}
 	if p.Static == "" {
@@ -239,23 +239,23 @@ func (f Format[T]) Prompt(c *OpenAI, p Prompt) Prompt {
 
 // StreamJSON streams c's answer to f.Prompt(c, p) in f's JSON, relaying its
 // text as it comes, and reads it into a T (Decode); reply is the answer as
-// written. Under SchemaPrompt it sends no response_format. An answer that is
-// not f's JSON is an error wrapping ErrSchema; one cut at the output budget
-// says so instead.
-func StreamJSON[T any](ctx context.Context, c *OpenAI, p Prompt, f Format[T], onDelta func(string)) (v T, reply string, err error) {
-	s := &f.schema
-	if c.Schema == SchemaPrompt {
+// written. Under SchemaPrompt it asks for no schema of the backend. An answer
+// that is not f's JSON is an error wrapping ErrSchema; one cut at the output
+// budget says so instead.
+func StreamJSON[T any](ctx context.Context, c Chat, p Prompt, f Format[T], onDelta func(string)) (v T, reply string, err error) {
+	s := &f.JSONSchema
+	if c.SchemaMode() == SchemaPrompt {
 		s = nil
 	}
-	reply, spent, err := c.stream(ctx, f.Prompt(c, p).messages(), s, onDelta)
-	if err != nil {
+	r, err := ask(ctx, c, f.Prompt(c, p), s, onDelta)
+	if reply = r.Text; err != nil {
 		return v, reply, err
 	}
-	if spent && !json.Valid([]byte(reply)) {
-		return v, reply, fmt.Errorf("%s: the answer reached the output budget before its JSON ended: raise DEEPCODE_MAX_OUTPUT_TOKENS", c.ModelName)
+	if r.Spent && !json.Valid([]byte(reply)) {
+		return v, reply, fmt.Errorf("%s: the answer reached the output budget before its JSON ended: raise DEEPCODE_MAX_OUTPUT_TOKENS", c.Name())
 	}
 	if v, err = Decode(f, reply); err != nil {
-		return v, reply, fmt.Errorf("%s: the answer is %w: %w", c.ModelName, err, ErrSchema)
+		return v, reply, fmt.Errorf("%s: the answer is %w: %w", c.Name(), err, ErrSchema)
 	}
 	return v, reply, nil
 }

@@ -9,6 +9,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/test/bench/score"
 )
 
@@ -136,7 +137,7 @@ type (
 // then how many replies were the JSON as they came, fenced, or the JSON once
 // the fence is off.
 func (p *prober) json(ctx context.Context, a *agent) {
-	c := &ai.OpenAI{Schema: ai.SchemaPrompt}
+	c := &compat.Client{Schema: ai.SchemaPrompt}
 	verdict, plan, words := ai.Schema[score.Verdict]("verdict"), ai.Schema[outline]("outline"), ai.Schema[terms]("terms")
 	type ask struct {
 		kind   string
@@ -184,7 +185,7 @@ func (p *prober) json(ctx context.Context, a *agent) {
 }
 
 // formatPrompt is q as StreamJSON sends it under SchemaPrompt for its kind's format.
-func formatPrompt(kind string, c *ai.OpenAI, q ai.Prompt, verdict ai.Format[score.Verdict], plan ai.Format[outline], words ai.Format[terms]) ai.Prompt {
+func formatPrompt(kind string, c *compat.Client, q ai.Prompt, verdict ai.Format[score.Verdict], plan ai.Format[outline], words ai.Format[terms]) ai.Prompt {
 	switch kind {
 	case "verdict":
 		return verdict.Prompt(c, q)

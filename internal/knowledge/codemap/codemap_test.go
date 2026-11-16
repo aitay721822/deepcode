@@ -13,6 +13,7 @@ import (
 
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 )
 
 var hits = []retrieval.Hit{
@@ -101,7 +102,7 @@ const good = `{"title":"Auth","description":"How requests are checked.","traces"
 
 // model answers each call with the next of replies, keeping the messages
 // each call sent.
-func model(t *testing.T, replies ...string) (*ai.OpenAI, *[][]ai.Message) {
+func model(t *testing.T, replies ...string) (*compat.Client, *[][]ai.Message) {
 	var asked [][]ai.Message
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Messages []ai.Message }
@@ -112,7 +113,7 @@ func model(t *testing.T, replies ...string) (*ai.OpenAI, *[][]ai.Message) {
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	t.Cleanup(srv.Close)
-	return &ai.OpenAI{BaseURL: srv.URL, ModelName: "m"}, &asked
+	return &compat.Client{BaseURL: srv.URL, ModelName: "m"}, &asked
 }
 
 // TestDraw: a map of lines the sources lack is asked for once more, after the

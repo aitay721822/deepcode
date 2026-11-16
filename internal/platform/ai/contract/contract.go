@@ -213,7 +213,7 @@ func (c *Counts) other1(r Rule, words string) {
 // JSON is the Ask of a structured output in f, by model: a reply that reads
 // into T but fails f's schema is read leniently (json.Unmarshal ignores keys T
 // lacks and leaves the missing ones zero) and returned with ErrLoose.
-func JSON[T any](model *ai.OpenAI, f ai.Format[T]) func(context.Context, ai.Prompt) (T, string, error) {
+func JSON[T any](model ai.Chat, f ai.Format[T]) func(context.Context, ai.Prompt) (T, string, error) {
 	return func(ctx context.Context, p ai.Prompt) (T, string, error) {
 		v, reply, err := ai.StreamJSON(ctx, model, p, f, nil)
 		if errors.Is(err, ai.ErrSchema) {

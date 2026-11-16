@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/test/bench/score"
 )
 
@@ -66,7 +67,7 @@ func (n tally) reliable() bool { return n.failed*20 <= n.stored()+n.unstored+n.f
 // run the judge read (report.Judged) has no flag for an answer the judge
 // failed on; an older run's flags are all its detector's. A failure is
 // counted apart, never as agreement.
-func rejudge(ctx context.Context, t *testing.T, model *ai.OpenAI, rep report) ([]judged, tally) {
+func rejudge(ctx context.Context, t *testing.T, model *compat.Client, rep report) ([]judged, tally) {
 	var out []judged
 	var n tally
 	for _, r := range rep.Repos {
@@ -157,7 +158,7 @@ func TestJudge(t *testing.T) {
 }
 
 // judgeModel is a model answering each request with reply(its messages).
-func judgeModel(t *testing.T, reply func([]ai.Message) string) *ai.OpenAI {
+func judgeModel(t *testing.T, reply func([]ai.Message) string) *compat.Client {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Messages []ai.Message }
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Messages) == 0 {
@@ -168,7 +169,7 @@ func judgeModel(t *testing.T, reply func([]ai.Message) string) *ai.OpenAI {
 		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 	}))
 	t.Cleanup(srv.Close)
-	return &ai.OpenAI{BaseURL: srv.URL, ModelName: "m"}
+	return &compat.Client{BaseURL: srv.URL, ModelName: "m"}
 }
 
 // TestRejudge: of a run the judge read, an answer it failed on has no flag to

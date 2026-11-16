@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 )
 
 // The gathering's tools as package loop defines them (its argument types are
@@ -91,7 +92,7 @@ func (q question) result(c call) string {
 // calls' JSON is asked again once in the same session.
 func (p *prober) gather(ctx context.Context, a *agent) {
 	f := callsFormat(p.t)
-	pr := f.Prompt(&ai.OpenAI{Schema: ai.SchemaPrompt}, ai.Prompt{Static: gatherStatic})
+	pr := f.Prompt(&compat.Client{Schema: ai.SchemaPrompt}, ai.Prompt{Static: gatherStatic})
 	for _, q := range questions {
 		s, ms, err := p.open(ctx, a, p.folder("S6", q.name), pr.Static, false)
 		if err != nil {

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"time"
 
 	"deepcode/internal/platform/ai"
@@ -12,15 +13,15 @@ type Config struct {
 	DataDir string // holds deepcode.db, secret.key and repos/ (the git fetch cache)
 
 	ChatURL, ChatKey, ChatModel    string   // ChatModel "" turns chat and the wiki off
-	ChatAPI                        string   // ai.Completions or ai.Responses: how the chat model is asked
+	ChatAPI                        string   // compat.Completions or compat.Responses: how the chat model is asked
 	ChatSchema                     string   // ai.SchemaServer or ai.SchemaPrompt: where a request for JSON gives its schema
 	EmbedURL, EmbedKey, EmbedModel string   // EmbedModel "" turns vector search off
 	ReasoningEffort                string   // sent as reasoning_effort when set
 	Temperature                    *float64 // sent as temperature when set
 	MaxOutputTokens                int      // 0 leaves it to the server
-	ChatContext                    int      // the chat model's context in tokens; 0: unknown (ai.OpenAI.Window)
+	ChatContext                    int      // the chat model's context in tokens; 0: unknown (ai.Window)
 	CompactRatio                   float64  // the share of it a request fills before it is made smaller
-	ChatTokenizer                  string   // the chat model's tokenizer.json; "" counts its tokens by o200k_base (harness.LoadTokens)
+	ChatTokenizer                  string   // the chat model's tokenizer.json; "" counts its tokens by o200k_base (tokens.Load)
 	LLMTimeout                     time.Duration
 	LLMRPM                         int // 0 = unlimited
 
@@ -49,5 +50,5 @@ type Config struct {
 }
 
 // Room is the tokens the chat model's context keeps for an answer, as the
-// chat provider Providers makes keeps them (ai.OpenAI.Room).
-func (c Config) Room() int { return (&ai.OpenAI{MaxTokens: c.MaxOutputTokens}).Room() }
+// chat provider Providers makes keeps them (ai.Window.Room).
+func (c Config) Room() int { return cmp.Or(c.MaxOutputTokens, ai.DefaultOutput) }

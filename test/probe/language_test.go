@@ -18,12 +18,12 @@ import (
 	"deepcode/internal/app"
 	"deepcode/internal/knowledge/chat"
 	"deepcode/internal/knowledge/chat/background"
-	"deepcode/internal/knowledge/chat/harness"
 	chatstore "deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/knowledge/wiki"
 	wikistore "deepcode/internal/knowledge/wiki/store"
+	"deepcode/internal/platform/ai/tokens"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/jobs"
 	jobstore "deepcode/internal/platform/jobs/store"
@@ -132,8 +132,8 @@ func TestLanguage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, embed := app.Providers(cfg)
-	tokens, err := harness.LoadTokens(os.Getenv("DEEPCODE_CHAT_TOKENIZER"))
+	model, embed := app.Providers(cfg, nil)
+	counter, err := tokens.Load(os.Getenv("DEEPCODE_CHAT_TOKENIZER"))
 	if model == nil || embed == nil || err != nil {
 		t.Fatalf("the probe needs DEEPCODE_CHAT_MODEL, DEEPCODE_EMBED_MODEL (the bench's hybrid search) and a tokenizer: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestLanguage(t *testing.T) {
 		return
 	}
 	store := &chatstore.Store{DB: db}
-	svc := &chat.Service{Store: store, Catalog: cat, Retriever: ret, Chat: model, Tokens: tokens}
+	svc := &chat.Service{Store: store, Catalog: cat, Retriever: ret, Chat: model, Tokens: counter}
 	var vectors int
 	if err := db.QueryRow(`SELECT count(*) FROM chunk_embeddings`).Scan(&vectors); err != nil || vectors == 0 {
 		t.Fatalf("no vectors in %s (%v): index it with DEEPCODE_EMBED_MODEL set, in a directory of its own (Probe C's have none)", dir, err)

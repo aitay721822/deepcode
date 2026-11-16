@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"deepcode/internal/knowledge/retrieval/store"
-	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/index/graph"
@@ -483,7 +483,7 @@ func TestSearchWithoutEmbeddings(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
 	r := retriever(db)
-	r.Embed, r.Cache = &ai.OpenAI{BaseURL: srv.URL, ModelName: "embed"}, cache.New(1<<20)
+	r.Embed, r.Cache = &compat.Client{BaseURL: srv.URL, ModelName: "embed"}, cache.New(1<<20)
 	res, err := r.Search(context.Background(), 1, "subscribe", 2)
 	if err != nil || res.Vector != 0 || res.FTS != 4 || res.Symbol != 1 || len(res.Hits) != 2 || res.Hits[0].Path != "src/store.ts" || res.Hits[1].Path != "src/other.ts" {
 		t.Fatalf("got %+v %v; want the defining chunk first of two files, from FTS5 and symbols", res, err)

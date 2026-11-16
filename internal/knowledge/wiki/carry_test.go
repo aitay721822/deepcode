@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/jobs"
 )
 
@@ -344,7 +344,7 @@ func TestReplanKeepsPages(t *testing.T) {
 	}
 	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) }))
 	defer refused.Close()
-	err := generator(db, &ai.OpenAI{BaseURL: refused.URL, ModelName: "m"}).Run(context.Background(), 1, "abc", jobs.Progress{})
+	err := generator(db, &compat.Client{BaseURL: refused.URL, ModelName: "m"}).Run(context.Background(), 1, "abc", jobs.Progress{})
 	if titles, replan := state(); err == nil || titles != "Old" || replan != 1 {
 		t.Fatalf("a failed plan: pages %q, wiki_replan %d (%v)", titles, replan, err)
 	}

@@ -23,18 +23,18 @@ import (
 	"deepcode/cmd/deepcode/config"
 	"deepcode/internal/app"
 	"deepcode/internal/knowledge/retrieval"
-	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 )
 
 // Embedder is the embedding model deepcode serve searches with, read as serve
 // reads it (DEEPCODE_EMBED_MODEL; DEEPCODE_EMBED_BASE_URL and _API_KEY, else
 // the chat's), or nil without one, which leaves vector search off.
-func Embedder() (*ai.OpenAI, error) {
+func Embedder() (*compat.Client, error) {
 	cfg, _, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	_, embed := app.Providers(cfg)
+	_, embed := app.Providers(cfg, nil)
 	return embed, nil
 }
 

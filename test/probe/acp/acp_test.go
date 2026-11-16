@@ -20,7 +20,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
-	"deepcode/internal/knowledge/chat/harness"
+	"deepcode/internal/platform/ai/tokens"
 )
 
 // steps are the steps a run may ask for, in the order they run. S1, starting
@@ -66,7 +66,7 @@ func TestACP(t *testing.T) {
 		}
 		extra, names = append(extra, kv), append(names, name)
 	}
-	tokens, err := harness.LoadTokens("")
+	counter, err := tokens.Load("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestACP(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { out.Close() }) // first registered, so it runs after every agent's stop
-	p := &prober{t: t, run: id, dir: dir, out: json.NewEncoder(out), tokens: tokens.Count, work: filepath.Join(dir, "work", id)}
+	p := &prober{t: t, run: id, dir: dir, out: json.NewEncoder(out), tokens: counter.Count, work: filepath.Join(dir, "work", id)}
 	m := machine(line, run)
 	m["env"] = names
 	p.emit("machine", m)

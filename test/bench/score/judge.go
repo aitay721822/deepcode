@@ -40,7 +40,7 @@ const JudgeError = "15 extras on 268 clean answers (2 borderline), 1 borderline 
 // Judge asks model for its verdict on answer, which it reads alone: the
 // question is not sent, so the language it names is the answer's own, never
 // the question's. A verdict naming no language is an error.
-func Judge(ctx context.Context, model *ai.OpenAI, answer string) (Verdict, error) {
+func Judge(ctx context.Context, model ai.Chat, answer string) (Verdict, error) {
 	answer = strings.ReplaceAll(answer, "</answer", "<\\/answer") // the answer cannot end its block early
 	v, _, err := ai.StreamJSON(ctx, model, ai.Prompt{Static: Rubric, Dynamic: "<answer>\n" + answer + "\n</answer>"}, verdictFormat, nil)
 	if err == nil && strings.TrimSpace(v.Language) == "" {

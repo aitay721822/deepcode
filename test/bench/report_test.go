@@ -191,7 +191,7 @@ func (rep report) markdown() string {
 				planning = fmt.Sprintf("%.1f s, %d requests", s.Seconds, s.Requests)
 			}
 			p("| %s | %s | %s | %d | %s | %s | %s | %d | %d | %s | %s | %s |", r.Repo, cmp.Or(strings.Join(times, " · "), took(w)), count(r, "base pages", w.Pages), w.Calls,
-				tokens(w.InTokens), cached, tokens(w.OutTokens), w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations), lines, planning)
+				reported(w.InTokens), cached, reported(w.OutTokens), w.InChars, w.OutChars, atHead(r, "page citations", r.PageCitations), lines, planning)
 		}
 	}
 	p("\n## Update by one commit (base → head)\n\n| Repository | Changed files | Index | Wiki | Pages rewritten | Model calls |\n|---|---|---|---|---|---|")
@@ -437,8 +437,8 @@ func took(w *wikiRun) string {
 	return fmt.Sprintf("%.0f s", w.Seconds)
 }
 
-// tokens shows a token count, or that the server reported none.
-func tokens(n int) string {
+// reported shows a token count, or that the server reported none.
+func reported(n int) string {
 	if n == 0 {
 		return "–"
 	}

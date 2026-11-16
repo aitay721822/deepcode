@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 )
 
 // answer is what a fake Ask returns for one request.
@@ -137,7 +138,7 @@ func TestJSON(t *testing.T) {
 			chunk, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"index": 0, "delta": map[string]string{"content": c.text}, "finish_reason": "stop"}}})
 			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 		}))
-		v, text, err := JSON(&ai.OpenAI{BaseURL: srv.URL, ModelName: "m"}, f)(context.Background(), ai.Prompt{Dynamic: "q"})
+		v, text, err := JSON(&compat.Client{BaseURL: srv.URL, ModelName: "m"}, f)(context.Background(), ai.Prompt{Dynamic: "q"})
 		srv.Close()
 		if v.A != c.want || text != c.text || errors.Is(err, ErrLoose) != c.loose || errors.Is(err, ai.ErrSchema) != c.bad || err == nil && (c.loose || c.bad) {
 			t.Errorf("%s: %+v %q %v", c.text, v, text, err)
@@ -171,7 +172,7 @@ func TestFailedAnswer(t *testing.T) {
 		d, _ := json.Marshal(map[string]string{"type": "response.output_text.delta", "delta": s})
 		return fmt.Sprintf("data: %s\n\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n", d)
 	}
-	C, R := ai.Completions, ai.Responses
+	C, R := compat.Completions, compat.Responses
 	for _, c := range []struct {
 		name, api string
 		streams   []string
@@ -202,7 +203,7 @@ func TestFailedAnswer(t *testing.T) {
 			}
 		}))
 		var counts Counts
-		turn := Turn[reply]{Kind: "k", Ask: JSON(&ai.OpenAI{BaseURL: srv.URL, ModelName: "m", API: c.api}, ai.Schema[reply]("r")),
+		turn := Turn[reply]{Kind: "k", Ask: JSON(&compat.Client{BaseURL: srv.URL, ModelName: "m", API: c.api}, ai.Schema[reply]("r")),
 			Check: func(reply) []Violation { return nil }, Note: func([]Violation) string { return "" }, Fix: func(*reply) {}}
 		v, err := Run(context.Background(), ai.Prompt{Dynamic: "q"}, turn, &counts)
 		srv.Close()
@@ -243,7 +244,7 @@ func TestPromptSchema(t *testing.T) {
 			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
 		}))
 		var counts Counts
-		turn := Turn[reply]{Kind: "k", Ask: JSON(&ai.OpenAI{BaseURL: srv.URL, ModelName: "m", Schema: schema}, f),
+		turn := Turn[reply]{Kind: "k", Ask: JSON(&compat.Client{BaseURL: srv.URL, ModelName: "m", Schema: schema}, f),
 			Check: func(reply) []Violation { return nil }, Note: func([]Violation) string { return "" }, Fix: func(*reply) {}}
 		v, err := Run(context.Background(), ai.Prompt{Static: "rules", Dynamic: "q"}, turn, &counts)
 		srv.Close()

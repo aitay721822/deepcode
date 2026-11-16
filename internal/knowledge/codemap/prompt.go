@@ -33,7 +33,7 @@ const groundNote = "None of those locations is a line the <source> blocks show: 
 // (ai.Format.Prompt): the first request's own lines, and what a second one
 // adds, groundNote and the map it sends back, at most maxEcho bytes and "…",
 // so at most as many tokens.
-func Fixed(r Request, model *ai.OpenAI, size func(ai.Prompt) int) int {
+func Fixed(r Request, model ai.Chat, size func(ai.Prompt) int) int {
 	r.History, r.Background, r.Sources = nil, "", ""
 	return size(format.Prompt(model, Prompt(r).After("", groundNote))) + maxEcho + len("…")
 }

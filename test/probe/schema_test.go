@@ -18,6 +18,7 @@ import (
 	"deepcode/cmd/deepcode/config"
 	"deepcode/internal/app"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/ai/usage"
 	"deepcode/test/eval"
 )
@@ -41,10 +42,11 @@ func TestSchema(t *testing.T) {
 	}
 	cfg.MaxOutputTokens = 1024 // the answers are a line of JSON; a plain answer may ramble
 	cases := probeCases(eshopPaths(t))
-	for _, api := range []string{ai.Completions, ai.Responses} {
+	for _, api := range []string{compat.Completions, compat.Responses} {
 		t.Run(api, func(t *testing.T) {
 			cfg.ChatAPI = api
-			model, _ := app.Providers(cfg)
+			chat, _ := app.Providers(cfg, nil)
+			model, _ := chat.(*compat.Client)
 			if model == nil {
 				t.Fatal("the probe needs DEEPCODE_CHAT_MODEL")
 			}
@@ -72,7 +74,7 @@ type probeCase struct {
 }
 
 // probe asks c once with the schema and once without, and logs one line.
-func probe(t *testing.T, model *ai.OpenAI, c probeCase, rep int) {
+func probe(t *testing.T, model *compat.Client, c probeCase, rep int) {
 	t.Helper()
 	ctx := context.Background()
 	format, err := ai.Dynamic[map[string]any]("probe", c.schema)
@@ -93,7 +95,7 @@ func probe(t *testing.T, model *ai.OpenAI, c probeCase, rep int) {
 		refused = err.Error()
 	}
 	plainFirst, onPlain := timer()
-	if _, perr := model.Stream(ctx, p, onPlain); perr != nil {
+	if _, perr := ai.Stream(ctx, model, p, onPlain); perr != nil {
 		t.Logf("%s %s #%d: the request without a schema failed: %v", c.name, model.API, rep, perr)
 	}
 	plainIn := used.InTokens

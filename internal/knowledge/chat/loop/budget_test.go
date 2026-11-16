@@ -13,6 +13,8 @@ import (
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
+	"deepcode/internal/platform/ai/tokens"
 	"deepcode/internal/platform/ai/usage"
 )
 
@@ -376,9 +378,9 @@ func TestTokenBudget(t *testing.T) {
 	}
 }
 
-// tokens counts the gatherings' requests: OpenAI's o200k_base, the built-in.
-var tokens = func() *harness.Tokens {
-	t, err := harness.LoadTokens("")
+// o200k counts the gatherings' requests: OpenAI's o200k_base, the built-in.
+var o200k = func() *tokens.Counter {
+	t, err := tokens.Load("")
 	if err != nil {
 		panic(err)
 	}
@@ -396,8 +398,9 @@ func TestContext(t *testing.T) {
 		srv, asked := model(t, replies...)
 		g, req := fixture(t, srv.URL)
 		var sizes []int
-		g.Fit = harness.New(g.Model, tokens)
-		g.Model.MaxTokens, g.Model.Window, g.Model.Meter = 100, window, usage.Func(func(context.Context, string, ai.Usage) { sizes = append(sizes, g.Fit.Sent) })
+		g.Fit = harness.New(g.Model, o200k)
+		m := g.Model.(*compat.Client)
+		m.MaxTokens, m.Context, m.Meter = 100, window, usage.Func(func(context.Context, string, ai.Usage) { sizes = append(sizes, g.Fit.Sent) })
 		var compact []string
 		res := g.Gather(context.Background(), req, func(event string, data any) {
 			if event == "compact" {

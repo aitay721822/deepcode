@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	jobstore "deepcode/internal/platform/jobs/store"
@@ -177,11 +178,11 @@ func localRemote(t *testing.T) {
 // context, the share of it a request may fill and where a request for JSON
 // gives its schema; none without a model.
 func TestProviders(t *testing.T) {
-	if chatP, embedP := Providers(Config{ChatModel: "m", ChatContext: 524288, CompactRatio: 0.5, ChatSchema: "prompt"}); chatP == nil || chatP.Window != 524288 ||
-		chatP.CompactRatio != 0.5 || chatP.Schema != "prompt" || embedP != nil {
+	chatP, embedP := Providers(Config{ChatModel: "m", ChatContext: 524288, CompactRatio: 0.5, ChatSchema: "prompt"}, nil)
+	if c, ok := chatP.(*compat.Client); !ok || c.Context != 524288 || c.CompactRatio != 0.5 || c.Schema != "prompt" || embedP != nil {
 		t.Errorf("%+v %+v", chatP, embedP)
 	}
-	if chatP, _ := Providers(Config{ChatContext: 524288}); chatP != nil {
+	if chatP, _ := Providers(Config{ChatContext: 524288}, nil); chatP != nil {
 		t.Errorf("no model: %+v", chatP)
 	}
 }

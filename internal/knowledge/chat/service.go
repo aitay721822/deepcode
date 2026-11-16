@@ -23,6 +23,7 @@ import (
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/tokens"
 	"deepcode/internal/platform/ai/usage"
 	"deepcode/internal/repo/catalog"
 	"deepcode/internal/repo/gitserver"
@@ -32,8 +33,8 @@ type Service struct {
 	Store     *store.Store
 	Catalog   *catalog.Catalog
 	Retriever *retrieval.Retriever
-	Chat      *ai.OpenAI      // nil: not configured
-	Tokens    *harness.Tokens // counts Chat's tokens (harness.LoadTokens)
+	Chat      ai.Chat         // nil: not configured
+	Tokens    *tokens.Counter // counts Chat's tokens (tokens.Load)
 
 	mu     sync.Mutex
 	asking map[int64]int // answers being written, by user
@@ -226,7 +227,7 @@ func (s *Service) answer(ctx context.Context, conv int64, p ai.Prompt, used []re
 	answer := noEvidence
 	if len(used) == 0 {
 		emit("delta", noEvidence)
-	} else if reply, err := s.Chat.Stream(ctx, p, func(d string) { emit("delta", d) }); err != nil {
+	} else if reply, err := ai.Stream(ctx, s.Chat, p, func(d string) { emit("delta", d) }); err != nil {
 		return fmt.Errorf("%w: %w", errModel, err)
 	} else {
 		answer = ai.StripThinking(reply)
@@ -324,7 +325,7 @@ func (s *Service) search(ctx context.Context, snapshotID int64, repo, query stri
 	if err != nil || res.FTS > 0 {
 		return res, err
 	}
-	reply, err := s.Chat.Generate(ctx, termsRequest(repo, query))
+	reply, err := ai.Generate(ctx, s.Chat, termsRequest(repo, query))
 	if err != nil {
 		return res, fmt.Errorf("%w: %w", errModel, err)
 	}
@@ -340,7 +341,7 @@ func (s *Service) answerLanguage(ctx context.Context, question string, history [
 	if ask == "" {
 		return lang
 	}
-	reply, err := s.Chat.Generate(ctx, languageRequest(ask))
+	reply, err := ai.Generate(ctx, s.Chat, languageRequest(ask))
 	if name := named(ai.StripThinking(reply)); err == nil && name != "" {
 		return name
 	}

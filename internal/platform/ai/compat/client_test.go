@@ -1,4 +1,4 @@
-package ai
+package compat
 
 import (
 	"context"
@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unicode/utf8"
 
+	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/ai/usage"
 )
 
@@ -38,7 +38,7 @@ func TestRefusedKeyMasked(t *testing.T) {
 	// The key at the start, and a second copy at offset second: before, across and past the cut.
 	for _, second := range []int{100, 2048 - len(key)/2, 2050} {
 		srv := serve(t, http.StatusUnauthorized, key+strings.Repeat("x", second-len(key))+key+" is not a valid key")
-		_, err := (&OpenAI{BaseURL: srv.URL, APIKey: key, ModelName: "m"}).Generate(context.Background(), Prompt{})
+		_, err := ai.Generate(context.Background(), &Client{BaseURL: srv.URL, APIKey: key, ModelName: "m"}, ai.Prompt{})
 		if err == nil || strings.Contains(err.Error(), key[:8]) || !strings.Contains(err.Error(), "m /chat/completions: 401 Unauthorized: ****") {
 			t.Fatalf("key again at %d: %.120v", second, err)
 		}
@@ -47,25 +47,25 @@ func TestRefusedKeyMasked(t *testing.T) {
 
 // TestRefusedMessage: a refused request's error names the model, the path and the status, and quotes the
 // server's words whatever their shape, on each endpoint: OpenAI's error object, a bare string as LM Studio
-// sends, nothing; as an ErrContext, with any counts, when longer than the context (llama.cpp's, OpenAI's).
+// sends, nothing; as an ai.ErrContext, with any counts, when longer than the context (llama.cpp's, OpenAI's).
 func TestRefusedMessage(t *testing.T) {
 	for _, tc := range []struct {
 		body, want string
-		over       *ErrContext // nil: no ErrContext
+		over       *ai.ErrContext // nil: no ai.ErrContext
 	}{
 		{`{"error":{"message":"no such model","type":"invalid_request_error"}}`, `400 Bad Request: {"error":{"message":"no such model"`, nil},
 		{`{"error":"model not loaded"}`, `400 Bad Request: {"error":"model not loaded"}`, nil},
 		{"", "400 Bad Request", nil},
-		{`{"error":{"code":400,"message":"request (9000 tokens) exceeds the available context size (8192 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":9000,"n_ctx":8192}}`, `400 Bad Request: {"error":{"code":400,"message":"request (9000`, &ErrContext{Prompt: 9000, Context: 8192}},
-		{`{"error":{"message":"This model's maximum context length is 8192 tokens.","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}}`, `400 Bad Request: {"error":{"message":"This model's`, &ErrContext{}},
+		{`{"error":{"code":400,"message":"request (9000 tokens) exceeds the available context size (8192 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":9000,"n_ctx":8192}}`, `400 Bad Request: {"error":{"code":400,"message":"request (9000`, &ai.ErrContext{Prompt: 9000, Context: 8192}},
+		{`{"error":{"message":"This model's maximum context length is 8192 tokens.","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}}`, `400 Bad Request: {"error":{"message":"This model's`, &ai.ErrContext{}},
 	} {
-		c := &OpenAI{BaseURL: serve(t, http.StatusBadRequest, tc.body).URL, ModelName: "m"}
-		_, chat := c.Generate(context.Background(), Prompt{})
+		c := &Client{BaseURL: serve(t, http.StatusBadRequest, tc.body).URL, ModelName: "m"}
+		_, chat := ai.Generate(context.Background(), c, ai.Prompt{})
 		_, embed := c.Embed(context.Background(), []string{"x"})
 		c.API = Responses
-		_, responses := c.Generate(context.Background(), Prompt{})
+		_, responses := ai.Generate(context.Background(), c, ai.Prompt{})
 		for path, err := range map[string]error{"/chat/completions": chat, "/embeddings": embed, "/responses": responses} {
-			if over, want := (*ErrContext)(nil), "m "+path+": "+tc.want; err == nil || !strings.HasPrefix(err.Error(), want) || tc.body == "" && err.Error() != want ||
+			if over, want := (*ai.ErrContext)(nil), "m "+path+": "+tc.want; err == nil || !strings.HasPrefix(err.Error(), want) || tc.body == "" && err.Error() != want ||
 				errors.As(err, &over) != (tc.over != nil) || over != nil && (over.Prompt != tc.over.Prompt || over.Context != tc.over.Context) {
 				t.Errorf("%s, %s: %v %+v", tc.body, path, err, over)
 			}
@@ -84,7 +84,7 @@ func TestNoKeyFromEnvironment(t *testing.T) {
 		w.Write([]byte(finished))
 	}))
 	defer srv.Close()
-	if _, err := (&OpenAI{BaseURL: srv.URL + "/v1", ModelName: "m"}).Generate(context.Background(), Prompt{}); err != nil || auth.Load() != "" {
+	if _, err := ai.Generate(context.Background(), &Client{BaseURL: srv.URL + "/v1", ModelName: "m"}, ai.Prompt{}); err != nil || auth.Load() != "" {
 		t.Fatalf("authorization %q: %v", auth.Load(), err)
 	}
 }
@@ -108,23 +108,26 @@ func TestStreamEnds(t *testing.T) {
 		"cut short":  {chunk("hi"), "ended before it was finished"},
 		"flood":      {strings.Repeat(chunk(strings.Repeat("x", 1<<16)), 17) + finished, "passed 1 MB"},
 	} {
-		got, err := (&OpenAI{BaseURL: serve(t, 0, tc.body).URL, ModelName: "m"}).Generate(context.Background(), Prompt{})
+		got, err := ai.Generate(context.Background(), &Client{BaseURL: serve(t, 0, tc.body).URL, ModelName: "m"}, ai.Prompt{})
 		if tc.fails == "" && (err != nil || got != "hi") || tc.fails != "" && (err == nil || !strings.Contains(err.Error(), tc.fails)) {
 			t.Errorf("%s: %q %v", name, got, err)
 		}
 	}
 }
 
+// indented is the line that closes every request for JSON (ai.Format.Prompt).
+const indented = "Write the JSON indented, each key on a line of its own."
+
 // TestFormat: StreamJSON asks for the schema made from a Go type, strict, on each API, its instructions ending
 // with indented, and reads the answer into it; Generate asks for neither. An answer sent that is not that JSON
-// fails with ErrSchema, naming what the endpoint must support; a request the server refuses fails with its
-// words, as any other, not ErrSchema; JSON cut at the output budget says so instead.
+// fails with ai.ErrSchema, naming what the endpoint must support; a request the server refuses fails with its
+// words, as any other, not ai.ErrSchema; JSON cut at the output budget says so instead.
 func TestFormat(t *testing.T) {
 	type page struct {
 		Title string   `json:"title"`
 		Files []string `json:"files"`
 	}
-	f := Schema[struct {
+	f := ai.Schema[struct {
 		Pages []page `json:"pages"`
 	}]("plan")
 	var body, mode atomic.Value
@@ -155,20 +158,20 @@ func TestFormat(t *testing.T) {
 		Completions: `"response_format":{"json_schema":{"name":"plan","strict":true,` + schema + `},"type":"json_schema"}`,
 		Responses:   `"text":{"format":{"name":"plan",` + schema + `,"strict":true,"type":"json_schema"}}`,
 	} {
-		c := &OpenAI{BaseURL: srv.URL, ModelName: "m", API: api}
+		c := &Client{BaseURL: srv.URL, ModelName: "m", API: api}
 		mode.Store("")
-		if v, _, err := StreamJSON(context.Background(), c, Prompt{Static: "S"}, f, nil); err != nil || len(v.Pages) != 1 || v.Pages[0].Files[0] != "a.go" || !strings.Contains(body.Load().(string), want) || !strings.Contains(body.Load().(string), `"S\n`+indented+`"`) {
+		if v, _, err := ai.StreamJSON(context.Background(), c, ai.Prompt{Static: "S"}, f, nil); err != nil || len(v.Pages) != 1 || v.Pages[0].Files[0] != "a.go" || !strings.Contains(body.Load().(string), want) || !strings.Contains(body.Load().(string), `"S\n`+indented+`"`) {
 			t.Errorf("%s: %+v %v\n%s", api, v, err, body.Load())
 		}
-		if _, err := c.Generate(context.Background(), Prompt{}); err != nil || strings.Contains(body.Load().(string), "schema") || strings.Contains(body.Load().(string), indented) {
+		if _, err := ai.Generate(context.Background(), c, ai.Prompt{}); err != nil || strings.Contains(body.Load().(string), "schema") || strings.Contains(body.Load().(string), indented) {
 			t.Errorf("%s, no format: %v\n%s", api, err, body.Load())
 		}
 		for m, says := range map[string]string{"prose": "m: the answer is not the JSON of plan", "shape": "m: the answer is not the JSON of plan", "refused": "400 Bad Request: {\"error\":{\"message\":\"response_format is not supported\"}}",
 			"cut": "m: the answer reached the output budget before its JSON ended"} {
 			mode.Store(m)
-			_, _, err := StreamJSON(context.Background(), c, Prompt{}, f, nil)
+			_, _, err := ai.StreamJSON(context.Background(), c, ai.Prompt{}, f, nil)
 			schema := m == "prose" || m == "shape" // an answer sent (200) that is not the schema's JSON
-			if err == nil || !strings.Contains(err.Error(), says) || errors.Is(err, ErrSchema) != schema || schema && !strings.HasSuffix(err.Error(), ErrSchema.Error()) || !strings.Contains(body.Load().(string), `"`+indented+`"`) {
+			if err == nil || !strings.Contains(err.Error(), says) || errors.Is(err, ai.ErrSchema) != schema || schema && !strings.HasSuffix(err.Error(), ai.ErrSchema.Error()) || !strings.Contains(body.Load().(string), `"`+indented+`"`) {
 				t.Errorf("%s, %s: %v", api, m, err)
 			}
 		}
@@ -199,9 +202,9 @@ func TestResponses(t *testing.T) {
 			body = r.URL.Path + " " + string(b)
 			w.Write([]byte(tc.body))
 		}))
-		var got []Usage
-		c := &OpenAI{BaseURL: srv.URL + "/v1", ModelName: "m", API: Responses, MaxTokens: 50, Meter: usage.Func(func(_ context.Context, _ string, u Usage) { got = append(got, u) })}
-		answer, err := c.Generate(context.Background(), Prompt{Static: "be brief", Dynamic: "größe"})
+		var got []ai.Usage
+		c := &Client{BaseURL: srv.URL + "/v1", ModelName: "m", API: Responses, MaxTokens: 50, Meter: usage.Func(func(_ context.Context, _ string, u ai.Usage) { got = append(got, u) })}
+		answer, err := ai.Generate(context.Background(), c, ai.Prompt{Static: "be brief", Dynamic: "größe"})
 		srv.Close()
 		if answer != tc.want && tc.fails == "" || tc.fails != "" && (err == nil || !strings.Contains(err.Error(), tc.fails)) || tc.fails == "" && err != nil {
 			t.Errorf("%s: %q %v", name, answer, err)
@@ -211,7 +214,7 @@ func TestResponses(t *testing.T) {
 				t.Errorf("%s: the request lacks %s: %s", name, w, body)
 			}
 		}
-		if name == "completed" && (len(got) != 1 || got[0] != (Usage{InChars: 13, OutChars: 2, InTokens: 12, OutTokens: 3, CachedTokens: 8})) {
+		if name == "completed" && (len(got) != 1 || got[0] != (ai.Usage{InChars: 13, OutChars: 2, InTokens: 12, OutTokens: 3, CachedTokens: 8})) {
 			t.Errorf("measured %+v", got)
 		}
 	}
@@ -232,17 +235,17 @@ func TestMeasure(t *testing.T) {
 	}))
 	defer srv.Close()
 	var got []string
-	c := &OpenAI{BaseURL: srv.URL, ModelName: "m", Meter: usage.Func(func(ctx context.Context, model string, u Usage) {
+	c := &Client{BaseURL: srv.URL, ModelName: "m", Meter: usage.Func(func(ctx context.Context, model string, u ai.Usage) {
 		got = append(got, fmt.Sprint(usage.Repository(ctx), model, u))
 	})}
-	if answer, err := c.Generate(usage.WithRepository(context.Background(), 7), Prompt{Dynamic: "größe"}); err != nil || answer != "héllo" {
+	if answer, err := ai.Generate(usage.WithRepository(context.Background(), 7), c, ai.Prompt{Dynamic: "größe"}); err != nil || answer != "héllo" {
 		t.Fatalf("%q %v", answer, err)
 	}
-	if want := fmt.Sprint(7, "m", Usage{InChars: 5, OutChars: 5, InTokens: 12, OutTokens: 3, CachedTokens: 9}); !asked.Load() || len(got) != 1 || got[0] != want {
+	if want := fmt.Sprint(7, "m", ai.Usage{InChars: 5, OutChars: 5, InTokens: 12, OutTokens: 3, CachedTokens: 9}); !asked.Load() || len(got) != 1 || got[0] != want {
 		t.Fatalf("asked %v, measured %q, want %q", asked.Load(), got, want)
 	}
 	c.Meter = nil
-	if _, err := c.Generate(context.Background(), Prompt{}); err != nil || asked.Load() {
+	if _, err := ai.Generate(context.Background(), c, ai.Prompt{}); err != nil || asked.Load() {
 		t.Fatalf("unmeasured: asked %v, %v", asked.Load(), err)
 	}
 }
@@ -259,7 +262,7 @@ func TestEmbedAnswerSize(t *testing.T) {
 				w.Write(chunk)
 			}
 		}))
-		_, err := (&OpenAI{BaseURL: srv.URL, ModelName: "m"}).Embed(context.Background(), []string{"x"})
+		_, err := (&Client{BaseURL: srv.URL, ModelName: "m"}).Embed(context.Background(), []string{"x"})
 		srv.Close()
 		if err == nil || strings.Contains(err.Error(), "passed 64 MB") != huge {
 			t.Errorf("huge %v: %v", huge, err)
@@ -281,13 +284,13 @@ func TestEmbedOrder(t *testing.T) {
 		w.Write([]byte(`{"data":[{"index":1,"embedding":[2]},{"index":0,"embedding":[1]}],"usage":{"prompt_tokens":4,"total_tokens":4}}`))
 	}))
 	defer srv.Close()
-	var got []Usage
-	meter := usage.Func(func(_ context.Context, _ string, u Usage) { got = append(got, u) })
-	vecs, err := (&OpenAI{BaseURL: srv.URL, APIKey: "k", ModelName: "m", Meter: meter}).Embed(context.Background(), []string{"a", "b"})
-	if err != nil || len(vecs) != 2 || vecs[0][0] != 1 || vecs[1][0] != 2 || len(got) != 1 || got[0] != (Usage{InTokens: 4}) {
+	var got []ai.Usage
+	meter := usage.Func(func(_ context.Context, _ string, u ai.Usage) { got = append(got, u) })
+	vecs, err := (&Client{BaseURL: srv.URL, APIKey: "k", ModelName: "m", Meter: meter}).Embed(context.Background(), []string{"a", "b"})
+	if err != nil || len(vecs) != 2 || vecs[0][0] != 1 || vecs[1][0] != 2 || len(got) != 1 || got[0] != (ai.Usage{InTokens: 4}) {
 		t.Fatalf("got %v %v, metered %+v", vecs, err, got)
 	}
-	if _, err := (&OpenAI{BaseURL: srv.URL, APIKey: "wrong", ModelName: "m"}).Embed(context.Background(), []string{"a"}); err == nil || calls.Load() != 2 {
+	if _, err := (&Client{BaseURL: srv.URL, APIKey: "wrong", ModelName: "m"}).Embed(context.Background(), []string{"a"}); err == nil || calls.Load() != 2 {
 		t.Fatalf("a refused key: %v, after %d requests in all", err, calls.Load())
 	}
 }
@@ -296,7 +299,7 @@ func TestEmbedOrder(t *testing.T) {
 // leave no gap behind, so the next caller is not pushed past its timeout; turns
 // stay spaced, and a caller that gave up before it came takes none.
 func TestThrottleForgetsAbandoned(t *testing.T) {
-	c := &OpenAI{RPM: 600} // a turn every 100ms
+	c := &Client{RPM: 600} // a turn every 100ms
 	stopped, stop := context.WithCancel(context.Background())
 	stop()
 	if c.throttle(stopped) == nil {
@@ -322,12 +325,12 @@ func TestThrottleForgetsAbandoned(t *testing.T) {
 
 // TestStreamErrorMasked: an error the server sends inside the stream reaches the caller as one from a refused
 // request does: naming the model and path, the key masked, the server's words at most 2048 bytes; as an
-// ErrContext when longer than the context, as llama.cpp's server sent it before it answered 400.
+// ai.ErrContext when longer than the context, as llama.cpp's server sent it before it answered 400.
 func TestStreamErrorMasked(t *testing.T) {
 	const key = "sk-test-0123456789abcdef"
 	body := `data: {"error":{"type":"exceed_context_size_error","n_prompt_tokens":9,"n_ctx":8,"message":"` + key + strings.Repeat("x", 5000) + `"}}` + "\n\n"
-	_, err := (&OpenAI{BaseURL: serve(t, 0, body).URL, APIKey: key, ModelName: "m"}).Generate(context.Background(), Prompt{})
-	if over, from := (*ErrContext)(nil), "m /chat/completions: "; err == nil || strings.Contains(err.Error(), key[:8]) || !strings.HasPrefix(err.Error(), from) || len(err.Error()) > len(from)+2048 || !errors.As(err, &over) || *over != (ErrContext{9, 8, over.err}) {
+	_, err := ai.Generate(context.Background(), &Client{BaseURL: serve(t, 0, body).URL, APIKey: key, ModelName: "m"}, ai.Prompt{})
+	if over, from := (*ai.ErrContext)(nil), "m /chat/completions: "; err == nil || strings.Contains(err.Error(), key[:8]) || !strings.HasPrefix(err.Error(), from) || len(err.Error()) > len(from)+2048 || !errors.As(err, &over) || *over != (ai.ErrContext{Prompt: 9, Context: 8, Err: over.Err}) {
 		t.Fatalf("stream error: %.80v", err)
 	}
 }
@@ -339,11 +342,11 @@ func TestTimeoutNamed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-answer }))
 	defer srv.Close()
 	defer close(answer)
-	c := &OpenAI{BaseURL: srv.URL, ModelName: "m", Timeout: 50 * time.Millisecond}
-	_, chat := c.Generate(context.Background(), Prompt{})
+	c := &Client{BaseURL: srv.URL, ModelName: "m", Timeout: 50 * time.Millisecond}
+	_, chat := ai.Generate(context.Background(), c, ai.Prompt{})
 	_, embed := c.Embed(context.Background(), []string{"x"})
 	c.API = Responses
-	_, responses := c.Generate(context.Background(), Prompt{})
+	_, responses := ai.Generate(context.Background(), c, ai.Prompt{})
 	for _, err := range []error{chat, embed, responses} {
 		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "from m within DEEPCODE_LLM_TIMEOUT") {
 			t.Fatalf("past the timeout: %v", err)
@@ -377,7 +380,7 @@ func TestRetries(t *testing.T) {
 			w.WriteHeader(tc.status)
 		}))
 		start := time.Now()
-		_, err := (&OpenAI{BaseURL: srv.URL, ModelName: "m"}).Generate(context.Background(), Prompt{})
+		_, err := ai.Generate(context.Background(), &Client{BaseURL: srv.URL, ModelName: "m"}, ai.Prompt{})
 		took := time.Since(start)
 		srv.Close()
 		if (err == nil) != (tc.calls == 2) || calls.Load() != tc.calls || took < tc.wait || took > 5*time.Second {
@@ -394,7 +397,7 @@ func TestExchange(t *testing.T) {
 	type args struct {
 		Query string `json:"query"`
 	}
-	tool := Schema[args]("search").Tool("Search the code")
+	tool := ai.Schema[args]("search").Tool("Search the code")
 	replies := map[string][]string{
 		Completions: {`{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"looking","tool_calls":[` +
 			`{"id":"c1","type":"function","function":{"name":"search","arguments":"{\"query\":\"router\"}"}},` +
@@ -416,10 +419,10 @@ func TestExchange(t *testing.T) {
 			sent = append(sent, string(b))
 		}))
 		var measured []int
-		e := (&OpenAI{BaseURL: srv.URL, ModelName: "m", API: api, Meter: usage.Func(func(_ context.Context, _ string, u Usage) { measured = append(measured, u.InChars, u.OutChars) })}).
-			Exchange(Prompt{Dynamic: "how?"}, []Tool{tool})
+		e := (&Client{BaseURL: srv.URL, ModelName: "m", API: api, Meter: usage.Func(func(_ context.Context, _ string, u ai.Usage) { measured = append(measured, u.InChars, u.OutChars) })}).
+			Exchange(ai.Prompt{Dynamic: "how?"}, []ai.Tool{tool})
 		text, calls, err := e.Next(context.Background())
-		if err != nil || text != "looking" || len(calls) != 2 || calls[0] != (ToolCall{ID: "c1", Name: "search", Arguments: `{"query":"router"}`}) || calls[1] != (ToolCall{ID: "c1", Name: "done", Key: 1}) {
+		if err != nil || text != "looking" || len(calls) != 2 || calls[0] != (ai.ToolCall{ID: "c1", Name: "search", Arguments: `{"query":"router"}`}) || calls[1] != (ai.ToolCall{ID: "c1", Name: "done", Key: 1}) {
 			t.Fatalf("%s: %q %+v %v", api, text, calls, err)
 		}
 		e.Answer(calls[0], "found router.go and mux.go")
@@ -476,25 +479,6 @@ func TestExchange(t *testing.T) {
 			if !strings.Contains(string(turns), w) {
 				t.Errorf("%s: the second request lacks %s: %s", api, w, turns)
 			}
-		}
-	}
-}
-
-func TestPrompt(t *testing.T) {
-	read := func(p Prompt) (s string) {
-		for _, m := range p.messages() {
-			s += m.Role + ":" + m.Content + " "
-		}
-		return s
-	}
-	history := append(make([]Message, 0, 4), Message{Role: "user", Content: "earlier"}) // room to grow, which After must not write into
-	p := Prompt{Static: "rules", Previous: history, Dynamic: "now"}
-	first, second := p.After("one", "again"), p.After("two", "once more")
-	for _, c := range [][2]string{{read(p), "system:rules user:earlier user:now "}, {read(Prompt{Previous: history}) + "|" + read(Prompt{}), "user:earlier |"}, {fmt.Sprintln(p.Size(utf8.RuneCountInString)) + fmt.Sprint(first.Size(utf8.RuneCountInString)), "15 3\n23 5"},
-		{read(first), "system:rules user:earlier user:now assistant:one user:again "}, // second did not overwrite it
-		{read(second.After("three", "last")), "system:rules user:earlier user:now assistant:two user:once more assistant:three user:last "}} {
-		if c[0] != c[1] {
-			t.Errorf("got %q, want %q", c[0], c[1])
 		}
 	}
 }

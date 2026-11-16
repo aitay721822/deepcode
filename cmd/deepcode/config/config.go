@@ -74,7 +74,7 @@ var defaults = map[string]any{
 var efforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 
 // apis are the APIs a chat model can be asked by: Chat Completions and the
-// Responses API (ai.Completions, ai.Responses).
+// Responses API (compat.Completions, compat.Responses).
 var apis = []string{"completions", "responses"}
 
 // schemas are where a request for JSON gives its schema: as response_format,

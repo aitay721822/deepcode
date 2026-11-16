@@ -1,4 +1,4 @@
-package ai
+package compat
 
 import (
 	"context"
@@ -10,10 +10,11 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
+	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/ai/usage"
 )
 
-// The APIs a chat model is asked by (OpenAI.API).
+// The APIs a chat model is asked by (Client.API).
 const (
 	Completions = "completions" // Chat Completions, /chat/completions: every server has it
 	Responses   = "responses"   // the Responses API, /responses
@@ -23,7 +24,7 @@ const (
 // tokens to used, and says whether it stopped at the output budget. The answer is whole once the
 // response completed, or ended incomplete; one that failed is an error. The
 // server is asked to store nothing, as no later request names it.
-func (c *OpenAI) responses(ctx context.Context, messages []Message, s *schema, out *answer, used *Usage) (spent bool, err error) {
+func (c *Client) responses(ctx context.Context, messages []ai.Message, s *ai.JSONSchema, out *ai.Answer, used *ai.Usage) (spent bool, err error) {
 	params := c.responsesParams(messages)
 	if s != nil {
 		params.Text.Format.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{Name: s.Name, Schema: s.JSON, Strict: openai.Bool(true)}
@@ -36,7 +37,7 @@ func (c *OpenAI) responses(ctx context.Context, messages []Message, s *schema, o
 		ev := stream.Current()
 		switch ev.Type {
 		case "response.output_text.delta":
-			if err := out.add(ev.Delta); err != nil {
+			if err := out.Add(ev.Delta); err != nil {
 				return false, err
 			}
 		case "response.completed", "response.incomplete":
@@ -57,7 +58,7 @@ func (c *OpenAI) responses(ctx context.Context, messages []Message, s *schema, o
 // responsesParams are the Responses API params of messages, with c's
 // settings, asking for nothing stored: no later request names a response, as
 // each sends the whole conversation.
-func (c *OpenAI) responsesParams(messages []Message) responses.ResponseNewParams {
+func (c *Client) responsesParams(messages []ai.Message) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{Model: shared.ResponsesModel(c.ModelName), Store: openai.Bool(false)}
 	for _, m := range messages { // system, user and assistant are roles of both APIs
 		params.Input.OfInputItemList = append(params.Input.OfInputItemList,
@@ -81,7 +82,7 @@ func (c *OpenAI) responsesParams(messages []Message) responses.ResponseNewParams
 // ponytail: a reasoning model's reasoning items are not sent back, so its
 // reasoning starts again each reply; ask for reasoning.encrypted_content and
 // send those items back if a hosted reasoning model ever gathers.
-func (c *OpenAI) respond(ctx context.Context, params *responses.ResponseNewParams, used *Usage) (string, []ToolCall, error) {
+func (c *Client) respond(ctx context.Context, params *responses.ResponseNewParams, used *ai.Usage) (string, []ai.ToolCall, error) {
 	var res *http.Response
 	svc := responses.NewResponseService(c.options()...)
 	r, err := svc.New(ctx, *params, option.WithResponseInto(&res))
@@ -100,13 +101,13 @@ func (c *OpenAI) respond(ctx context.Context, params *responses.ResponseNewParam
 		params.Input.OfInputItemList = append(params.Input.OfInputItemList,
 			responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant))
 	}
-	var calls []ToolCall
+	var calls []ai.ToolCall
 	for _, item := range r.Output {
 		if item.Type == "function_call" {
 			call := item.AsFunctionCall()
 			params.Input.OfInputItemList = append(params.Input.OfInputItemList,
 				responses.ResponseInputItemParamOfFunctionCall(call.Arguments, call.CallID, call.Name))
-			calls = append(calls, ToolCall{ID: call.CallID, Name: call.Name, Arguments: call.Arguments})
+			calls = append(calls, ai.ToolCall{ID: call.CallID, Name: call.Name, Arguments: call.Arguments})
 		}
 	}
 	return text, calls, nil

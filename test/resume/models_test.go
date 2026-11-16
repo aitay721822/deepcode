@@ -14,6 +14,7 @@ import (
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/index/graph"
@@ -48,7 +49,7 @@ func TestModelErrors(t *testing.T) {
 		m := newModel()
 		m.fail(c.status, c.body)
 		srv := httptest.NewServer(m)
-		_, err := (&ai.OpenAI{BaseURL: srv.URL + "/v1", ModelName: "fake-embed"}).Embed(context.Background(), []string{"x"})
+		_, err := (&compat.Client{BaseURL: srv.URL + "/v1", ModelName: "fake-embed"}).Embed(context.Background(), []string{"x"})
 		srv.Close()
 		_, requests, _ := m.counts()
 		if err == nil || classOf(err) != c.want || requests != c.requests || c.body == overflow && !errors.As(err, new(*ai.ErrContext)) {
@@ -62,7 +63,7 @@ func TestModelErrors(t *testing.T) {
 	}
 	closed := "http://" + l.Addr().String() + "/v1"
 	l.Close()
-	if _, err := (&ai.OpenAI{BaseURL: closed, ModelName: "fake-embed"}).Embed(context.Background(), []string{"x"}); !errors.Is(err, ai.ErrUnavailable) {
+	if _, err := (&compat.Client{BaseURL: closed, ModelName: "fake-embed"}).Embed(context.Background(), []string{"x"}); !errors.Is(err, ai.ErrUnavailable) {
 		t.Errorf("a closed port: %v, want ErrUnavailable", err)
 	}
 
@@ -74,8 +75,8 @@ func TestModelErrors(t *testing.T) {
 		conn.Close()
 	}))
 	defer cut.Close()
-	chat := &ai.OpenAI{BaseURL: cut.URL + "/v1", ModelName: "fake-chat", Timeout: time.Minute}
-	if out, err := chat.Generate(context.Background(), ai.Prompt{Dynamic: "hi"}); !errors.Is(err, ai.ErrUnavailable) {
+	chat := &compat.Client{BaseURL: cut.URL + "/v1", ModelName: "fake-chat", Timeout: time.Minute}
+	if out, err := ai.Generate(context.Background(), chat, ai.Prompt{Dynamic: "hi"}); !errors.Is(err, ai.ErrUnavailable) {
 		t.Errorf("an answer cut midway: %q, %v, want ErrUnavailable", out, err)
 	}
 }
@@ -104,7 +105,7 @@ func TestPageWaitsForEmbeddings(t *testing.T) {
 	}
 	defer db.Close()
 	r := &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}},
-		Embed: &ai.OpenAI{BaseURL: srv.URL + "/v1", ModelName: "fake-embed"}, Vectors: &vectorstore.SQLite{DB: db}, Cache: cache.New(1 << 20)}
+		Embed: &compat.Client{BaseURL: srv.URL + "/v1", ModelName: "fake-embed"}, Vectors: &vectorstore.SQLite{DB: db}, Cache: cache.New(1 << 20)}
 	if _, err := r.SearchPage(context.Background(), 1, "alpha beta", nil, nil, 5); !errors.Is(err, ai.ErrUnavailable) {
 		t.Errorf("a page's search: %v, want ErrUnavailable", err)
 	}

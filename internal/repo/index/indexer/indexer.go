@@ -8,7 +8,7 @@ import (
 	"errors"
 	"log"
 
-	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
 	"deepcode/internal/repo/git"
@@ -30,7 +30,7 @@ type Indexer struct {
 	Graph   *graph.Graph // the snapshots' imports
 	Git     *git.Client
 	Servers *gitserver.Service // where each repository is fetched from
-	Embed   *ai.OpenAI         // nil: FTS5 and symbol search only
+	Embed   *compat.Client     // nil: FTS5 and symbol search only
 	Vectors *vectorstore.SQLite
 	Events  *events.Bus // receives snapshot.published
 	Limits  Limits

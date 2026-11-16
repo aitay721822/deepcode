@@ -32,13 +32,14 @@ import (
 	"unicode"
 
 	"deepcode/internal/knowledge/chat"
-	"deepcode/internal/knowledge/chat/harness"
 	chatstore "deepcode/internal/knowledge/chat/store"
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/knowledge/wiki"
 	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
+	"deepcode/internal/platform/ai/tokens"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/events"
 	"deepcode/internal/platform/jobs"
@@ -180,7 +181,7 @@ func setup(t *testing.T, work string) *rig {
 		Embed: embed, Vectors: vectors, Limits: indexer.Limits{MaxFiles: 20000, MaxFileBytes: 512 << 10, MaxTotalBytes: 200 << 20}}
 	if llm := chatModel(t, r.meter); llm != nil {
 		pages, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), "0")) // 0, the default, when unset
-		counter, err2 := harness.LoadTokens(os.Getenv("DEEPCODE_CHAT_TOKENIZER"))     // OpenAI's o200k_base when unset, as serve counts
+		counter, err2 := tokens.Load(os.Getenv("DEEPCODE_CHAT_TOKENIZER"))            // OpenAI's o200k_base when unset, as serve counts
 		if err != nil || pages < 0 || err2 != nil {
 			t.Fatalf("DEEPCODE_WIKI_MAX_PAGES holds %q, which is no number of pages; DEEPCODE_CHAT_TOKENIZER: %v", os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), err2)
 		}
@@ -195,13 +196,15 @@ func setup(t *testing.T, work string) *rig {
 
 // chatModel is the chat model the DEEPCODE_CHAT_* settings name, as serve
 // reads them, telling measure every answer's usage; nil without one.
-func chatModel(t *testing.T, measure ai.Meter) *ai.OpenAI {
+func chatModel(t *testing.T, measure ai.Meter) *compat.Client {
 	model := os.Getenv("DEEPCODE_CHAT_MODEL")
 	if model == "" {
 		return nil
 	}
-	llm := &ai.OpenAI{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model, Schema: schema(),
-		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Meter: measure}
+	window, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_CHAT_CONTEXT"), "0")) // 0, unknown, when unset
+	ratio, err2 := strconv.ParseFloat(cmp.Or(os.Getenv("DEEPCODE_COMPACT_RATIO"), "0.8"), 64)
+	llm := &compat.Client{BaseURL: os.Getenv("DEEPCODE_CHAT_BASE_URL"), APIKey: os.Getenv("DEEPCODE_CHAT_API_KEY"), ModelName: model, Schema: schema(),
+		ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"), Timeout: 5 * time.Minute, Meter: measure, Context: window, CompactRatio: ratio}
 	if s := os.Getenv("DEEPCODE_TEMPERATURE"); s != "" {
 		temp, err := strconv.ParseFloat(s, 64)
 		if err != nil || !(temp >= 0 && temp <= 2) { // NaN too
@@ -209,12 +212,9 @@ func chatModel(t *testing.T, measure ai.Meter) *ai.OpenAI {
 		}
 		llm.Temperature = &temp
 	}
-	window, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_CHAT_CONTEXT"), "0")) // 0, unknown, when unset
-	ratio, err2 := strconv.ParseFloat(cmp.Or(os.Getenv("DEEPCODE_COMPACT_RATIO"), "0.8"), 64)
-	if err != nil || window < 0 || window > 0 && window <= llm.Room() || err2 != nil || !(ratio > 0 && ratio <= 1) || llm.Schema != ai.SchemaServer && llm.Schema != ai.SchemaPrompt { // NaN too
-		t.Fatalf("DEEPCODE_CHAT_CONTEXT %q, DEEPCODE_COMPACT_RATIO %q, DEEPCODE_CHAT_SCHEMA %q: want none or more than %d tokens, a ratio above 0 and at most 1, and server or prompt", os.Getenv("DEEPCODE_CHAT_CONTEXT"), os.Getenv("DEEPCODE_COMPACT_RATIO"), llm.Schema, llm.Room())
+	if err != nil || window < 0 || window > 0 && window <= llm.Window().Room || err2 != nil || !(ratio > 0 && ratio <= 1) || llm.Schema != ai.SchemaServer && llm.Schema != ai.SchemaPrompt { // NaN too
+		t.Fatalf("DEEPCODE_CHAT_CONTEXT %q, DEEPCODE_COMPACT_RATIO %q, DEEPCODE_CHAT_SCHEMA %q: want none or more than %d tokens, a ratio above 0 and at most 1, and server or prompt", os.Getenv("DEEPCODE_CHAT_CONTEXT"), os.Getenv("DEEPCODE_COMPACT_RATIO"), llm.Schema, llm.Window().Room)
 	}
-	llm.Window, llm.CompactRatio = window, ratio
 	return llm
 }
 

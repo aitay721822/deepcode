@@ -1,12 +1,10 @@
-package ai
+package compat
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"regexp"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/openai/openai-go/v3"
@@ -14,65 +12,20 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
+	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/ai/usage"
 )
 
-var thinkRe = regexp.MustCompile(`(?s)<think>.*?</think>`)
-
-// maxAnswer bounds one answer's text. A wiki page or a chat answer is some
-// kilobytes; a server streaming past this is broken and would fill memory
-// until the timeout.
-const maxAnswer = 1 << 20
-
-// StripThinking drops <think> blocks that some servers leave in the content.
-func StripThinking(s string) string { return strings.TrimSpace(thinkRe.ReplaceAllString(s, "")) }
-
-// Tool is a function the model may call (Exchange), with its arguments in a
-// Format's JSON: the function bears the Format's name.
-type Tool struct {
-	Description string
-	schema
-}
-
-// Tool is the function f.Name, called with f's JSON, which Decode reads.
-func (f Format[T]) Tool(description string) Tool { return Tool{description, f.schema} }
-
-// ToolCall is a call the model made: its id, the function's name and its
-// arguments as the model wrote them, and its Key, the calls before it in its
-// Exchange: unique where an id may not be.
-type ToolCall struct {
-	ID, Name, Arguments string
-	Key                 int
-}
-
-// Generate returns the model's whole answer to p.
-func (c *OpenAI) Generate(ctx context.Context, p Prompt) (string, error) {
-	return c.Stream(ctx, p, nil)
-}
-
-// Usage is one answer's size, as package usage reads it from each API, and
-// Meter what OpenAI.Meter tells it to.
-type (
-	Usage = usage.Usage
-	Meter = usage.Meter
-)
-
-// Stream streams the model's answer to p, by the Responses API when API says
-// so and by Chat Completions otherwise, and relays its text as it comes.
-// Reasoning is no part of the answer.
-func (c *OpenAI) Stream(ctx context.Context, p Prompt, onDelta func(string)) (string, error) {
-	out, _, err := c.stream(ctx, p.messages(), nil, onDelta)
-	return out, err
-}
-
-// stream is Stream asking for s's JSON unless s is nil, and saying too whether
-// the answer stopped at the output budget.
-func (c *OpenAI) stream(ctx context.Context, messages []Message, s *schema, onDelta func(string)) (_ string, spent bool, err error) {
-	ctx, cancel := c.withTimeout(ctx)
+// Ask streams the model's answer to p, by the Responses API when API says so
+// and by Chat Completions otherwise, asking for s's JSON unless s is nil, and
+// relays its text as it comes. Reasoning is no part of the answer.
+func (c *Client) Ask(ctx context.Context, p ai.Prompt, s *ai.JSONSchema, onDelta func(string)) (_ ai.Reply, err error) {
+	ctx, cancel := ai.WithTimeout(ctx, c.Timeout, c.ModelName)
 	defer cancel()
-	defer func() { err = cause(ctx, err) }() // before cancel, which would end ctx too
-	out := &answer{onDelta: onDelta}
-	var used Usage
+	defer func() { err = ai.Cause(ctx, err) }() // before cancel, which would end ctx too
+	messages := p.Messages()
+	out := &ai.Answer{OnDelta: onDelta}
+	var used ai.Usage
 	if c.Meter != nil {
 		for _, m := range messages {
 			used.InChars += utf8.RuneCountInString(m.Content)
@@ -83,39 +36,12 @@ func (c *OpenAI) stream(ctx context.Context, messages []Message, s *schema, onDe
 	if c.API == Responses {
 		stream = c.responses
 	}
-	spent, err = stream(ctx, messages, s, out, &used)
-	if err != nil {
-		return out.String(), spent, err
-	}
-	if spent && strings.TrimSpace(out.String()) == "" {
-		return "", spent, errors.New("the model used its whole output budget before answering (reasoning models need more): raise DEEPCODE_MAX_OUTPUT_TOKENS")
-	}
-	return out.String(), spent, nil
-}
-
-// answer gathers a streamed answer's text, relayed to onDelta as it comes.
-type answer struct {
-	strings.Builder
-	onDelta func(string)
-}
-
-// add appends s, and fails once the answer passes maxAnswer.
-func (a *answer) add(s string) error {
-	if s == "" {
-		return nil
-	}
-	a.WriteString(s)
-	if a.onDelta != nil {
-		a.onDelta(s)
-	}
-	if a.Len() > maxAnswer {
-		return errors.New("the model's answer passed 1 MB and was stopped")
-	}
-	return nil
+	spent, err := stream(ctx, messages, s, out, &used)
+	return ai.Reply{Text: out.String(), Spent: spent}, err
 }
 
 // chatParams are the Chat Completions params of messages, with c's settings.
-func (c *OpenAI) chatParams(messages []Message) openai.ChatCompletionNewParams {
+func (c *Client) chatParams(messages []ai.Message) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{Model: shared.ChatModel(c.ModelName)}
 	for _, m := range messages {
 		switch m.Role {
@@ -143,7 +69,7 @@ func (c *OpenAI) chatParams(messages []Message) openai.ChatCompletionNewParams {
 // adds its tokens to used, and says whether it stopped at the output budget.
 // An answer is whole only once the server gave its finish reason: a stream
 // that ends without one, even with [DONE], was cut short.
-func (c *OpenAI) completions(ctx context.Context, messages []Message, s *schema, out *answer, used *Usage) (spent bool, err error) {
+func (c *Client) completions(ctx context.Context, messages []ai.Message, s *ai.JSONSchema, out *ai.Answer, used *ai.Usage) (spent bool, err error) {
 	params := c.chatParams(messages)
 	if c.Meter != nil {
 		params.StreamOptions.IncludeUsage = openai.Bool(true)
@@ -164,7 +90,7 @@ func (c *OpenAI) completions(ctx context.Context, messages []Message, s *schema,
 		// stream cut before its usage chunk counts no tokens: the server never said.
 		used.Add(usage.Chat(chunk.Usage))
 		for _, ch := range chunk.Choices {
-			if err := out.add(ch.Delta.Content); err != nil {
+			if err := out.Add(ch.Delta.Content); err != nil {
 				return false, err
 			}
 		}
@@ -181,76 +107,41 @@ func (c *OpenAI) completions(ctx context.Context, messages []Message, s *schema,
 // errSpent: a reply cut at the output budget, whose calls may be cut too.
 var errSpent = errors.New("the model's reply reached the output budget: raise DEEPCODE_MAX_OUTPUT_TOKENS")
 
-// Exchange is a conversation in which the model may call tools, held in the
-// SDK's params of the API its client asks by and continued as the SDK's
-// README continues one: each reply is appended as the model gave it, then
-// each call's result. Replies come whole, not streamed. It keeps the text the
-// next request sends, piece by piece, for its caller to count in the model's
-// tokens (Size); a call is known by its Key, as two calls may share an id.
-type Exchange struct {
-	c       *OpenAI
+// exchange is an ai.Exchange held in the SDK's params of the API its client
+// asks by and continued as the SDK's README continues one: each reply is
+// appended as the model gave it, then each call's result. Replies come whole,
+// not streamed.
+type exchange struct {
+	ai.Pieces
+	c       *Client
 	chat    openai.ChatCompletionNewParams
 	resp    responses.ResponseNewParams
-	pieces  []string // the messages, the tools' definitions, each reply's text and calls, each result
-	sizes   []int    // each piece as Size counted it, -1 until it does
 	answers map[int]answered
-	calls   int   // the calls so far, which number the next one's Key
-	sent    int   // the pieces the last request sent
-	used    Usage // the last reply's
+	calls   int      // the calls so far, which number the next one's Key
+	used    ai.Usage // the last reply's
 }
 
 // answered is where a call's result stands: its piece, and its message or
 // input item in the params.
 type answered struct{ piece, at int }
 
-// Size is the next request's text in count's units, each piece counted once
-// (count must not change), and the part of it the last request sent.
-func (e *Exchange) Size(count func(string) int) (next, sent int) {
-	for i, p := range e.pieces {
-		if e.sizes[i] < 0 {
-			e.sizes[i] = count(p)
-		}
-		if next += e.sizes[i]; i < e.sent {
-			sent += e.sizes[i]
-		}
-	}
-	return next, sent
-}
-
-// Added is the pieces the last request answered did not send: its reply's
-// and the results'; all of them before the first reply.
-func (e *Exchange) Added() int { return len(e.pieces) - e.sent }
-
 // Used is the last reply's Usage: InTokens as the server counted them, 0 when
 // it reported none.
-func (e *Exchange) Used() Usage { return e.used }
-
-// add keeps s as the next piece, and says which.
-func (e *Exchange) add(s string) int {
-	e.pieces, e.sizes = append(e.pieces, s), append(e.sizes, -1)
-	return len(e.pieces) - 1
-}
-
-// chars is the pieces' characters.
-func (e *Exchange) chars() (n int) {
-	for _, p := range e.pieces {
-		n += utf8.RuneCountInString(p)
-	}
-	return n
-}
+func (e *exchange) Used() ai.Usage { return e.used }
 
 // Compact gives the calls short, by Key, the text short gives them in place
 // of their results, in the params as they stand: the replies and the other
 // results stay as they were, and so does a result no longer than its text.
 // It returns how many it replaced.
-func (e *Exchange) Compact(short map[int]string) int {
+func (e *exchange) Compact(short map[int]string) int {
 	n := 0
 	for key, text := range short {
 		a, ok := e.answers[key]
-		if !ok || len(text) >= len(e.pieces[a.piece]) {
+		if !ok || len(text) >= len(e.Piece(a.piece)) {
 			continue
 		}
-		e.pieces[a.piece], e.sizes[a.piece], n = text, -1, n+1
+		e.Replace(a.piece, text)
+		n++
 		if e.c.API == Responses {
 			id := e.resp.Input.OfInputItemList[a.at].OfFunctionCallOutput.CallID
 			e.resp.Input.OfInputItemList[a.at] = responses.ResponseInputItemParamOfFunctionCallOutput(text)
@@ -265,14 +156,14 @@ func (e *Exchange) Compact(short map[int]string) int {
 // Exchange starts a conversation from p in which the model may call tools,
 // its replies and their results following p's messages. The arguments are
 // asked for strict, as structured outputs are.
-func (c *OpenAI) Exchange(p Prompt, tools []Tool) *Exchange {
-	e, messages := &Exchange{c: c, answers: map[int]answered{}}, p.messages()
+func (c *Client) Exchange(p ai.Prompt, tools []ai.Tool) ai.Exchange {
+	e, messages := &exchange{c: c, answers: map[int]answered{}}, p.Messages()
 	for _, m := range messages {
-		e.add(m.Content)
+		e.Add(m.Content)
 	}
 	for _, t := range tools {
 		schema, _ := json.Marshal(t.JSON) // a map from JSON, so it marshals again
-		e.add(t.Name + "\n" + t.Description + "\n" + string(schema))
+		e.Add(t.Name + "\n" + t.Description + "\n" + string(schema))
 	}
 	if c.API == Responses {
 		e.resp = c.responsesParams(messages)
@@ -292,20 +183,20 @@ func (c *OpenAI) Exchange(p Prompt, tools []Tool) *Exchange {
 
 // Next asks for the model's next reply: its text and the tools it calls,
 // each of which Answer answers before the next reply is asked for.
-func (e *Exchange) Next(ctx context.Context) (text string, calls []ToolCall, err error) {
-	ctx, cancel := e.c.withTimeout(ctx)
+func (e *exchange) Next(ctx context.Context) (text string, calls []ai.ToolCall, err error) {
+	ctx, cancel := ai.WithTimeout(ctx, e.c.Timeout, e.c.ModelName)
 	defer cancel()
-	defer func() { err = cause(ctx, err) }()
-	sent, used := len(e.pieces), Usage{InChars: e.chars()}
+	defer func() { err = ai.Cause(ctx, err) }()
+	sent, used := e.Len(), ai.Usage{InChars: e.Chars()}
 	defer func() {
 		if err == nil { // a refused request sent nothing the next one will not
-			e.sent = sent
+			e.MarkSent(sent)
 			if text != "" {
-				e.add(text) // the reply is sent back with every request after it
+				e.Add(text) // the reply is sent back with every request after it
 			}
 			for i := range calls {
 				calls[i].Key, e.calls = e.calls, e.calls+1
-				e.add(calls[i].Name + calls[i].Arguments)
+				e.Add(calls[i].Name + calls[i].Arguments)
 			}
 		}
 		used.OutChars = utf8.RuneCountInString(text)
@@ -323,8 +214,8 @@ func (e *Exchange) Next(ctx context.Context) (text string, calls []ToolCall, err
 }
 
 // Answer gives the model result as what call returned.
-func (e *Exchange) Answer(call ToolCall, result string) {
-	a := answered{piece: e.add(result)}
+func (e *exchange) Answer(call ai.ToolCall, result string) {
+	a := answered{piece: e.Add(result)}
 	if e.c.API == Responses {
 		out := responses.ResponseInputItemParamOfFunctionCallOutput(result)
 		out.OfFunctionCallOutput.CallID = openai.String(call.ID)
@@ -337,7 +228,7 @@ func (e *Exchange) Answer(call ToolCall, result string) {
 
 // complete asks Chat Completions (/chat/completions) for the next reply of
 // params, appends it to them, and adds its tokens to used.
-func (c *OpenAI) complete(ctx context.Context, params *openai.ChatCompletionNewParams, used *Usage) (string, []ToolCall, error) {
+func (c *Client) complete(ctx context.Context, params *openai.ChatCompletionNewParams, used *ai.Usage) (string, []ai.ToolCall, error) {
 	var res *http.Response
 	svc := openai.NewChatCompletionService(c.options()...)
 	completion, err := svc.New(ctx, *params, option.WithResponseInto(&res))
@@ -353,9 +244,9 @@ func (c *OpenAI) complete(ctx context.Context, params *openai.ChatCompletionNewP
 	}
 	msg := completion.Choices[0].Message
 	params.Messages = append(params.Messages, msg.ToParam())
-	var calls []ToolCall
+	var calls []ai.ToolCall
 	for _, tc := range msg.ToolCalls {
-		calls = append(calls, ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments})
+		calls = append(calls, ai.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments})
 	}
 	return msg.Content, calls, nil
 }

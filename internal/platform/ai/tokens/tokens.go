@@ -1,4 +1,5 @@
-package harness
+// Package tokens counts text in a chat model's tokens.
+package tokens
 
 import (
 	"fmt"
@@ -14,13 +15,13 @@ import (
 // parsed again, dropping the word cache tensai's tokenizer grows without end.
 const reparse = 64 << 20
 
-// Tokens counts text in a model's tokens: by the model's own tokenizer.json
+// Counter counts text in a model's tokens: by the model's own tokenizer.json
 // (DEEPCODE_CHAT_TOKENIZER) when one is set, else by OpenAI's o200k_base,
 // built in. A tokenizer.json is byte-level BPE as Qwen, Llama 3 and GPT-4o
 // ship it; a Qwen3.8 one counted 3182 of 3182 code chunks and answers as the
 // model server does. Counting is serial: tensai's tokenizer is not safe for
 // concurrent use.
-type Tokens struct {
+type Counter struct {
 	Name    string // the tokenizer.json's path, "o200k_base", or Counting's name
 	mu      sync.Mutex
 	raw     []byte // the tokenizer.json, parsed again every reparse bytes counted
@@ -29,13 +30,13 @@ type Tokens struct {
 	counted int
 }
 
-// Counting is Tokens counted by count.
-func Counting(name string, count func(string) int) *Tokens {
-	return &Tokens{Name: name, count: count}
+// Counting is a Counter counting by count.
+func Counting(name string, count func(string) int) *Counter {
+	return &Counter{Name: name, count: count}
 }
 
-// LoadTokens is the tokenizer.json at path, or o200k_base when path is "".
-func LoadTokens(path string) (*Tokens, error) {
+// Load is the tokenizer.json at path, or o200k_base when path is "".
+func Load(path string) (*Counter, error) {
 	if path == "" {
 		o200k := codec.NewO200kBase() // its vocabulary alone: tokenizer.Get links all of them
 		return Counting("o200k_base", func(s string) int { n, _ := o200k.Count(s); return n }), nil
@@ -48,11 +49,11 @@ func LoadTokens(path string) (*Tokens, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	return &Tokens{Name: path, raw: raw, bpe: bpe}, nil
+	return &Counter{Name: path, raw: raw, bpe: bpe}, nil
 }
 
 // Count is the tokens s takes.
-func (t *Tokens) Count(s string) int {
+func (t *Counter) Count(s string) int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.bpe == nil {
@@ -67,4 +68,4 @@ func (t *Tokens) Count(s string) int {
 
 // Message is the tokens s takes as a message's whole text: chat templates
 // trim it (Qwen3.8's does).
-func (t *Tokens) Message(s string) int { return t.Count(strings.TrimSpace(s)) }
+func (t *Counter) Message(s string) int { return t.Count(strings.TrimSpace(s)) }

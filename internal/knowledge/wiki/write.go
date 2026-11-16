@@ -126,7 +126,7 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 		Note: skeleton.Note(sk, fmt.Sprintf("[%s:%d-%d]", used[0].Path, used[0].StartLine, used[0].EndLine)),
 		Ask: func(ctx context.Context, p ai.Prompt) (skeleton.Draft, string, error) {
 			write, flush := progress.Lines()
-			out, err := g.Chat.Stream(ctx, p, write)
+			out, err := ai.Stream(ctx, g.Chat, p, write)
 			flush()
 			return skeleton.Parse(clean(out), sk), out, err
 		}}

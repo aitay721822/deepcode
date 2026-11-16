@@ -12,6 +12,7 @@ import (
 	"deepcode/internal/knowledge/retrieval/fusion"
 	"deepcode/internal/knowledge/retrieval/store"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/repo/index/graph"
 	"deepcode/internal/repo/index/indexer/vectorstore"
@@ -19,8 +20,8 @@ import (
 
 type Retriever struct {
 	Store   *store.Store
-	Graph   *graph.Graph // the imports, for the code the best hits are built on
-	Embed   *ai.OpenAI   // nil disables vector search
+	Graph   *graph.Graph   // the imports, for the code the best hits are built on
+	Embed   *compat.Client // nil disables vector search
 	Vectors *vectorstore.SQLite
 	Cache   *cache.Cache
 }

@@ -1,7 +1,7 @@
 // Package harness fits one question's model requests to the model's context
-// (ai.OpenAI.Context), counted in the model's tokens (Tokens). A request may
-// take a threshold of the context: CompactRatio of it, and never the room the
-// answer needs (ai.OpenAI.Room). Before an answer is gathered, the room the
+// (ai.Window), counted in the model's tokens (tokens.Counter). A request may
+// take a threshold of the context: its Ratio of it, and never the Room the
+// answer needs. Before an answer is gathered, the room the
 // threshold leaves is shared out (Share): the evidence first, then the
 // conversation so far, older turns summed up by the model when they do not fit
 // (Recall), and the background last. A gathering's request that would pass the
@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/tokens"
 )
 
 const (
@@ -43,8 +44,8 @@ const (
 // and the tokens it counted for the last request Next sent (0 with no
 // context known).
 type Fit struct {
-	model    *ai.OpenAI
-	tokens   *Tokens
+	model    ai.Chat
+	tokens   *tokens.Counter
 	counted  map[string]int // Count's, by text
 	overhead int            // the template's tokens in the gathering's last request, as the server counted them (its reply's usage, or its refusal); -1 until it did
 	slack    int            // the tokens a refusal said an answer's request took past its count
@@ -53,8 +54,8 @@ type Fit struct {
 }
 
 // New is a Fit for a question to model, counted by tokens.
-func New(model *ai.OpenAI, tokens *Tokens) *Fit {
-	return &Fit{model: model, tokens: tokens, counted: map[string]int{}, overhead: -1}
+func New(model ai.Chat, counter *tokens.Counter) *Fit {
+	return &Fit{model: model, tokens: counter, counted: map[string]int{}, overhead: -1}
 }
 
 // Count is the tokens s takes, each text counted once a question: an
@@ -75,25 +76,27 @@ func (f *Fit) Prompt(p ai.Prompt) int {
 	return size + n*perMessage
 }
 
-// Threshold is the tokens a request may take: CompactRatio of the context, but
-// never past the context less the answer's room; 0 when no context is known.
-func (f *Fit) Threshold() int { return f.threshold(f.model.Context()) }
+// Threshold is the tokens a request may take: the window's Ratio of the
+// context, but never past the context less the answer's room; 0 when no
+// context is known.
+func (f *Fit) Threshold() int { return f.threshold(f.Context()) }
 
 // threshold is Threshold for a context of window tokens.
 func (f *Fit) threshold(window int) int {
 	if window == 0 {
 		return 0
 	}
-	return min(int(cmp.Or(f.model.CompactRatio, defaultRatio)*float64(window)), window-f.model.Room())
+	w := f.model.Window()
+	return min(int(cmp.Or(w.Ratio, defaultRatio)*float64(window)), window-w.Room)
 }
 
 // Context is the model's context in tokens, 0 when unknown.
-func (f *Fit) Context() int { return f.model.Context() }
+func (f *Fit) Context() int { return f.model.Window().Context }
 
 // Room is the tokens of an answer's request that pass the threshold with the
 // slack a refusal of one taught, or math.MaxInt when no context is known.
 func (f *Fit) Room() int {
-	if f.model.Context() == 0 {
+	if f.Context() == 0 {
 		return math.MaxInt
 	}
 	return f.Threshold() - f.slack
@@ -121,7 +124,7 @@ func (f *Fit) Learn(err error, tokens int) bool {
 }
 
 // refused is the tokens the server counted in a request err refused as longer
-// than the context, which it then keeps for the model (ai.OpenAI.Learn); false
+// than the context, which it then keeps for the model (ai.Chat.Learn); false
 // when err does not say both.
 func (f *Fit) refused(err error) (int, bool) {
 	var e *ai.ErrContext
@@ -152,7 +155,7 @@ func (e *ErrSmall) Error() string {
 // conversation and the background leave when they get what they want: never
 // less than without. With no context known, each part gets what it wants.
 func (f *Fit) Share(fixed int, want Shares, rest bool) (Shares, error) {
-	if f.model.Context() == 0 {
+	if f.Context() == 0 {
 		return want, nil
 	}
 	room := f.Room() - fixed
@@ -185,9 +188,9 @@ var ErrFull = errors.New("the request does not fit the model's context")
 // much measures the template as a reply's usage does: the server's count of
 // the request less its pieces'; the context is learned, and the request fitted
 // again and sent once more. Another refusal, or a second, is ErrFull.
-func (f *Fit) Next(ctx context.Context, ex *ai.Exchange, masks func() map[int]string) (string, []ai.ToolCall, error) {
+func (f *Fit) Next(ctx context.Context, ex ai.Exchange, masks func() map[int]string) (string, []ai.ToolCall, error) {
 	for retried := false; ; retried = true {
-		if f.model.Context() > 0 {
+		if f.Context() > 0 {
 			if f.Over(f.size(ex)) {
 				if f.Masked += ex.Compact(masks()); f.Over(f.size(ex)) {
 					return "", nil, ErrFull
@@ -197,7 +200,7 @@ func (f *Fit) Next(ctx context.Context, ex *ai.Exchange, masks func() map[int]st
 		}
 		text, calls, err := ex.Next(ctx)
 		if err == nil {
-			if f.model.Context() > 0 {
+			if f.Context() > 0 {
 				f.anchor(ex)
 			}
 			return text, calls, nil
@@ -215,10 +218,10 @@ func (f *Fit) Next(ctx context.Context, ex *ai.Exchange, masks func() map[int]st
 }
 
 // size is the tokens ex's next request takes: its pieces, each counted as a
-// message's text (Tokens.Message), and the template's tokens as the server
+// message's text (tokens.Counter.Message), and the template's tokens as the server
 // last counted them, with perMessage for each piece since; before the server
 // counted one, perMessage for each and toolsNote.
-func (f *Fit) size(ex *ai.Exchange) int {
+func (f *Fit) size(ex ai.Exchange) int {
 	next, _ := ex.Size(f.tokens.Message)
 	if f.overhead < 0 {
 		return next + perMessage*ex.Added() + toolsNote
@@ -228,7 +231,7 @@ func (f *Fit) size(ex *ai.Exchange) int {
 
 // anchor takes the template's tokens from the reply ex just had: those the
 // server counted in its request less the pieces it sent.
-func (f *Fit) anchor(ex *ai.Exchange) {
+func (f *Fit) anchor(ex ai.Exchange) {
 	if in := ex.Used().InTokens; in > 0 {
 		_, sent := ex.Size(f.tokens.Message)
 		f.overhead = max(in-sent, 0)
