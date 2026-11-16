@@ -1,11 +1,12 @@
 import { Link } from '@tanstack/react-router'
 import { ArrowLeftIcon, SquareIcon } from 'lucide-react'
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getJob, watchJobOutput } from '../../../api/admin/jobs'
 import type { StreamState } from '../../../api/client'
 import { JobProgress } from '../../../components/repo/JobProgress'
 import { isActive, retrying } from '../../../components/repo/jobStage'
 import { Button } from '../../../components/ui/controls/button'
+import { Meta } from '../../../components/ui/display/meta'
 import { LoadError } from '../../../components/ui/feedback/load-error'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
 import { Spinner } from '../../../components/ui/feedback/spinner'
@@ -153,14 +154,5 @@ export function JobDetail({ id }: { id: string }) {
         <JobConsole lines={lines} liveAfter={isActive(data.job) ? (data.logs.at(-1)?.id ?? 0) : Infinity} />
       </div>
     </section>
-  )
-}
-
-function Meta({ term, children }: { term: string; children: ReactNode }) {
-  return (
-    <div>
-      <dt className="eyebrow text-muted-foreground">{term}</dt>
-      <dd className="mt-1">{children}</dd>
-    </div>
   )
 }

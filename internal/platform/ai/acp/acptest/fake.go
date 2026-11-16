@@ -28,9 +28,9 @@ import (
 type fake struct {
 	conn                             *acp.AgentSideConnection
 	name, relay, setfail             string
-	overhead, size                   int
+	overhead, size, quota            int
 	scale                            float64
-	counts, login                    bool
+	counts, login, hang, stall       bool
 	models, efforts, efforts2, modes []string
 	mu                               sync.Mutex
 	air                              bool // the client declared the AIR extension
@@ -56,8 +56,11 @@ type session struct {
 // updates report (none when 0); -models, -efforts and -modes, its options'
 // values, comma separated, the first one current, and -efforts2 the efforts
 // once the model is not the first; -setfail, the folder whose sessions' options
-// cannot be set; -login, a session/new that fails as not signed in; -relay,
-// the base URL of a server each prompt asks.
+// cannot be set; -login, a session/new that fails as not signed in; -stall,
+// one answered by nothing; -hang, prompts answered by nothing till
+// cancelled; -quota, the bytes past which a
+// prompt fails as over the subscription's limit; -relay, the base URL of a
+// server each prompt asks.
 func Main(args []string) {
 	f := &fake{sessions: map[acp.SessionId]*session{}}
 	flags := flag.NewFlagSet("acpfake", flag.ExitOnError)
@@ -70,6 +73,9 @@ func Main(args []string) {
 	efforts2 := flags.String("efforts2", "", "")
 	flags.StringVar(&f.setfail, "setfail", "", "")
 	flags.BoolVar(&f.login, "login", false, "")
+	flags.BoolVar(&f.hang, "hang", false, "")
+	flags.BoolVar(&f.stall, "stall", false, "")
+	flags.IntVar(&f.quota, "quota", 0, "")
 	flags.StringVar(&f.relay, "relay", "", "")
 	flags.Parse(args)
 	for _, o := range []struct {
@@ -100,12 +106,16 @@ const preset = "(Claude Code's system prompt)"
 
 // NewSession opens a session with its options, its instructions taken from
 // its _meta as Claude's and Codex's adapters take them.
-func (f *fake) NewSession(_ context.Context, q acp.NewSessionRequest) (acp.NewSessionResponse, error) {
-	if f.login {
-		return acp.NewSessionResponse{}, acp.NewAuthRequired(nil)
+func (f *fake) NewSession(ctx context.Context, q acp.NewSessionRequest) (acp.NewSessionResponse, error) {
+	if f.stall {
+		<-ctx.Done()
+		return acp.NewSessionResponse{}, ctx.Err()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.login {
+		return acp.NewSessionResponse{}, acp.NewAuthRequired(nil)
+	}
 	f.opened++
 	id := acp.SessionId(fmt.Sprint("s", f.opened))
 	s := &session{cwd: q.Cwd, meta: q.Meta, config: map[string]string{}}
@@ -184,6 +194,7 @@ func (f *fake) CloseSession(_ context.Context, q acp.CloseSessionRequest) (acp.C
 //	fake:warning     an AIR warning, then OK
 //	fake:systemerror Codex's silent system error: no answer
 //	fake:crash       the process exits
+//	fake:logout      OK, then every session/new fails as not signed in
 //	fake:tool        a tool call, a permission and a file asked for
 //	fake:slow        nothing till the prompt is cancelled
 //	fake:big         an answer of 1.1 MB
@@ -205,6 +216,10 @@ func (f *fake) Prompt(ctx context.Context, q acp.PromptRequest) (acp.PromptRespo
 	}
 	s.bytes += text.Len()
 	f.mu.Unlock()
+	if f.hang {
+		<-ctx.Done()
+		return acp.PromptResponse{StopReason: acp.StopReasonCancelled}, nil
+	}
 	say := func(u acp.SessionUpdate) {
 		_ = f.conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: q.SessionId, Update: u})
 	}
@@ -213,7 +228,11 @@ func (f *fake) Prompt(ctx context.Context, q acp.PromptRequest) (acp.PromptRespo
 	}
 	reply, stop := "OK", acp.StopReasonEndTurn
 	var counted *usage.Usage
-	switch t := text.String(); {
+	t := text.String()
+	if f.quota > 0 && len(t) > f.quota {
+		t = "fake:failure:limit:"
+	}
+	switch {
 	case f.relay != "":
 		var err error
 		if reply, counted, err = f.ask(ctx, s.static, t); err != nil {
@@ -251,6 +270,10 @@ func (f *fake) Prompt(ctx context.Context, q acp.PromptRequest) (acp.PromptRespo
 		reply = ""
 	case strings.Contains(t, "fake:crash"):
 		os.Exit(3)
+	case strings.Contains(t, "fake:logout"):
+		f.mu.Lock()
+		f.login = true
+		f.mu.Unlock()
 	case strings.Contains(t, "fake:tool"):
 		reply = f.tool(ctx, q.SessionId, say)
 	case strings.Contains(t, "fake:slow"):
@@ -308,11 +331,14 @@ func (f *fake) echo(s *session, text string) string {
 	return string(b)
 }
 
-// tool reports a tool call of the agent's own, asks for permission to run it
-// and to read a file, and says what it was told.
+// tool reports a tool call of the agent's own, asks for permission to run it,
+// to read and write a file and to run a command, each named by more than 80
+// characters, ending in Long (which the client's log leaves out), and says
+// what it was told.
 func (f *fake) tool(ctx context.Context, id acp.SessionId, say func(acp.SessionUpdate)) string {
-	say(acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{ToolCallId: "t1", Title: "Read win.ini", Kind: acp.ToolKindRead}})
-	title := "Run whoami"
+	long := strings.Repeat("x", 80) + " Long"
+	say(acp.SessionUpdate{ToolCall: &acp.SessionUpdateToolCall{ToolCallId: "t1", Title: "Read " + long, Kind: acp.ToolKindRead}})
+	title := "Run " + long
 	res, err := f.conn.RequestPermission(ctx, acp.RequestPermissionRequest{SessionId: id, ToolCall: acp.ToolCallUpdate{ToolCallId: "t2", Title: &title},
 		Options: []acp.PermissionOption{{OptionId: "yes", Name: "Allow", Kind: acp.PermissionOptionKindAllowOnce},
 			{OptionId: "no", Name: "Reject", Kind: acp.PermissionOptionKindRejectOnce}}})
@@ -322,7 +348,9 @@ func (f *fake) tool(ctx context.Context, id acp.SessionId, say func(acp.SessionU
 	} else if err == nil && res.Outcome.Cancelled != nil {
 		outcome = "cancelled"
 	}
-	_, read := f.conn.ReadTextFile(ctx, acp.ReadTextFileRequest{SessionId: id, Path: "/etc/passwd"})
+	_, read := f.conn.ReadTextFile(ctx, acp.ReadTextFileRequest{SessionId: id, Path: "/etc/" + long})
+	_, _ = f.conn.WriteTextFile(ctx, acp.WriteTextFileRequest{SessionId: id, Path: "/etc/" + long, Content: "x"})
+	_, _ = f.conn.CreateTerminal(ctx, acp.CreateTerminalRequest{SessionId: id, Command: long})
 	return fmt.Sprintf("permission %s; read refused: %v", outcome, read != nil)
 }
 

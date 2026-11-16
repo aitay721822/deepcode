@@ -1,16 +1,18 @@
 // Package proc runs an agent's process for package acp: its command line
-// split as a shell splits one, a double-quoted part kept whole; its
-// environment only what the OS, Node, npm and a proxy need, and what acp adds;
-// and its whole process tree ended with it (a Windows job object, a process
-// group elsewhere), since an agent started by npx runs node, which runs the
-// agent's own CLI, which starts more (Codex's git).
+// split as a shell splits one, a double-quoted part kept whole, and the name
+// it gives the agent; its environment only what the OS, Node, npm and a proxy
+// need, and what acp adds; and its whole process tree ended with it (a Windows
+// job object, a process group elsewhere), since an agent started by npx runs
+// node, which runs the agent's own CLI, which starts more (Codex's git).
 package proc
 
 import (
+	"cmp"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -120,6 +122,39 @@ func Split(line string) ([]string, error) {
 		args = append(args, word.String())
 	}
 	return args, nil
+}
+
+// Name is the package a runner (npx, bunx, pnpm dlx, uvx) runs in line, the
+// first scoped one (@scope/pkg) else the first word after the runner, without
+// its scope and version; else the program's name; acp when line names none.
+// No word with :// in it is taken, nor after a runner one with a colon, as a
+// flag's value (a registry's URL, user:k3y@host) may hold a key; an unscoped
+// package after a flag's value given apart from it (--token k3y pkg) is not
+// found, so give that one as --token=k3y.
+func Name(line string) string {
+	var words []string
+	args, _ := Split(line)
+	for _, w := range args {
+		if !strings.HasPrefix(w, "-") && w != "dlx" && w != "x" && !strings.Contains(w, "://") {
+			words = append(words, w)
+		}
+	}
+	base := func(w string) string { return w[strings.LastIndexAny(w, `/\`)+1:] }
+	name := ""
+	if len(words) > 0 {
+		name = strings.ToLower(base(words[0]))
+		name = strings.TrimSuffix(name, filepath.Ext(name))
+	}
+	if slices.Contains([]string{"npx", "bunx", "pnpx", "pnpm", "yarn", "bun", "uvx"}, name) {
+		pkgs := slices.DeleteFunc(words[1:], func(w string) bool { return strings.Contains(w, ":") })
+		if i := slices.IndexFunc(pkgs, func(w string) bool { return strings.HasPrefix(w, "@") && strings.Contains(w, "/") }); i > 0 {
+			pkgs = pkgs[i:]
+		}
+		if len(pkgs) > 0 {
+			name, _, _ = strings.Cut(base(strings.TrimPrefix(pkgs[0], "@")), "@")
+		}
+	}
+	return cmp.Or(name, "acp")
 }
 
 // passed are the variables an agent gets from this process's environment:

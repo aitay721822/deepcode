@@ -132,7 +132,7 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 		&repoapi.API{Sessions: sessions, Tokens: apiTokens, Catalog: cat, Importer: &importer.Service{Catalog: cat}, Servers: servers, Queue: queue,
 			Retriever: retriever, Chat: conversations, Wiki: view.Reader{Store: wikis, Graph: graphs},
 			Webhooks: &hooks.API{Catalog: cat, Box: box}},
-		&adminapi.API{Sessions: sessions, Accounts: accounts, Roles: roles, Servers: servers, Catalog: cat, Queue: queue, Bus: bus, Usage: meter},
+		&adminapi.API{Sessions: sessions, Accounts: accounts, Roles: roles, Servers: servers, Catalog: cat, Queue: queue, Bus: bus, Usage: meter, Chat: chatP},
 		gin.H{"status": "ok", "chatModel": chatName, "embeddingModel": cfg.EmbedModel},
 		ui, loopback, cfg.TrustedProxies)
 	if err != nil {

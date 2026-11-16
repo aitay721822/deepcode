@@ -67,6 +67,26 @@ func TestSplit(t *testing.T) {
 	}
 }
 
+// TestName: an agent's name is the package a runner runs or the program's,
+// never a flag's value with a colon, which may hold a key.
+func TestName(t *testing.T) {
+	for line, want := range map[string]string{
+		"npx -y @agentclientprotocol/claude-agent-acp@0.107.3": "claude-agent-acp", "gemini --acp": "gemini",
+		`"C:\Program Files\nodejs\npx.cmd" -y @agentclientprotocol/codex-acp`: "codex-acp", "pnpm dlx opencode-ai acp": "opencode-ai",
+		`C:\bin\opencode.exe acp`: "opencode", "": "acp", `C:\bin\ --acp`: "acp", "bunx --token=k3y codex-acp": "codex-acp",
+		"npx -y --registry https://user:k3y@registry.example/npm/ @agentclientprotocol/claude-agent-acp": "claude-agent-acp",
+
+		"npx --token k3y @agentclientprotocol/codex-acp@2.6.0": "codex-acp", // a scoped package after a flag's value
+		"npx --registry user:k3y@host codex-acp":               "codex-acp", // a value with a colon
+		"npx codex-acp @notes":                                 "codex-acp", // an argument, not a scoped package
+		"npx":                                                  "npx",
+	} {
+		if got := Name(line); got != want {
+			t.Errorf("%q: %s, want %s", line, got, want)
+		}
+	}
+}
+
 // TestEnv: an agent gets the OS's, npm's and the proxy's variables and what is
 // added, never deepcode's keys nor a host agent's.
 func TestEnv(t *testing.T) {

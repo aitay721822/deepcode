@@ -232,6 +232,14 @@ func endToEnd(t *testing.T, provider string) {
 		chatName = (&acp.Agent{Command: cfg.ACPCommand}).Name()
 	}
 	checkUsage(t, admin, repo.ID, chatName)
+	var model struct {
+		Provider, Name string
+		Agent          *struct{ Name, Version, Trouble string }
+	}
+	if admin.get("/api/admin/model", &model); model.Provider != provider || model.Name != chatName ||
+		provider == app.ProviderACP && (model.Agent == nil || *model.Agent != struct{ Name, Version, Trouble string }{"claude-agent-acp", "1.0.0", ""}) {
+		t.Fatalf("the chat model: %+v %+v", model, model.Agent)
+	}
 	var conv struct {
 		ID         string `json:"id"`
 		SnapshotID string `json:"snapshotId"`

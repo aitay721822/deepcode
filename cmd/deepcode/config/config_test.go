@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -154,6 +155,9 @@ func TestBadValues(t *testing.T) {
 				`DEEPCODE_ACP_SESSIONS="3": want unset`}, hide: "k3y"},
 		{name: "acp switch", file: "chat_provider: acp\nacp_command: a\nacp_user_config: maybe\n", want: []string{`acp_user_config in deepcode.yaml="maybe": want true or false`}},
 		{name: "acp sessions", file: "chat_provider: acp\nacp_command: a\nacp_sessions: 0\n", want: []string{`acp_sessions in deepcode.yaml="0": want a whole number from 1`}},
+		{name: "acp read once", file: "chat_provider: acp\nacp_command: a\nembed_base_url: ftp://x\nreasoning_effort: [a]\n",
+			want: []string{`embed_base_url in deepcode.yaml="ftp://x": want an http or https URL`, "reasoning_effort in deepcode.yaml=\"[a]\": want text"}},
+		{name: "acp command list", file: "chat_provider: acp\nacp_command: [a, k3y]\n", want: []string{"acp_command in deepcode.yaml: want text"}, hide: "k3y"},
 		{name: "api", env: map[string]string{"DEEPCODE_CHAT_API": "chat"}, want: []string{`DEEPCODE_CHAT_API="chat": want one of completions, responses`}},
 		{name: "schema", env: map[string]string{"DEEPCODE_CHAT_SCHEMA": "both"}, want: []string{`DEEPCODE_CHAT_SCHEMA="both": want one of server, prompt`}},
 		{name: "temperature", env: map[string]string{"DEEPCODE_TEMPERATURE": "3"}, want: []string{`DEEPCODE_TEMPERATURE="3": want a number from 0 to 2`}},
@@ -209,6 +213,9 @@ func TestBadValues(t *testing.T) {
 			}
 			if c.hide != "" && err != nil && strings.Contains(err.Error(), c.hide) {
 				t.Errorf("%v shows %q", err, c.hide)
+			}
+			if lines := strings.Split(fmt.Sprint(err), "\n"); err != nil && len(slices.Compact(slices.Sorted(slices.Values(lines)))) != len(lines) {
+				t.Errorf("a value reported twice: %v", err)
 			}
 		})
 	}

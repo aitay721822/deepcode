@@ -114,11 +114,14 @@ func serve(addr, dir string) error {
 		srv.Shutdown(shutdown)
 	})
 
-	chat := orNone(a.ChatName())
+	chat, embed := orNone(a.ChatName()), orNone(cfg.EmbedModel)
 	if cfg.ChatProvider == app.ProviderACP {
 		chat = "the agent " + chat
+		if cfg.EmbedModel == "" {
+			embed = "off, as an agent has none: set embed_model and embed_base_url for vector search"
+		}
 	}
-	log.Printf("deepcode listening on http://%s (data: %s, chat: %s, embeddings: %s)", ln.Addr(), data, chat, orNone(cfg.EmbedModel))
+	log.Printf("deepcode listening on http://%s (data: %s, chat: %s, embeddings: %s)", ln.Addr(), data, chat, embed)
 	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		stop()
 		wg.Wait()

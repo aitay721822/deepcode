@@ -115,7 +115,8 @@ func counted(u *acp.Usage) ai.Usage {
 }
 
 // session opens a session for a request with static as its instructions, on
-// the running process, counted open on it until close.
+// the running process, counted open on it until close; a session the agent
+// refuses (signed out since, a setting it no longer takes) is noted.
 func (a *Agent) session(ctx context.Context, static string) (*session, error) {
 	r, err := a.agent(ctx)
 	if err != nil {
@@ -123,6 +124,7 @@ func (a *Agent) session(ctx context.Context, static string) (*session, error) {
 	}
 	s, err := a.open(ctx, r, usage.Repository(ctx), static)
 	if err != nil {
+		a.note(ctx, r, err)
 		a.release(r)
 		return nil, err
 	}
@@ -186,7 +188,7 @@ func (a *Agent) meta(kind, static string) (map[string]any, string) {
 // Effort when set, each one of the values the agent lists for it, or the
 // setting is wrong; and the mode to read-only where the agent has one. Each
 // is checked by the options as the one set before left them, as an agent's
-// thought levels may be the model's.
+// thought levels may be the model's. The model's value is kept (Status).
 func (a *Agent) configure(ctx context.Context, s *session, options []acp.SessionConfigOption) error {
 	for _, want := range []struct {
 		category      acp.SessionConfigOptionCategory
@@ -196,9 +198,7 @@ func (a *Agent) configure(ctx context.Context, s *session, options []acp.Session
 		if want.value == "" {
 			continue
 		}
-		i := slices.IndexFunc(options, func(o acp.SessionConfigOption) bool {
-			return o.Select != nil && o.Select.Category != nil && *o.Select.Category == want.category
-		})
+		i := find(options, want.category)
 		var values []string
 		if i >= 0 {
 			values = choices(options[i].Select.Options)
@@ -222,7 +222,21 @@ func (a *Agent) configure(ctx context.Context, s *session, options []acp.Session
 			options = res.ConfigOptions
 		}
 	}
+	model := a.Model
+	if i := find(options, acp.SessionConfigOptionCategoryModel); model == "" && i >= 0 {
+		model = string(options[i].Select.CurrentValue)
+	}
+	a.mu.Lock()
+	a.model = model
+	a.mu.Unlock()
 	return nil
+}
+
+// find is the index of the select option of category in options, -1 for none.
+func find(options []acp.SessionConfigOption, category acp.SessionConfigOptionCategory) int {
+	return slices.IndexFunc(options, func(o acp.SessionConfigOption) bool {
+		return o.Select != nil && o.Select.Category != nil && *o.Select.Category == category
+	})
 }
 
 // choices are the values a select option offers, grouped or not.
@@ -286,8 +300,9 @@ func transcript(p ai.Prompt) string {
 // ask prompts s with text under a turn of Sessions and RPM, relaying the
 // answer to onDelta, and fails as design 5.5 says: a failure the agent typed
 // (failed), Codex's silent system error, which retires the process, a stop
-// for a refusal or for too many turns.
-func (s *session) ask(ctx context.Context, text string, onDelta func(string)) (result, error) {
+// for a refusal or for too many turns; what the prompt came to is noted
+// (note), not a wait for its turn, which is deepcode's queue.
+func (s *session) ask(ctx context.Context, text string, onDelta func(string)) (_ result, err error) {
 	select {
 	case s.a.slots <- struct{}{}:
 	case <-ctx.Done():
@@ -297,6 +312,7 @@ func (s *session) ask(ctx context.Context, text string, onDelta func(string)) (r
 	if err := s.a.turns.Wait(ctx, s.a.RPM); err != nil {
 		return result{}, err
 	}
+	defer func() { s.a.note(ctx, s.r, err) }()
 	t := &turn{answer: &ai.Answer{OnDelta: onDelta}}
 	s.r.cl.watch(s.id, t)
 	res, err := s.r.conn.Prompt(ctx, acp.PromptRequest{SessionId: s.id, Prompt: []acp.ContentBlock{acp.TextBlock(text)}})
@@ -326,6 +342,24 @@ func (s *session) ask(ctx context.Context, text string, onDelta func(string)) (r
 		return out, ctx.Err()
 	}
 	return out, ai.Kinded(fmt.Errorf("%s: the agent stopped its answer: %s", name, res.StopReason), ai.ErrFailed)
+}
+
+// note keeps what a prompt on r came to (Status): an answer marks r answered
+// and, once r serves (a.now, so not while start probes it), clears the starts
+// failed and the last failure; a failure the caller did not cancel, a
+// timeout too, is the last failure.
+func (a *Agent) note(ctx context.Context, r *running, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case err == nil:
+		r.answered = true
+		if r == a.now {
+			a.fails, a.trouble = 0, nil
+		}
+	case !errors.Is(ctx.Err(), context.Canceled):
+		a.trouble, a.at = ai.Cause(ctx, err), time.Now()
+	}
 }
 
 // fail is err, which step got from r, fit to return: an ai.ErrUnavailable

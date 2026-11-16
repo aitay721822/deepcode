@@ -22,7 +22,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -62,28 +61,33 @@ type Agent struct {
 	mu      sync.Mutex // guards what follows
 	now     *running
 	live    map[*running]bool // every process started and not stopped: now, one starting, retired ones still serving
-	fails   int               // starts failed in a row
+	fails   int               // starts failed since the agent last answered (note)
 	retry   time.Time         // when the next start may be tried
-	last    error             // the last start's failure
+	last    error             // the last start's failure, which requests get till retry
 	closed  bool
-	learned int       // a context an agent refused a request by
-	size    int       // the context the agent reported
-	probed  bool      // Overhead and Scale were measured
-	over    int       // Overhead
-	scales  []float64 // the Scales the last requests showed
+	learned int                 // a context an agent refused a request by
+	size    int                 // the context the agent reported
+	probed  bool                // Overhead and Scale were measured
+	over    int                 // Overhead
+	scales  []float64           // the Scales the last requests showed
+	info    *acp.Implementation // the name and version the agent gave, nil when it gave none
+	model   string              // the value of its model option
+	trouble error               // the last failure since the agent last answered
+	at      time.Time           // trouble's
 }
 
 // running is an agent's process, its connection, and what it said it is.
 type running struct {
-	p       *proc.Process
-	conn    *acp.ClientSideConnection
-	cl      *client
-	stderr  *os.File
-	kind    string // claude, codex, or "" for an adapter deepcode has no options for
-	closes  bool   // it offers session/close
-	open    int    // sessions open now
-	opened  int    // sessions opened in all
-	retired bool   // to end once its last session closes
+	p        *proc.Process
+	conn     *acp.ClientSideConnection
+	cl       *client
+	stderr   *os.File
+	kind     string // claude, codex, or "" for an adapter deepcode has no options for
+	closes   bool   // it offers session/close
+	open     int    // sessions open now
+	opened   int    // sessions opened in all
+	retired  bool   // to end once its last session closes
+	answered bool   // a prompt of it was answered
 }
 
 // recycle is the sessions an agent's process opens before another takes its
@@ -94,31 +98,13 @@ const recycle = 200
 // grace is how long an agent has to end once its input closes.
 const grace = 5 * time.Second
 
-// Name is the agent's name as its command line gives it, then its model:
-// claude-agent-acp/default, codex-acp/gpt-6.1-sol, gemini/default.
-func (a *Agent) Name() string { return named(a.Command) + "/" + cmp.Or(a.Model, "default") }
+// startLimit is the least time a start has, as a runner may download the
+// agent first (a variable, which tests shorten).
+var startLimit = 2 * time.Minute
 
-// named is the package a runner (npx, bunx, pnpm dlx, uvx) runs in line,
-// without its scope and version, else the program's name.
-func named(line string) string {
-	var words []string
-	args, _ := proc.Split(line)
-	for _, w := range args {
-		if !strings.HasPrefix(w, "-") && w != "dlx" && w != "x" {
-			words = append(words, w)
-		}
-	}
-	if len(words) == 0 {
-		return "acp"
-	}
-	base := func(w string) string { return w[strings.LastIndexAny(w, `/\`)+1:] }
-	name := strings.ToLower(base(words[0]))
-	name = strings.TrimSuffix(name, filepath.Ext(name))
-	if slices.Contains([]string{"npx", "bunx", "pnpx", "pnpm", "yarn", "bun", "uvx"}, name) && len(words) > 1 {
-		name, _, _ = strings.Cut(base(strings.TrimPrefix(words[1], "@")), "@")
-	}
-	return name
-}
+// Name is the agent's name as its command line gives it (proc.Name), then its
+// model: claude-agent-acp/default, codex-acp/gpt-6.1-sol, gemini/default.
+func (a *Agent) Name() string { return proc.Name(a.Command) + "/" + cmp.Or(a.Model, "default") }
 
 // SchemaMode is ai.SchemaPrompt: an agent takes no response format.
 func (a *Agent) SchemaMode() string { return ai.SchemaPrompt }
@@ -211,6 +197,9 @@ func (a *Agent) agent(ctx context.Context) (*running, error) {
 	case a.closed:
 		return nil, ai.Kinded(fmt.Errorf("%s: deepcode is shutting down", a.Name()), ai.ErrUnavailable)
 	case r != nil && (r.retired || r.ended()):
+		if r.ended() && !r.answered { // it started, then ended before it answered: a start that failed
+			a.backoff(ai.Kinded(fmt.Errorf("%s: the agent ended before it answered (its log: %s)", a.Name(), filepath.Join(a.Dir, "agent.log")), ai.ErrUnavailable))
+		}
 		a.now, r.retired = nil, true
 		if r.open == 0 {
 			go a.stop(r)
@@ -226,25 +215,32 @@ func (a *Agent) agent(ctx context.Context) (*running, error) {
 		r, err = a.start()
 		a.mu.Lock()
 		if err != nil {
-			a.fails++
-			wait := min(5*time.Second<<min(a.fails-1, 6), 5*time.Minute)
-			if errors.Is(err, ai.ErrRefused) {
-				wait = min(wait, 30*time.Second)
-			}
-			a.last, a.retry = err, time.Now().Add(wait)
-			log.Printf("acp: %v", err)
+			a.backoff(err)
 			return nil, err
 		}
 		if a.closed {
 			go a.stop(r)
 			return nil, ai.Kinded(fmt.Errorf("%s: deepcode is shutting down", a.Name()), ai.ErrUnavailable)
 		}
-		a.fails, a.last, a.now = 0, nil, r
+		a.now = r // fails stay till it answers (note)
 	}
 	r.open++
 	r.opened++
 	r.retired = r.retired || r.opened >= recycle
 	return r, nil
+}
+
+// backoff counts a start failed with err, under a.mu, and sets when the
+// next may be tried: from 5 s, doubling, to 5 minutes, or at most 30 s when
+// the agent refused, as the user may sign it in or fix the setting meanwhile.
+func (a *Agent) backoff(err error) {
+	a.fails++
+	wait := min(5*time.Second<<min(a.fails-1, 6), 5*time.Minute)
+	if errors.Is(err, ai.ErrRefused) {
+		wait = min(wait, 30*time.Second)
+	}
+	a.last, a.retry, a.trouble, a.at = err, time.Now().Add(wait), err, time.Now()
+	log.Printf("acp: %v", err)
 }
 
 // release counts a session of r closed, and ends r once a retired one has
@@ -290,18 +286,22 @@ func (a *Agent) stop(r *running) {
 // start runs the agent's process, its standard error in Dir/agent.log,
 // initializes it, and opens a session to check the model and effort it is
 // set to; the first process also measures its Overhead and Scale (probe). It
-// is bounded by 2 minutes, the probe's requests by Timeout, not by the
-// request that needed it.
+// is bounded by Timeout, at least startLimit, the probe's requests each by
+// Timeout, not by the request that needed it. Its log is appended to, and
+// starts anew past 10 MB (rotate).
 func (a *Agent) start() (*running, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	limit := max(a.Timeout, startLimit)
+	ctx, cancel := context.WithTimeoutCause(context.Background(), limit,
+		ai.Kinded(fmt.Errorf("%s: not started within %s: %w", a.Name(), limit, context.DeadlineExceeded), ai.ErrUnavailable))
 	defer cancel()
 	if err := os.MkdirAll(a.Dir, 0o700); err != nil {
-		return nil, err
+		return nil, ai.Kinded(fmt.Errorf("%s: %w", a.Name(), err), ai.ErrUnavailable)
 	}
 	logPath := filepath.Join(a.Dir, "agent.log")
-	stderr, err := os.OpenFile(logPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600) // it may quote prompts
+	rotate(logPath)
+	stderr, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600) // it may quote prompts; a retired process still writes to it
 	if err != nil {
-		return nil, err
+		return nil, ai.Kinded(fmt.Errorf("%s: %w", a.Name(), err), ai.ErrUnavailable)
 	}
 	var extra []string
 	if a.CodexHome != "" {
@@ -337,12 +337,23 @@ func (a *Agent) start() (*running, error) {
 		return nil, ai.Kinded(fmt.Errorf("%s: initialize: %w (its log: %s)", a.Name(), err, logPath), ai.ErrUnavailable)
 	}
 	r.kind, r.closes = kind(info, a.Command), info.AgentCapabilities.SessionCapabilities.Close != nil
+	a.mu.Lock()
+	a.info = info.AgentInfo
+	a.mu.Unlock()
 	a.warned.Do(func() { a.warn(r.kind) })
 	if err := a.probe(ctx, r); err != nil {
 		a.stop(r)
 		return nil, err
 	}
 	return r, nil
+}
+
+// rotate moves the log at path aside, to path.old, once it passes 10 MB; a
+// process holding it open may keep it where it is (Windows).
+func rotate(path string) {
+	if fi, err := os.Stat(path); err == nil && fi.Size() > 10<<20 {
+		_ = os.Rename(path, path+".old")
+	}
 }
 
 // warn logs the settings an agent of kind leaves unused or unmet (design 5.6).
@@ -407,7 +418,7 @@ func (a *Agent) probe(ctx context.Context, r *running) error {
 	s, err := a.open(ctx, r, 0, "")
 	if err != nil {
 		a.release(r)
-		return err
+		return ai.Cause(ctx, err) // the start's time ran out: why, an ai.ErrUnavailable
 	}
 	defer s.close()
 	if probed {
@@ -422,6 +433,9 @@ func (a *Agent) probe(ctx context.Context, r *running) error {
 		res, err := s.ask(ctx, text, nil)
 		a.meter(ctx, start, held, res, err)
 		held = append(held, res.text)
+		if err != nil && ctx.Err() != nil { // the agent did not answer in time: it may later
+			err = ai.Kinded(ai.Cause(ctx, err), ai.ErrUnavailable)
+		}
 		return res, err
 	}
 	first, err := ask(probeAsk)
@@ -448,4 +462,27 @@ func (a *Agent) probe(ctx context.Context, r *running) error {
 	}
 	log.Printf("acp: %s: context %d tokens, Overhead %d, Scale %.2f", a.Name(), cmp.Or(a.Context, a.size), a.over, scale)
 	return nil
+}
+
+// Status is what the admin console shows of an agent: the name and version it
+// gave as it last started, the value of its model option, and the last
+// failure since it last answered, a start's too, with its time.
+type Status struct {
+	Name, Version, Model string
+	Trouble              string
+	At                   time.Time
+}
+
+// Status is the agent's Status; empty but for the trouble before it starts.
+func (a *Agent) Status() Status {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s := Status{Model: a.model}
+	if a.info != nil {
+		s.Name, s.Version = a.info.Name, a.info.Version
+	}
+	if a.trouble != nil {
+		s.Trouble, s.At = a.trouble.Error(), a.at
+	}
+	return s
 }

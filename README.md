@@ -21,7 +21,7 @@
 - **語言**：C#/.NET、Go、Java、JavaScript、TypeScript、Python、Rust。
 - **權限**：RBAC（使用者、角色、權限）限制每個人能看到哪些 Repository；後台管理帳號、角色、Git 伺服器，並即時顯示背景工作的進度與 LLM 用量。
 - **MCP**：6 個工具（讀 Wiki、搜尋程式碼、讀檔、問答），以個人 token 或 OAuth 接入代理程式。
-- **自架**：資料庫與索引都在你的機器上；Chat 與 Embedding 接任何 OpenAI 相容的 API，自架的模型也行。
+- **自架**：資料庫與索引都在你的機器上；Chat 與 Embedding 接任何 OpenAI 相容的 API，自架的模型也行；沒有 API 但有 Claude 或 ChatGPT 訂閱時，也能讓本機的 agent 回答（[ACP](#用訂閱的-agentacp)）。
 
 ## 截圖
 
@@ -78,6 +78,44 @@
    ```
 
    第一次啟動會建立管理員 `admin`，密碼取自 `DEEPCODE_ADMIN_PASSWORD`；未設定時會產生一次性密碼並印在 log。資料寫在 `./data`。`deepcode --help` 列出所有指令與旗標。
+
+## 用訂閱的 agent（ACP）
+
+**使用 ACP 時只能有一位使用者：訂閱人本人。** 使用 ACP 時，deepcode 只接一個訂閱帳號，所以也只能有一位使用者，就是這個訂閱帳號的訂閱人。你可以在 deepcode 裡開多個帳號來隔離專案，但這些帳號都必須是訂閱人自己在用。任何其他人都不可以使用屬於訂閱人的訂閱額度，不論是透過 deepcode 的網頁、MCP、API token，還是其他任何管道。這是 Anthropic 與 OpenAI 對訂閱帳號的規定（[Anthropic](https://code.claude.com/docs/en/legal-and-compliance)、[OpenAI](https://openai.com/policies/terms-of-use/)）。要讓多人使用，請改用 API key 計費的 OpenAI 相容端點（`chat_provider: openai`）。
+
+`chat_provider: acp` 讓本機的 agent 透過 [Agent Client Protocol](https://agentclientprotocol.com) 回答，用的是它登入的訂閱：Claude Code、Codex，或 Gemini CLI 等支援 ACP 的 agent。deepcode 不碰 agent 的登入，登入一律在 agent 自己的流程完成，而且要用執行 deepcode 的同一個 OS 使用者。
+
+1. 登入 agent（npx 需要 Node.js，Claude 的 adapter 需要 Node.js 22 以上）：Claude Code 用 `claude` 的 `/login`。Codex 給它一個 deepcode 專用的資料夾，在那裡登入一次，再把 `acp_codex_home` 設成同一個資料夾：
+
+   ```bash
+   CODEX_HOME=/path/to/deepcode-codex codex login
+   ```
+
+   不設 `acp_codex_home` 時 Codex 讀你的 `~/.codex`，其中的 AGENTS.md、MCP server、plugin 與 hook 都會加進每個請求。
+
+2. 設定（第一次執行時 npx 會先下載 agent，可以先手動跑一次）：
+
+   ```yaml
+   chat_provider: acp
+   acp_command: npx -y @agentclientprotocol/claude-agent-acp
+   # acp_command: npx -y @agentclientprotocol/codex-acp
+   # acp_codex_home: /path/to/deepcode-codex
+   # chat_model: sonnet          # agent 的 model 選項，不設時用 agent 的預設
+   # reasoning_effort: high      # agent 的 thought level 選項
+   # acp_sessions: 2             # 同時進行的 prompt 數
+   # embed_base_url: http://host:1234/v1
+   # embed_model: your-embedding-model
+   ```
+
+每個請求都是一個新的 session，在 `data/acp/work/` 下該 Repository 自己的空資料夾裡執行（不屬於任何 Repository 的請求共用一個），各 Repository 互不相通。deepcode 的指示會取代 Claude 的整個 system prompt 與 Codex 的 custom instructions。agent 拿不到 deepcode 的任何工具、檔案或終端機，它要求的權限一律被拒絕。Codex 以唯讀模式執行。Claude 預設不載入你的設定、CLAUDE.md、MCP server 與 plugin，`acp_user_config: true` 才載入；claude.ai 的 connectors 也預設關閉，`acp_claude_connectors: true` 才打開，打開後從 session 的第二個 prompt 起，每次約多 16k token。其他 agent 的這些都由它自己決定，deepcode 關不掉：它的指示、設定、MCP server 與工具都會帶進每個 session，deepcode 的指示則放在 prompt 開頭。後台的「模型與用量」頁顯示 agent 的名稱與版本、context、Overhead 與 Scale，以及最後一次失敗（例如未登入）。agent 沒回報的 token 以本地 tokenizer 估算。
+
+限制：
+
+- agent 不接受 `temperature`、輸出上限與 response format：`chat_base_url`、`chat_api_key`、`chat_api`、`temperature`、`max_output_tokens` 設了會報錯，`chat_schema` 只能是 `prompt` 或不設。
+- 比 API 慢。Claude 一個 JSON 請求約 1 到 4 秒、一題問答約 10 秒，Codex 慢上數倍。
+- Codex 在唯讀模式下仍能用自己的 shell 讀檔，讀得到執行 deepcode 的 OS 使用者能讀的檔案。`data` 放在 git repository 裡時，Codex 還會把從那個 repository 根目錄到工作資料夾之間的 AGENTS.md 加進每個請求。
+- agent 沒有 Embedding，向量檢索要另接 Embedding API（`embed_base_url` 與 `embed_model`，不沿用 chat 的設定）。不設時只用全文與 Symbol 檢索。
+- 錯誤訊息與 log 會帶有 agent 回報的內容（例如額度何時重置）和資料夾路徑。agent 自己的輸出寫在 `data/acp/agent.log`（啟動 agent 時若已超過 10 MB，先移到 `agent.log.old`），可能引用 prompt 的內容，也就是你的程式碼。
 
 ## 升級
 

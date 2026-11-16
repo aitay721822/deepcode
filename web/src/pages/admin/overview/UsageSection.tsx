@@ -1,14 +1,15 @@
 import { Link } from '@tanstack/react-router'
 import { useId, useMemo, useState } from 'react'
-import { listUsage } from '../../../api/admin/usage'
+import { listUsage } from '../../../api/admin/model'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../../components/ui/display/table'
 import { LoadError } from '../../../components/ui/feedback/load-error'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
 import { Label } from '../../../components/ui/form/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../components/ui/form/select'
 import { useApi } from '../../../lib/useApi'
-import type { UsageRow } from '../../../types/admin/usage'
+import type { UsageRow } from '../../../types/admin/model'
 import { SectionHead } from '../SectionHead'
+import { ModelCard } from './ModelCard'
 
 const ranges = [
   { days: 7, label: '7 天' },
@@ -135,8 +136,8 @@ function Cached({ row }: { row: Counts }) {
 }
 
 /**
- * The models' spend per repository over a chosen span of days: the calls, input, the cached part of it, output, and
- * time; tokens estimated where the server counted none.
+ * The chat model as it stands (ModelCard), then the models' spend per repository over a chosen span of days: the
+ * calls, input, the cached part of it, output, and time; tokens estimated where the server counted none.
  */
 export function UsageSection() {
   const rangeId = useId()
@@ -147,7 +148,7 @@ export function UsageSection() {
 
   return (
     <section>
-      <SectionHead title="用量">
+      <SectionHead title="模型與用量">
         <div className="flex items-center gap-2">
           <Label htmlFor={rangeId} className="font-normal text-muted-foreground">
             期間
@@ -166,6 +167,9 @@ export function UsageSection() {
           </Select>
         </div>
       </SectionHead>
+      <div className="mb-8">
+        <ModelCard />
+      </div>
       <p className="mb-4 text-[13px] text-muted-foreground">
         模型伺服器回報的 Token 數。伺服器沒有回報 Token 數的呼叫（例如訂閱 agent 的回答、被拒絕的請求）記為「未回報」，
         其中有回答的以本地 tokenizer 估算，標示「估算」。Input 含 Cached

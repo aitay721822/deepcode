@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -27,61 +26,16 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// metered keeps what an Agent meters.
-type metered struct {
-	mu   sync.Mutex
-	rows []usage.Usage
-}
-
-// Record keeps u.
-func (m *metered) Record(_ context.Context, _ string, u usage.Usage) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	u.Elapsed = 0 // the Windows clock may say 0 for a fast request
-	m.rows = append(m.rows, u)
-}
-
-// all is what was metered so far.
-func (m *metered) all() []usage.Usage {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]usage.Usage(nil), m.rows...)
-}
-
-// quarter counts a fourth of a text's bytes as tokens, as the fake does.
-func quarter(s string) int { return len(s) / 4 }
-
 // fake is an Agent on this test binary run as the fake agent with flags, set
 // as set says, closed when the test ends.
-func fake(t *testing.T, flags string, set ...func(*Agent)) (*Agent, *metered) {
-	m := &metered{}
-	a := &Agent{Command: `"` + os.Args[0] + `" acpfake ` + flags, Dir: t.TempDir(), Timeout: time.Minute, Count: quarter, Meter: m}
+func fake(t *testing.T, flags string, set ...func(*Agent)) (*Agent, *acptest.Metered) {
+	m := &acptest.Metered{}
+	a := &Agent{Command: `"` + os.Args[0] + `" acpfake ` + flags, Dir: t.TempDir(), Timeout: time.Minute, Count: acptest.Quarter, Meter: m}
 	for _, f := range set {
 		f(a)
 	}
 	t.Cleanup(a.Close)
 	return a, m
-}
-
-// echo is what the fake got for p, fake:echo added to what is new.
-func echo(t *testing.T, ctx context.Context, a *Agent, p ai.Prompt) map[string]any {
-	t.Helper()
-	p.Dynamic += " fake:echo"
-	text, err := ai.Generate(ctx, a, p)
-	var got map[string]any
-	if err != nil || json.Unmarshal([]byte(text), &got) != nil {
-		t.Fatalf("echo: %q, %v", text, err)
-	}
-	return got
-}
-
-// at is the value at path in v, decoded JSON.
-func at(v any, path ...string) any {
-	for _, k := range path {
-		m, _ := v.(map[string]any)
-		v = m[k]
-	}
-	return v
 }
 
 // TestSessions: each request is a session in its repository's folder, its
@@ -94,35 +48,35 @@ func TestSessions(t *testing.T) {
 	t.Setenv("DEEPCODE_CHAT_API_KEY", "secret")
 	p := ai.Prompt{Static: "Be brief.", Previous: []ai.Message{{Role: "user", Content: "q1"}, {Role: "assistant", Content: "a1"}}, Dynamic: "q2"}
 	claude, _ := fake(t, "-name claude-agent-acp", func(a *Agent) { a.CodexHome = "/codex" })
-	got := echo(t, usage.WithRepository(context.Background(), 7), claude, p)
-	if at(got, "static") != "Be brief." || filepath.Base(at(got, "cwd").(string)) != "7" || at(got, "air") != true ||
-		!strings.HasPrefix(at(got, "prompt").(string), "<conversation>\n<user>\nq1\n</user>\n<assistant>\na1\n</assistant>\n</conversation>\n\nq2") {
+	got := acptest.Echo(t, usage.WithRepository(context.Background(), 7), claude, p)
+	if acptest.At(got, "static") != "Be brief." || filepath.Base(acptest.At(got, "cwd").(string)) != "7" || acptest.At(got, "air") != true ||
+		!strings.HasPrefix(acptest.At(got, "prompt").(string), "<conversation>\n<user>\nq1\n</user>\n<assistant>\na1\n</assistant>\n</conversation>\n\nq2") {
 		t.Fatalf("claude: %v", got)
 	}
-	options := at(got, "meta", "claudeCode", "options")
+	options := acptest.At(got, "meta", "claudeCode", "options")
 	if b, _ := json.Marshal(options); string(b) != `{"promptSuggestions":false,"settingSources":[],"settings":{"disableClaudeAiConnectors":true},"strictMcpConfig":true,"tools":[]}` {
 		t.Errorf("claude's options: %s", b)
 	}
-	env := at(got, "env").(map[string]any)
+	env := acptest.At(got, "env").(map[string]any)
 	if env["DS_APIKEY"] != "" || env["DEEPCODE_CHAT_API_KEY"] != "" || env["PATH"] == "" || env["CODEX_HOME"] != "/codex" ||
 		!strings.Contains(env["CODEX_CONFIG"].(string), `"skip_host_skill_discovery":true`) {
 		t.Errorf("the agent's environment: %v", env)
 	}
-	if got := echo(t, context.Background(), claude, ai.Prompt{}); filepath.Base(at(got, "cwd").(string)) != "_" || !filepath.IsAbs(at(got, "cwd").(string)) ||
-		at(got, "static") != bare {
+	if got := acptest.Echo(t, context.Background(), claude, ai.Prompt{}); filepath.Base(acptest.At(got, "cwd").(string)) != "_" || !filepath.IsAbs(acptest.At(got, "cwd").(string)) ||
+		acptest.At(got, "static") != bare {
 		t.Errorf("a request of no repository and no instructions: %v", got)
 	}
 
 	mine, _ := fake(t, "-name claude-agent-acp", func(a *Agent) { a.UserConfig, a.Connectors = true, true })
-	got = echo(t, context.Background(), mine, p)
-	if b, _ := json.Marshal(at(got, "meta", "claudeCode", "options")); string(b) != `{"promptSuggestions":false,"settingSources":["user","project","local"],"settings":{"disableClaudeAiConnectors":false},"strictMcpConfig":false,"tools":[]}` ||
-		at(got, "env", "CODEX_CONFIG") != "" || at(got, "env", "CODEX_HOME") != "" {
-		t.Errorf("the user's settings and connectors asked for: %s, %v", b, at(got, "env"))
+	got = acptest.Echo(t, context.Background(), mine, p)
+	if b, _ := json.Marshal(acptest.At(got, "meta", "claudeCode", "options")); string(b) != `{"promptSuggestions":false,"settingSources":["user","project","local"],"settings":{"disableClaudeAiConnectors":false},"strictMcpConfig":false,"tools":[]}` ||
+		acptest.At(got, "env", "CODEX_CONFIG") != "" || acptest.At(got, "env", "CODEX_HOME") != "" {
+		t.Errorf("the user's settings and connectors asked for: %s, %v", b, acptest.At(got, "env"))
 	}
 
 	codex, _ := fake(t, "-name codex-acp -modes agent,read-only")
-	got = echo(t, context.Background(), codex, p)
-	if at(got, "static") != "Be brief." || at(got, "meta", "jetbrains", "air", "customInstructions") != "Be brief." || at(got, "config", "mode") != "read-only" {
+	got = acptest.Echo(t, context.Background(), codex, p)
+	if acptest.At(got, "static") != "Be brief." || acptest.At(got, "meta", "jetbrains", "air", "customInstructions") != "Be brief." || acptest.At(got, "config", "mode") != "read-only" {
 		t.Errorf("codex: %v", got)
 	}
 
@@ -130,12 +84,14 @@ func TestSessions(t *testing.T) {
 	log.SetOutput(&logged)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 	other, _ := fake(t, "-name gemini-cli", func(a *Agent) { a.CodexHome, a.Connectors = "/codex", true })
-	got = echo(t, context.Background(), other, p)
-	if at(got, "meta") != nil || !strings.HasPrefix(at(got, "prompt").(string), "<instructions>\nBe brief.\n</instructions>\n\n<conversation>") {
+	got = acptest.Echo(t, context.Background(), other, p)
+	if acptest.At(got, "meta") != nil || !strings.HasPrefix(acptest.At(got, "prompt").(string), "<instructions>\nBe brief.\n</instructions>\n\n<conversation>") {
 		t.Errorf("another agent: %v", got)
 	}
-	if s := logged.String(); !strings.Contains(s, "acp_codex_home is not used") || !strings.Contains(s, "acp_claude_connectors is not used") || !strings.Contains(s, "neither Claude nor Codex") {
-		t.Errorf("the settings another agent leaves unused: %q", s)
+	ai.Generate(context.Background(), other, ai.Prompt{Dynamic: "fake:tool"}) // what it asks for, each logged cut to 80 characters
+	if s := logged.String(); !strings.Contains(s, "acp_codex_home is not used") || !strings.Contains(s, "acp_claude_connectors is not used") ||
+		!strings.Contains(s, "neither Claude nor Codex") || strings.Count(s, strings.Repeat("x", 75)) != 5 || strings.Contains(s, "Long") {
+		t.Errorf("the settings another agent leaves unused, the tools it asked for: %q", s)
 	}
 }
 
@@ -145,8 +101,8 @@ func TestSessions(t *testing.T) {
 // set is counted closed once.
 func TestOptions(t *testing.T) {
 	pair, _ := fake(t, "-models opus,haiku -efforts high,max -efforts2 low,medium", func(a *Agent) { a.Model, a.Effort = "haiku", "low" })
-	if got := echo(t, context.Background(), pair, ai.Prompt{}); at(got, "config", "model") != "haiku" || at(got, "config", "effort") != "low" {
-		t.Errorf("an effort of the model chosen: %v", at(got, "config"))
+	if got := acptest.Echo(t, context.Background(), pair, ai.Prompt{}); acptest.At(got, "config", "model") != "haiku" || acptest.At(got, "config", "effort") != "low" {
+		t.Errorf("an effort of the model chosen: %v", acptest.At(got, "config"))
 	}
 	unset, _ := fake(t, "-modes agent,read-only -setfail 9")
 	for range 3 {
@@ -159,8 +115,8 @@ func TestOptions(t *testing.T) {
 	}
 	const flags = "-name codex-acp -models gpt-6,gpt-6-mini -efforts high,low"
 	a, _ := fake(t, flags, func(a *Agent) { a.Model, a.Effort = "gpt-6-mini", "low" })
-	if got := echo(t, context.Background(), a, ai.Prompt{}); at(got, "config", "model") != "gpt-6-mini" || at(got, "config", "effort") != "low" {
-		t.Errorf("options: %v", at(got, "config"))
+	if got := acptest.Echo(t, context.Background(), a, ai.Prompt{}); acptest.At(got, "config", "model") != "gpt-6-mini" || acptest.At(got, "config", "effort") != "low" {
+		t.Errorf("options: %v", acptest.At(got, "config"))
 	}
 	for name, set := range map[string]func(*Agent){
 		"model":  func(a *Agent) { a.Model = "gpt-5" },
@@ -186,22 +142,16 @@ func TestWindow(t *testing.T) {
 	if w := a.Window(); w.Context != 0 || w.Overhead != 0 || w.Scale != 1 || w.Room != ai.DefaultOutput {
 		t.Fatalf("before the agent starts: %+v", w)
 	}
-	if _, err := ai.Generate(context.Background(), a, ai.Prompt{Dynamic: "hi"}); err != nil {
-		t.Fatal(err)
+	_, err := ai.Generate(context.Background(), a, ai.Prompt{Dynamic: "hi"})
+	if w := a.Window(); err != nil || w.Context != 200000 || math.Abs(float64(w.Overhead-500)) > 5 || math.Abs(w.Scale-1.5) > 0.02 {
+		t.Fatalf("measured: %+v, %v", w, err)
 	}
-	w := a.Window()
-	if w.Context != 200000 || math.Abs(float64(w.Overhead-500)) > 5 || math.Abs(w.Scale-1.5) > 0.02 {
-		t.Fatalf("measured: %+v", w)
-	}
-	if rows := m.all(); len(rows) != 3 || rows[0].InTokens < 500 || rows[1].InTokens < rows[0].InTokens+1000 {
+	if rows := m.All(); len(rows) != 3 || rows[0].InTokens < 500 || rows[1].InTokens < rows[0].InTokens+1000 {
 		t.Errorf("the probe's two requests and the one asked are each metered: %+v", rows)
 	}
-	if _, err := ai.Generate(context.Background(), a, ai.Prompt{Dynamic: strings.Repeat("abcd", 2000)}); err != nil {
-		t.Fatal(err)
-	}
-	a.Learn(150000)
-	if w := a.Window(); w.Context != 150000 || math.Abs(w.Scale-1.5) > 0.02 {
-		t.Errorf("learned, then a request of 2,000 tokens: %+v", w)
+	_, err = ai.Generate(context.Background(), a, ai.Prompt{Dynamic: strings.Repeat("abcd", 2000)})
+	if a.Learn(150000); err != nil || a.Window().Context != 150000 || math.Abs(a.Window().Scale-1.5) > 0.02 {
+		t.Errorf("learned, then a request of 2,000 tokens: %+v, %v", a.Window(), err)
 	}
 	if a.observe(a.Window().Overhead+900, 300); math.Abs(a.Window().Scale-1.5) > 0.02 { // too small to tell
 		t.Errorf("a request of 300 tokens moved the Scale to %v", a.Window().Scale)
@@ -214,11 +164,8 @@ func TestWindow(t *testing.T) {
 		t.Errorf("chat_context over the agent's: %+v, %v", set.Window(), err)
 	}
 	silent, _ := fake(t, "-usage=false -size 200000")
-	if _, err := ai.Generate(context.Background(), silent, ai.Prompt{}); err != nil {
-		t.Fatal(err)
-	}
-	if w := silent.Window(); w.Overhead != 0 || w.Scale != 1 {
-		t.Errorf("an agent that counts nothing: %+v", w)
+	if _, err := ai.Generate(context.Background(), silent, ai.Prompt{}); err != nil || silent.Window().Overhead != 0 || silent.Window().Scale != 1 {
+		t.Errorf("an agent that counts nothing: %+v, %v", silent.Window(), err)
 	}
 }
 
@@ -227,23 +174,21 @@ func TestWindow(t *testing.T) {
 // answered; a failed one, as a call.
 func TestMeter(t *testing.T) {
 	a, m := fake(t, "-name claude-agent-acp -overhead 100")
-	if _, err := ai.Generate(context.Background(), a, ai.Prompt{Static: "abcd", Dynamic: "efgh"}); err != nil {
-		t.Fatal(err)
-	}
-	if rows := m.all(); len(rows) != 3 || rows[2] != (usage.Usage{InTokens: 100 + 2, InChars: 4 + 4, OutChars: 2}) { // after the probe's two
-		t.Errorf("counted: %+v", rows)
+	_, err := ai.Generate(context.Background(), a, ai.Prompt{Static: "abcd", Dynamic: "efgh"})
+	if rows := m.All(); err != nil || len(rows) != 3 || rows[2] != (usage.Usage{InTokens: 100 + 2, InChars: 4 + 4, OutChars: 2}) { // after the probe's two
+		t.Errorf("counted: %+v, %v", rows, err)
 	}
 	silent, m := fake(t, "-name claude-agent-acp -usage=false")
 	ai.Generate(context.Background(), silent, ai.Prompt{Static: "abcdabcd", Dynamic: "efgh"})
 	ai.Generate(context.Background(), silent, ai.Prompt{Dynamic: "fake:refusal"})
-	rows := m.all()
+	rows := m.All()
 	if len(rows) != 4 || rows[2] != (usage.Usage{InChars: 8 + 4, OutChars: 2, EstIn: 2 + 1}) || rows[3] != (usage.Usage{InChars: len(bare) + 12}) {
 		t.Errorf("not counted: %+v", rows)
 	}
 	other, m := fake(t, "-usage=false") // its instructions in the prompt, sent once
 	ai.Generate(context.Background(), other, ai.Prompt{Static: "abcd", Dynamic: "efgh"})
-	if sent := "<instructions>\nabcd\n</instructions>\n\nefgh"; len(m.all()) != 3 || m.all()[2] != (usage.Usage{InChars: len(sent), OutChars: 2, EstIn: len(sent) / 4}) {
-		t.Errorf("another agent: %+v", m.all())
+	if sent := "<instructions>\nabcd\n</instructions>\n\nefgh"; len(m.All()) != 3 || m.All()[2] != (usage.Usage{InChars: len(sent), OutChars: 2, EstIn: len(sent) / 4}) {
+		t.Errorf("another agent: %+v", m.All())
 	}
 }
 
@@ -289,19 +234,13 @@ func TestFailures(t *testing.T) {
 			t.Errorf("%s: %v", what, err)
 		}
 	}
-	if text, err := ai.Generate(context.Background(), a, ai.Prompt{Dynamic: "fake:warning"}); err != nil || text != "OK" {
-		t.Errorf("a warning: %q, %v", text, err)
+	for what, want := range map[string]string{"fake:warning": "OK", "fake:tool": "permission no; read refused: true"} { // the agent's own tool
+		if text, err := ai.Generate(context.Background(), a, ai.Prompt{Dynamic: what}); err != nil || text != want {
+			t.Errorf("%s: %q, %v", what, text, err)
+		}
 	}
 	if r, err := a.Ask(context.Background(), ai.Prompt{Dynamic: "fake:spent"}, nil, nil); err != nil || !r.Spent || r.Text != `{"a": ` {
 		t.Errorf("an answer cut at the budget: %+v, %v", r, err)
-	}
-	if text, err := ai.Generate(context.Background(), a, ai.Prompt{Dynamic: "fake:tool"}); err != nil || text != "permission no; read refused: true" {
-		t.Errorf("the agent's own tool: %q, %v", text, err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	if _, err := ai.Generate(ctx, a, ai.Prompt{Dynamic: "fake:slow"}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("a request past its time: %v", err)
 	}
 	for _, line := range []string{"no-such-agent-x7 --acp", `"` + os.Args[0] + `" acpfake -login`} {
 		gone, _ := fake(t, "", func(a *Agent) { a.Command = line })
@@ -318,6 +257,76 @@ func TestFailures(t *testing.T) {
 		if wait := time.Until(gone.retry); wait > 30*time.Second || wait < 20*time.Second {
 			t.Errorf("%s: tried again in %v after 7 refused starts, want 30s", line, wait)
 		}
+	}
+	defer func(was time.Duration) { startLimit = was }(startLimit)
+	startLimit = 300 * time.Millisecond
+	for _, flag := range []string{"-hang", "-stall"} { // the probe's request, its session/new, past its time
+		hung, _ := fake(t, flag, func(a *Agent) { a.Timeout = 300 * time.Millisecond })
+		ai.Generate(context.Background(), hung, ai.Prompt{})
+		if !errors.Is(hung.last, ai.ErrUnavailable) || !errors.Is(hung.last, context.DeadlineExceeded) {
+			t.Errorf("%s: %v", flag, hung.last)
+		}
+	}
+}
+
+// TestStatus: an agent's Status is what it said it is, its model option's
+// value, and its last failure till it answers again; a process that ends
+// before it answered is a start that failed, tried again after the backoff.
+func TestStatus(t *testing.T) {
+	ctx := context.Background()
+	a, _ := fake(t, "-name claude-agent-acp -models opus,haiku")
+	if s := a.Status(); s != (Status{}) {
+		t.Errorf("before it starts: %+v", s)
+	}
+	ai.Generate(ctx, a, ai.Prompt{Dynamic: "fake:failure:limit:"})
+	if s := a.Status(); s.Name != "claude-agent-acp" || s.Version != "1.0.0" || s.Model != "opus" || !strings.Contains(s.Trouble, "It failed") || s.At.IsZero() {
+		t.Errorf("after a failure: %+v", s)
+	}
+	if _, err := ai.Generate(ctx, a, ai.Prompt{}); err != nil || a.Status().Trouble != "" {
+		t.Errorf("after an answer: %+v, %v", a.Status(), err)
+	}
+	for range 2 { // the first process answered the probe, the second nothing
+		ai.Generate(ctx, a, ai.Prompt{Dynamic: "fake:crash"})
+	}
+	if _, err := ai.Generate(ctx, a, ai.Prompt{}); !errors.Is(err, ai.ErrUnavailable) || !strings.Contains(err.Error(), "ended before it answered") || a.fails != 1 {
+		t.Errorf("after a process that never answered: %v, %d starts failed", err, a.fails)
+	}
+	short, _ := fake(t, "-quota 5000") // the probe's first request is answered, its second, with the sample, not
+	ai.Generate(ctx, short, ai.Prompt{})
+	short.retry = time.Time{}
+	ai.Generate(ctx, short, ai.Prompt{})
+	if short.fails != 2 || short.Status().Trouble == "" {
+		t.Errorf("a probe failed twice on its second request: %d starts failed, %+v", short.fails, short.Status())
+	}
+	slow, _ := fake(t, "", func(a *Agent) { a.Timeout = time.Second })
+	gone, cancel := context.WithCancel(ctx)
+	time.AfterFunc(200*time.Millisecond, cancel)
+	ai.Generate(gone, slow, ai.Prompt{Dynamic: "fake:slow"}) // a reader who left: not the agent's failure
+	left := slow.Status().Trouble
+	if _, err := ai.Generate(ctx, slow, ai.Prompt{Dynamic: "fake:slow"}); left != "" || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(slow.Status().Trouble, "no whole answer") {
+		t.Errorf("a request its caller ended: %q; one past its time: %v, %q", left, err, slow.Status().Trouble)
+	}
+	ai.Generate(ctx, slow, ai.Prompt{Dynamic: "fake:logout"}) // answered, then signed out: each session/new refused
+	if _, err := ai.Generate(ctx, slow, ai.Prompt{}); !errors.Is(err, ai.ErrRefused) || !strings.Contains(slow.Status().Trouble, "not signed in") {
+		t.Errorf("signed out once it answered: %v, %+v", err, slow.Status())
+	}
+}
+
+// TestLog: the agent's log is appended to, and set aside past 10 MB.
+func TestLog(t *testing.T) {
+	a, _ := fake(t, "")
+	file := filepath.Join(a.Dir, "agent.log")
+	os.WriteFile(file, []byte("before\n"), 0o600)
+	ai.Generate(context.Background(), a, ai.Prompt{})
+	a.Close()
+	if b, err := os.ReadFile(file); err != nil || !bytes.HasPrefix(b, []byte("before\n")) {
+		t.Errorf("the log of the start before: %q, %v", b, err)
+	}
+	os.WriteFile(file, make([]byte, 10<<20+1), 0o600)
+	again, _ := fake(t, "", func(b *Agent) { b.Dir = a.Dir })
+	ai.Generate(context.Background(), again, ai.Prompt{})
+	if fi, err := os.Stat(file + ".old"); err != nil || fi.Size() != 10<<20+1 {
+		t.Errorf("a log past 10 MB was not set aside: %v", err)
 	}
 }
 
@@ -352,7 +361,7 @@ func TestClose(t *testing.T) {
 // replaced for the next request, as is one that opened recycle sessions.
 func TestRestart(t *testing.T) {
 	a, _ := fake(t, "-name codex-acp")
-	pid := func() any { return at(echo(t, context.Background(), a, ai.Prompt{}), "pid") }
+	pid := func() any { return acptest.At(acptest.Echo(t, context.Background(), a, ai.Prompt{}), "pid") }
 	first := pid()
 	if _, err := ai.Generate(context.Background(), a, ai.Prompt{Dynamic: "fake:crash"}); !errors.Is(err, ai.ErrUnavailable) || !strings.Contains(err.Error(), "agent.log") {
 		t.Errorf("an agent that ended: %v", err)
@@ -373,7 +382,7 @@ func TestRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := echo(t, context.Background(), a, ai.Prompt{}); at(got, "pid") == third || at(got, "opened") != 2.0 {
+	if got := acptest.Echo(t, context.Background(), a, ai.Prompt{}); acptest.At(got, "pid") == third || acptest.At(got, "opened") != 2.0 {
 		t.Errorf("after %d sessions: %v", recycle, got)
 	}
 	a.Close()
@@ -395,8 +404,8 @@ func TestTurns(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	if _, err := ai.Generate(ctx, a, ai.Prompt{}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("a second prompt with one turn: %v", err)
+	if _, err := ai.Generate(ctx, a, ai.Prompt{}); !errors.Is(err, context.DeadlineExceeded) || a.Status().Trouble != "" { // deepcode's queue, not the agent
+		t.Errorf("a second prompt with one turn: %v, %+v", err, a.Status())
 	}
 	stop()
 	<-done
@@ -405,19 +414,11 @@ func TestTurns(t *testing.T) {
 	}
 }
 
-// TestName: an agent's name is its package's or program's, then its model.
+// TestName: an agent's name is its command line's (proc.Name), then its
+// model.
 func TestName(t *testing.T) {
-	for line, want := range map[string]string{
-		"npx -y @agentclientprotocol/claude-agent-acp@0.107.3": "claude-agent-acp/default", "gemini --acp": "gemini/default",
-		`"C:\Program Files\nodejs\npx.cmd" -y @agentclientprotocol/codex-acp`: "codex-acp/default", "pnpm dlx opencode-ai acp": "opencode-ai/default",
-		`C:\bin\opencode.exe acp`: "opencode/default", "": "acp/default",
-	} {
-		if got := (&Agent{Command: line}).Name(); got != want {
-			t.Errorf("%q: %s, want %s", line, got, want)
-		}
-	}
-	if got := (&Agent{Command: "gemini --acp", Model: "gemini-3-pro"}).Name(); got != "gemini/gemini-3-pro" {
-		t.Errorf("with a model: %s", got)
+	if none, set := (&Agent{Command: "gemini --acp"}).Name(), (&Agent{Command: "gemini --acp", Model: "gemini-3-pro"}).Name(); none != "gemini/default" || set != "gemini/gemini-3-pro" {
+		t.Errorf("without a model: %s; with one: %s", none, set)
 	}
 }
 
@@ -434,7 +435,7 @@ func TestExchange(t *testing.T) {
 	ctx := context.Background()
 	script := `fake:script:{"calls": [{"tool": "search", "arguments": {"query": "router"}}, {"tool": "done", "arguments": {}}]}|||not JSON|||{"calls": []}`
 	ex := a.Exchange(ai.Prompt{Static: "Gather.", Dynamic: script}, tools)
-	if next, _ := ex.Size(quarter); next < 100 {
+	if next, _ := ex.Size(acptest.Quarter); next < 100 {
 		t.Errorf("the first request's size: %d", next)
 	}
 	_, calls, err := ex.Next(ctx)
@@ -465,14 +466,14 @@ func TestExchange(t *testing.T) {
 	if ex.Used().InTokens != held/4 { // the fake counts all a session holds: the results were sent
 		t.Errorf("the request asked again counted %d tokens, want %d", ex.Used().InTokens, held/4)
 	}
-	if rows := m.all(); len(rows) != 2+3 {
+	if rows := m.All(); len(rows) != 2+3 {
 		t.Errorf("metered: %+v", rows)
 	}
 	ex.Close()
 	if _, _, err := ex.Next(ctx); err == nil {
 		t.Error("Next after Close")
 	}
-	if got := echo(t, ctx, a, ai.Prompt{}); at(got, "open") != 1.0 {
+	if got := acptest.Echo(t, ctx, a, ai.Prompt{}); acptest.At(got, "open") != 1.0 {
 		t.Errorf("the exchange's session is still open: %v", got)
 	}
 	for what, want := range map[string]error{"fake:script:no|||still no": ai.ErrFailed, "fake:spent": ai.ErrSpent} {

@@ -128,11 +128,12 @@ func Load() (cfg app.Config, addr string, err error) {
 	provider := p.oneOf("chat_provider", providers)
 	chatURL := p.url("chat_base_url")
 	chatKey := p.str("chat_api_key")
-	embedURL, embedKey := cmp.Or(p.url("embed_base_url"), chatURL), cmp.Or(p.str("embed_api_key"), chatKey)
-	effort := p.str("reasoning_effort") // an agent lists its own values, checked once it starts
+	embedURL, embedKey := p.url("embed_base_url"), p.str("embed_api_key") // under acp not the chat server's: an agent has none
+	var effort string
 	if provider == app.ProviderACP {
-		embedURL, embedKey = p.url("embed_base_url"), p.str("embed_api_key") // not the chat server's: an agent has none
+		effort = p.str("reasoning_effort") // an agent lists its own values, checked once it starts
 	} else {
+		embedURL, embedKey = cmp.Or(embedURL, chatURL), cmp.Or(embedKey, chatKey)
 		effort = p.oneOf("reasoning_effort", efforts)
 	}
 	list, err := cast.ToStringSliceE(v.Get("trusted_proxies")) // a list in the file, else text

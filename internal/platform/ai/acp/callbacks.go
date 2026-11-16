@@ -130,19 +130,19 @@ var errNoAccess = errors.New("deepcode offers an agent no file access and no ter
 
 // ReadTextFile refuses, logging the path.
 func (c *client) ReadTextFile(_ context.Context, q acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
-	log.Printf("acp: %s asked to read %s: refused", c.name, q.Path)
+	log.Printf("acp: %s asked to read %.80q: refused", c.name, q.Path)
 	return acp.ReadTextFileResponse{}, errNoAccess
 }
 
 // WriteTextFile refuses, logging the path.
 func (c *client) WriteTextFile(_ context.Context, q acp.WriteTextFileRequest) (acp.WriteTextFileResponse, error) {
-	log.Printf("acp: %s asked to write %s: refused", c.name, q.Path)
+	log.Printf("acp: %s asked to write %.80q: refused", c.name, q.Path)
 	return acp.WriteTextFileResponse{}, errNoAccess
 }
 
 // CreateTerminal refuses, logging the command.
 func (c *client) CreateTerminal(_ context.Context, q acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error) {
-	log.Printf("acp: %s asked to run %q: refused", c.name, q.Command)
+	log.Printf("acp: %s asked to run %.80q: refused", c.name, q.Command)
 	return acp.CreateTerminalResponse{}, errNoAccess
 }
 
