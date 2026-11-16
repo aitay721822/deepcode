@@ -20,6 +20,7 @@ import (
 //
 //	poll (every syncEvery) → index job queued for a moved HEAD
 //	job.queued (index)     → indexer.Run → snapshot.published
+//	job.queued (reindex)   → indexer.Rebuild → snapshot.published (wiki planned anew)
 //	snapshot.published     → wiki job queued → job.queued (wiki) → wiki.Run
 //
 // Every step's state is in SQLite first; the events only say "go".
@@ -37,6 +38,9 @@ func (p pipeline) handlers() map[string]jobs.Handler {
 	return map[string]jobs.Handler{
 		jobs.KindIndex: func(ctx context.Context, job jobs.Job, progress jobs.Progress) error {
 			return retried(p.indexer.Run(usage.WithRepository(ctx, job.RepoID), job.RepoID, job.CommitSHA, progress))
+		},
+		jobs.KindReindex: func(ctx context.Context, job jobs.Job, progress jobs.Progress) error {
+			return retried(p.indexer.Rebuild(usage.WithRepository(ctx, job.RepoID), job.RepoID, job.CommitSHA, progress))
 		},
 		jobs.KindWiki: func(ctx context.Context, job jobs.Job, progress jobs.Progress) error {
 			if p.wiki == nil {

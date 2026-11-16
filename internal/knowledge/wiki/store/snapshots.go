@@ -12,13 +12,14 @@ import (
 type Snapshot struct {
 	ID                           int64
 	Status, WikiStatus, Language string // Language: that of the pages stored so far
+	Replan                       bool   // a full re-index asked for a wiki planned anew, and none is stored yet
 }
 
 // Snapshot returns repository repoID's snapshot at commit sha, or ErrNotFound.
 func (s *Store) Snapshot(ctx context.Context, repoID int64, sha string) (Snapshot, error) {
 	var snap Snapshot
-	err := s.DB.QueryRowContext(ctx, `SELECT id, status, wiki_status, wiki_language FROM snapshots WHERE repository_id = ? AND commit_sha = ?`,
-		repoID, sha).Scan(&snap.ID, &snap.Status, &snap.WikiStatus, &snap.Language)
+	err := s.DB.QueryRowContext(ctx, `SELECT id, status, wiki_status, wiki_language, wiki_replan FROM snapshots WHERE repository_id = ? AND commit_sha = ?`,
+		repoID, sha).Scan(&snap.ID, &snap.Status, &snap.WikiStatus, &snap.Language, &snap.Replan)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Snapshot{}, ErrNotFound
 	}

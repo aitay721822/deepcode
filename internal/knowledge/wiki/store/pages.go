@@ -83,13 +83,18 @@ func (s *Store) Pages(ctx context.Context, snap int64) ([]Page, error) {
 }
 
 // Add stores the snapshot's pages, in order, the language they are written
-// in and the wiki's labels, in one transaction.
+// in and the wiki's labels, in one transaction, in place of any pages it held
+// (those a full re-index left to be planned anew, so they are shown until the
+// new plan is in); it settles wiki_replan.
 func (s *Store) Add(ctx context.Context, snap int64, language string, labels Labels, pages []NewPage) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM wiki_pages WHERE snapshot_id = ?`, snap); err != nil {
+		return err
+	}
 	for i, p := range pages {
 		var id int64
 		parent := sql.NullInt64{Int64: int64(p.Parent), Valid: p.Parent >= 0 && p.Parent < i}
@@ -109,7 +114,7 @@ func (s *Store) Add(ctx context.Context, snap int64, language string, labels Lab
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE snapshots SET wiki_language = ?, wiki_labels = ? WHERE id = ?`, language, string(l), snap); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE snapshots SET wiki_language = ?, wiki_labels = ?, wiki_replan = 0 WHERE id = ?`, language, string(l), snap); err != nil {
 		return err
 	}
 	return tx.Commit()

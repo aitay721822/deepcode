@@ -61,15 +61,20 @@ func ask[T any](g *Generator, r *planRun, f ai.Format[T]) contract.Ask[T] {
 }
 
 // plannedPages returns the snapshot's pages. When there are none yet, it
-// stores them first: carried over from the previous wiki, else a plan.
-func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, src source, repo string, progress jobs.Progress) ([]page, error) {
-	pages, err := g.Store.Pages(ctx, snap)
-	if err != nil || len(pages) > 0 {
-		return pages, err
+// stores them first: carried over from the previous wiki, else a plan. With
+// replan (a full re-index) it always plans, and the plan replaces the pages
+// there are when it is stored, so they are shown until then.
+func (g *Generator) plannedPages(ctx context.Context, repoID, snap int64, src source, repo string, replan bool, progress jobs.Progress) ([]page, error) {
+	if !replan {
+		pages, err := g.Store.Pages(ctx, snap)
+		if err != nil || len(pages) > 0 {
+			return pages, err
+		}
 	}
 	progress.Stage("plan", 0, 0)
-	carried, err := g.carry(ctx, repoID, snap, src, progress)
-	if err != nil {
+	if replan {
+		progress.Logf("full re-index: planning the wiki anew")
+	} else if carried, err := g.carry(ctx, repoID, snap, src, progress); err != nil {
 		return nil, err
 	} else if carried {
 		progress.Saved() // a later attempt writes from the stored pages

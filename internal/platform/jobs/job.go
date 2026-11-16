@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	KindIndex = "index"
-	KindWiki  = "wiki"
+	KindIndex   = "index"
+	KindReindex = "reindex" // a full re-index: every file read again, the wiki planned anew
+	KindWiki    = "wiki"
 
 	// PipelineVersion is part of every idempotency key, so jobs queued after a
 	// bump get rows of their own. It re-processes nothing by itself: a commit

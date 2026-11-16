@@ -351,6 +351,7 @@ func TestEndToEnd(t *testing.T) {
 		failIfJobFailed(t, repo.Job)
 		return repo.Snapshot.WikiStatus == "ready" && repo.Job.Finished()
 	})
+	checkRebuild(t, db, admin, llm, repoPath)
 
 	checkGitLab(t, admin, api, apiSrv.URL, sha3)
 	checkOAuth(t, admin)
@@ -424,5 +425,41 @@ func checkPrunedCommitReturns(t *testing.T, db *sql.DB, admin *client, remote, r
 	})
 	if repo.Snapshot.ChunkCount != chunks {
 		t.Fatalf("the commit indexed again has %d chunks, want %d", repo.Snapshot.ChunkCount, chunks)
+	}
+}
+
+// checkRebuild: a full re-index of the published commit reads every file again
+// (copying none), embeds nothing anew (the vectors follow the content), and
+// plans the wiki anew instead of carrying it, once; an unknown mode is refused.
+func checkRebuild(t *testing.T, db *sql.DB, admin *client, llm *fakeLLM, repoPath string) {
+	t.Helper()
+	if code := admin.post(repoPath+"/sync", `{"mode":"everything"}`, nil); code != http.StatusBadRequest {
+		t.Fatalf("sync in an unknown mode: %d, want 400", code)
+	}
+	var repo repoView
+	admin.get(repoPath, &repo)
+	plans, embedded := llm.planRequests(), llm.chunkInputs()
+	var rebuilt struct {
+		Job *jobs.Job `json:"job"`
+	}
+	if code := admin.post(repoPath+"/sync", `{"mode":"full"}`, &rebuilt); code != http.StatusAccepted || rebuilt.Job == nil ||
+		rebuilt.Job.Kind != jobs.KindReindex || rebuilt.Job.CommitSHA != repo.Snapshot.CommitSHA {
+		t.Fatalf("full re-index: %d %+v", code, rebuilt.Job)
+	}
+	waitFor(t, "the full re-index and its wiki", func() bool {
+		var j jobs.Job
+		admin.get("/api/jobs/"+rebuilt.Job.PublicID, &j)
+		failIfJobFailed(t, &j)
+		admin.get(repoPath, &repo) // the wiki is "none" from the moment the re-index publishes until it is written
+		failIfJobFailed(t, repo.Job)
+		return j.Status == jobs.StatusSucceeded && repo.Snapshot.WikiStatus == "ready" && repo.Job.Finished()
+	})
+	var parsed, replan int
+	db.QueryRow(`SELECT count(*) FROM job_logs WHERE job_id = (SELECT id FROM jobs WHERE public_id = ?)
+		AND line LIKE '%parsed % files, copied 0 unchanged%' AND line NOT LIKE '%parsed 0 files%'`, rebuilt.Job.PublicID).Scan(&parsed)
+	db.QueryRow(`SELECT wiki_replan FROM snapshots WHERE public_id = ?`, repo.Snapshot.ID).Scan(&replan)
+	if parsed != 1 || llm.chunkInputs() != embedded || llm.planRequests() != plans+1 || replan != 0 {
+		t.Fatalf("full re-index: parsed every file %t, embedded %d chunks (want 0), planned %d times (want 1), wiki_replan %d",
+			parsed == 1, llm.chunkInputs()-embedded, llm.planRequests()-plans, replan)
 	}
 }

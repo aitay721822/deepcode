@@ -95,17 +95,9 @@ func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	remote, err := c.Servers.Remote(ctx, id)
+	head, err := c.syncHead(ctx, id)
 	if err != nil {
 		return nil, err
-	}
-	branch, err := c.Tracked(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	head, err := c.head(ctx, remote, branch)
-	if err != nil {
-		return nil, lsRemoteFailed(err)
 	}
 	var job jobs.Job
 	switch {
@@ -122,6 +114,35 @@ func (c *Catalog) Sync(ctx context.Context, id int64) (*jobs.Job, error) {
 		return nil, err
 	}
 	return &job, nil
+}
+
+// Rebuild queues the full re-index of repository id at its remote HEAD
+// (indexer.Rebuild), even when it is up to date. Asked again while it is
+// queued or running, it returns that job.
+func (c *Catalog) Rebuild(ctx context.Context, id int64) (jobs.Job, error) {
+	head, err := c.syncHead(ctx, id)
+	if err != nil {
+		return jobs.Job{}, err
+	}
+	return c.Queue.EnqueueReindex(ctx, id, head, c.EmbedModel)
+}
+
+// syncHead is the commit repository id's tracked branch points at on its
+// remote, with Sync's error when git cannot tell.
+func (c *Catalog) syncHead(ctx context.Context, id int64) (string, error) {
+	remote, err := c.Servers.Remote(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	branch, err := c.Tracked(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	head, err := c.head(ctx, remote, branch)
+	if err != nil {
+		return "", lsRemoteFailed(err)
+	}
+	return head, nil
 }
 
 // Poll is the poller's Sync: it queues the index job of repository id when

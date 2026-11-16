@@ -427,9 +427,9 @@ func TestUpgrade(t *testing.T) {
 	}
 	defer db.Close()
 	var added int
-	db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE name IN ('migrations/022_job_progress.sql', 'migrations/023_llm_usage.sql', 'migrations/024_public_ids.sql')`).Scan(&added)
-	if added != 3 {
-		t.Fatalf("migrations added since v0.1.0 recorded: %d of 3", added)
+	db.QueryRow(`SELECT count(*) FROM schema_migrations WHERE name IN ('migrations/022_job_progress.sql', 'migrations/023_llm_usage.sql', 'migrations/024_public_ids.sql', 'migrations/025_wiki_replan.sql')`).Scan(&added)
+	if added != 4 {
+		t.Fatalf("migrations added since v0.1.0 recorded: %d of 4", added)
 	}
 	a, err := app.New(ctx, app.Config{
 		DataDir: data,

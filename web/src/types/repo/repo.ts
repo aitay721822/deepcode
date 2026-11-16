@@ -4,7 +4,7 @@ export type Provider = 'github' | 'gitlab'
 
 export type Job = {
   id: string
-  kind: 'index' | 'wiki'
+  kind: 'index' | 'reindex' | 'wiki'
   commitSha: string
   status: 'queued' | 'running' | 'succeeded' | 'failed'
   attempts: number

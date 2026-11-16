@@ -44,6 +44,11 @@ func (q *Queue) EnqueueIndex(ctx context.Context, repoID int64, sha, embedModel 
 	return q.enqueue(ctx, KindIndex, repoID, sha, indexKey(repoID, sha, embedModel))
 }
 
+// EnqueueReindex queues the full re-index of repoID at sha for embedModel.
+func (q *Queue) EnqueueReindex(ctx context.Context, repoID int64, sha, embedModel string) (Job, error) {
+	return q.enqueue(ctx, KindReindex, repoID, sha, "re"+indexKey(repoID, sha, embedModel))
+}
+
 // IndexJob returns the index job of repoID at sha for embedModel, the one
 // EnqueueIndex would queue again, or ErrNotFound.
 func (q *Queue) IndexJob(ctx context.Context, repoID int64, sha, embedModel string) (Job, error) {

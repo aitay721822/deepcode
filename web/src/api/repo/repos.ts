@@ -18,6 +18,9 @@ export const importRepo = (url: string, serverId?: string) =>
 /** Indexes the latest commit; upToDate means there is nothing new. */
 export const syncRepo = (repoId: string) => post<{ upToDate?: boolean; job?: Job }>(`/api/repos/${repoId}/sync`, {})
 
+/** Re-indexes the latest commit in full, even when up to date: every file read again, the wiki planned anew. */
+export const rebuildRepo = (repoId: string) => post<{ job: Job }>(`/api/repos/${repoId}/sync`, { mode: 'full' })
+
 /** Stops a queued or running job, which then fails, saying who stopped it; Sync runs it again. */
 export const stopJob = (id: string) => post<Job>(`/api/jobs/${id}/stop`, {})
 

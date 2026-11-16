@@ -5,9 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+
+	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/jobs"
 )
 
 // basePages are the pages of carryDB's base wiki, each choosing and citing line 1 of its file.
@@ -322,5 +327,30 @@ func TestRunReadsAnchors(t *testing.T) {
 	if err != nil || len(pages) != 2 || !strings.Contains(pages[1].Content, "\n\n## Alpha\n\n") || !strings.Contains(pages[1].Content, "\n\n## Beta\n\n") ||
 		!slices.Equal(w.Headings, []string{"Alpha", "Beta"}) || !slices.Equal(w.Unsourced, []string{"first"}) {
 		t.Fatalf("written %+v; %+v %v", w, pages, err)
+	}
+}
+
+// TestReplanKeepsPages: a wiki a full re-index asked to plan anew keeps
+// showing its pages until the new plan replaces them, so a plan that fails
+// leaves them, still to be planned anew; one that succeeds replaces them and
+// settles wiki_replan.
+func TestReplanKeepsPages(t *testing.T) {
+	db := testDB(t,
+		`INSERT INTO snapshots(id, repository_id, commit_sha, status, wiki_status, wiki_language, wiki_replan) VALUES (1, 1, 'abc', 'ready', 'none', 'English', 1)`,
+		`INSERT INTO wiki_pages(snapshot_id, slug, title, position, content) VALUES (1, '1-old', 'Old', 0, 'Written before.')`)
+	state := func() (titles string, replan int) {
+		db.QueryRow(`SELECT group_concat(title, ' '), (SELECT wiki_replan FROM snapshots WHERE id = 1) FROM wiki_pages WHERE snapshot_id = 1`).Scan(&titles, &replan)
+		return titles, replan
+	}
+	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) }))
+	defer refused.Close()
+	err := generator(db, &ai.OpenAI{BaseURL: refused.URL, ModelName: "m"}).Run(context.Background(), 1, "abc", jobs.Progress{})
+	if titles, replan := state(); err == nil || titles != "Old" || replan != 1 {
+		t.Fatalf("a failed plan: pages %q, wiki_replan %d (%v)", titles, replan, err)
+	}
+	model := &fakeModel{}
+	runWiki(t, db, model, "abc")
+	if titles, replan := state(); len(model.plans) != 1 || strings.Contains(titles, "Old") || titles == "" || replan != 0 {
+		t.Fatalf("after %d plans: pages %q, wiki_replan %d", len(model.plans), titles, replan)
 	}
 }

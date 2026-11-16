@@ -79,8 +79,29 @@ func (a *API) importRepo(c *gin.Context) {
 	c.JSON(status, repo)
 }
 
+// syncRepo brings a repository up to date, by mode: "incremental" (or no body)
+// indexes a new commit and rewrites the wiki pages it touches; "full" reads
+// every file again and plans the wiki anew, even when it is up to date.
 func (a *API) syncRepo(c *gin.Context) {
-	job, err := a.Catalog.Sync(c.Request.Context(), httpx.RepoID(c))
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if c.Request.ContentLength != 0 && !httpx.Bind(c, &body) {
+		return
+	}
+	var job *jobs.Job
+	var err error
+	switch body.Mode {
+	case "", "incremental":
+		job, err = a.Catalog.Sync(c.Request.Context(), httpx.RepoID(c))
+	case "full":
+		var j jobs.Job
+		j, err = a.Catalog.Rebuild(c.Request.Context(), httpx.RepoID(c))
+		job = &j
+	default:
+		httpx.Fail(c, http.StatusBadRequest, "mode 只能是 incremental 或 full")
+		return
+	}
 	switch {
 	case err != nil:
 		httpx.DomainError(c, err)

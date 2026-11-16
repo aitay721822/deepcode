@@ -107,7 +107,7 @@ func (g *Generator) Run(ctx context.Context, repoID int64, sha string, progress 
 		}
 	}
 	repo := r.Owner + "/" + r.Name
-	pages, err := g.plannedPages(ctx, repoID, snap, src, repo, progress)
+	pages, err := g.plannedPages(ctx, repoID, snap, src, repo, at.Replan, progress)
 	if err != nil {
 		return err
 	}

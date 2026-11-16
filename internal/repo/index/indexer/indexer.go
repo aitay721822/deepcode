@@ -41,6 +41,20 @@ type Indexer struct {
 // snapshot are skipped, files unchanged since the previous READY snapshot are
 // copied, and vectors are reused by content.
 func (ix *Indexer) Run(ctx context.Context, repoID int64, sha string, progress jobs.Progress) error {
+	return ix.run(ctx, repoID, sha, false, progress)
+}
+
+// Rebuild is the full re-index of repoID at sha: Run, but every file is read
+// and analyzed again, in place when the snapshot is published already (it
+// keeps serving meanwhile), none copied from the previous snapshot; the
+// imports are linked again, and the snapshot's wiki is planned anew rather
+// than carried. Vectors are still reused by content: the same model gives
+// the same text the same vector.
+func (ix *Indexer) Rebuild(ctx context.Context, repoID int64, sha string, progress jobs.Progress) error {
+	return ix.run(ctx, repoID, sha, true, progress)
+}
+
+func (ix *Indexer) run(ctx context.Context, repoID int64, sha string, full bool, progress jobs.Progress) error {
 	prev, err := ix.Store.Published(ctx, repoID)
 	if err != nil {
 		return err
@@ -73,8 +87,11 @@ func (ix *Indexer) Run(ctx context.Context, repoID int64, sha string, progress j
 	if err != nil {
 		return err
 	}
-	if status != "ready" {
-		if err := ix.parse(ctx, dir, sha, snap, prev, status == "outdated", progress); err != nil {
+	if status != "ready" || full {
+		if full {
+			progress.Logf("full re-index: reading every file again")
+		}
+		if err := ix.parse(ctx, dir, sha, snap, prev, status == "outdated" || full, progress); err != nil {
 			return err
 		}
 		// After every file is in: an import names files of any batch.
@@ -94,7 +111,7 @@ func (ix *Indexer) Run(ctx context.Context, repoID int64, sha string, progress j
 	progress.Stage("publish", 0, 0)
 	// One transaction makes the snapshot READY and the repository's current
 	// version, so readers switch atomically.
-	if err := ix.Store.Publish(ctx, repoID, snap, model, analyzer.Version); err != nil {
+	if err := ix.Store.Publish(ctx, repoID, snap, model, analyzer.Version, full); err != nil {
 		return err
 	}
 	progress.Logf("published snapshot #%d", snap)

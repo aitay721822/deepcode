@@ -48,8 +48,9 @@ func (s *Store) Indexing(ctx context.Context, snap int64, version int) error {
 
 // Publish marks the snapshot READY, embedded by model and read by analyzer
 // version, and makes it the repository's current version in one transaction,
-// so readers switch atomically.
-func (s *Store) Publish(ctx context.Context, repoID, snap int64, model string, version int) error {
+// so readers switch atomically. With replan its wiki is to be planned anew:
+// none yet, and not carried from the previous one (see wiki_replan).
+func (s *Store) Publish(ctx context.Context, repoID, snap int64, model string, version int, replan bool) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -58,8 +59,9 @@ func (s *Store) Publish(ctx context.Context, repoID, snap int64, model string, v
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE snapshots SET status = 'ready', indexed_at = CURRENT_TIMESTAMP, embedding_model = ?1, analyzer = ?3,
 			file_count = (SELECT count(*) FROM source_files WHERE snapshot_id = ?2),
-			chunk_count = (SELECT count(*) FROM chunks WHERE snapshot_id = ?2)
-		WHERE id = ?2`, model, snap, version); err != nil {
+			chunk_count = (SELECT count(*) FROM chunks WHERE snapshot_id = ?2),
+			wiki_status = CASE WHEN ?4 THEN 'none' ELSE wiki_status END, wiki_replan = wiki_replan OR ?4
+		WHERE id = ?2`, model, snap, version, replan); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE repositories SET ready_snapshot_id = ? WHERE id = ?`, snap, repoID); err != nil {

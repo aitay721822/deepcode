@@ -1,18 +1,23 @@
 import { formatTime, isPast } from '../../lib/format'
 import type { Job, Repo } from '../../types/repo/repo'
 
+const INDEX: [string, string][] = [
+  ['fetch', '取得 Commit'],
+  ['parse', '解析檔案與 Symbol'],
+  ['embed', '建立 Chunk 向量'],
+  ['publish', '發布版本'],
+]
+
 export const STAGES: Record<Job['kind'], [string, string][]> = {
-  index: [
-    ['fetch', '取得 Commit'],
-    ['parse', '解析檔案與 Symbol'],
-    ['embed', '建立 Chunk 向量'],
-    ['publish', '發布版本'],
-  ],
+  index: INDEX,
+  reindex: INDEX, // a full re-index passes the same stages
   wiki: [
     ['plan', '規劃 Wiki'],
     ['write', '撰寫頁面'],
   ],
 }
+
+const QUEUED: Record<Job['kind'], string> = { index: '索引排隊中', reindex: '重新索引排隊中', wiki: 'Wiki 排隊中' }
 
 export const stageIndex = (job: Job) =>
   Math.max(
@@ -46,8 +51,7 @@ export function retryText(job: Job) {
 
 /** The stage a job is at: "Parse files and symbols", or "Wiki queued" before it starts, "Waiting to retry" after. */
 export function stageName(job: Job) {
-  if (job.status === 'queued')
-    return retrying(job) ? (job.error ? '等待重試' : '等待繼續') : job.kind === 'wiki' ? 'Wiki 排隊中' : '索引排隊中'
+  if (job.status === 'queued') return retrying(job) ? (job.error ? '等待重試' : '等待繼續') : QUEUED[job.kind]
   return STAGES[job.kind][stageIndex(job)][1]
 }
 
@@ -66,4 +70,4 @@ export const isActive = (job: Job | null | undefined) => job?.status === 'queued
 
 /** Indexed, with no wiki yet: the wiki job is queued just after the snapshot is published, so look again shortly. */
 export const awaitingWiki = (repo: Repo) =>
-  repo.job?.kind === 'index' && repo.job.status === 'succeeded' && repo.snapshot?.wikiStatus === 'none'
+  repo.job?.kind !== 'wiki' && repo.job?.status === 'succeeded' && repo.snapshot?.wikiStatus === 'none'

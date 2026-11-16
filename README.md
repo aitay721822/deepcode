@@ -16,7 +16,7 @@
 
 ## 特色
 
-- **Wiki**：依程式結構生成兩層 Wiki，附架構圖，說明引用到原始碼的行號。新的 commit 由 webhook、定時同步（`sync_every`）或手動同步帶進來，只重寫受影響的頁。
+- **Wiki**：依程式結構生成兩層 Wiki，附架構圖，說明引用到原始碼的行號。新的 commit 由 webhook、定時同步（`sync_every`）或手動同步帶進來，只重寫受影響的頁；要整份重建時用「重新索引」。
 - **問答**：三種模式。Fast 以工具搜集程式碼後回答；Deep 搜得更多，先讀相關的 Wiki 頁；Codemap 依執行順序畫出程式路徑。檢索結合全文、Symbol 與向量。
 - **語言**：C#/.NET、Go、Java、JavaScript、TypeScript、Python、Rust。
 - **權限**：RBAC（使用者、角色、權限）限制每個人能看到哪些 Repository；後台管理帳號、角色、Git 伺服器，並即時顯示背景工作的進度與 LLM 用量。
