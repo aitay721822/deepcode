@@ -311,8 +311,11 @@ func (a *Agent) start() (*running, error) {
 	if err != nil {
 		stderr.Close()
 		err = fmt.Errorf("%s: %w", a.Name(), err) // not the command line, which may hold a key
-		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, proc.ErrLine) {
-			return nil, ai.Kinded(err, ai.ErrRefused)
+		if errors.Is(err, proc.ErrLine) {
+			return nil, ai.Kinded(fmt.Errorf("%w (acp_command: give the agent's command, every quote closed)", err), ai.ErrRefused)
+		}
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
+			return nil, ai.Kinded(fmt.Errorf("%w (acp_command: install the agent, or give its full path, as the OS user deepcode runs as)", err), ai.ErrRefused)
 		}
 		return nil, ai.Kinded(err, ai.ErrUnavailable)
 	}

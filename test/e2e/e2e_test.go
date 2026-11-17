@@ -384,6 +384,11 @@ func endToEnd(t *testing.T, provider string) {
 	checkGitLab(t, admin, api, apiSrv.URL, sha3)
 	checkOAuth(t, admin)
 	ivy, tools := checkImportPolicy(t, srv.URL, admin, repo.ID)
+	work := "" // the agent's folders, by repository
+	if provider == app.ProviderACP {
+		work = filepath.Join(data, "acp", "work")
+	}
+	checkIsolation(t, srv.URL, db, admin, repo.ID, tools, work)
 	checkJobErrors(t, db, admin, ivy, tools)
 	checkStop(t, db, admin, ivy, tools, repo.ID)
 	checkJobEvents(t, srv.URL, admin, repo.ID, tools, func() {

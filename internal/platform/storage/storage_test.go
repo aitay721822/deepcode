@@ -283,10 +283,12 @@ var released = map[string]string{
 	"013_git_server_oauth.sql": "64413cec4b409dea", "014_api_tokens.sql": "327c563e7807be9c", "015_message_codemap.sql": "c5d7de6451acfc89",
 	"016_oauth_client_indexes.sql": "976ccd5be6def494", "017_conversation_summary.sql": "4c0c4d21e10a1a64", "018_wiki_page_plan.sql": "c0d3096447b0d7b9",
 	"019_repository_tracked_branch.sql": "ddf8168ddcfc0b26", "020_repository_webhook_secret.sql": "4a20faf1f22f5422", "021_call_graph.sql": "29566bfe1f19db86",
-	"022_job_progress.sql": "7f8bab85e8135570", "023_llm_usage.sql": "1550bad25672f420",
+	"022_job_progress.sql": "7f8bab85e8135570", "023_llm_usage.sql": "1550bad25672f420", "024_public_ids.sql": "67f076a198f4020e",
+	"025_wiki_replan.sql": "ab613a1a5e0fc802", "026_llm_usage_estimates.sql": "c08321ca5d1a97dd",
 }
 
-// TestReleasedMigrations: each of v1.0.0's migrations is still embedded, as it was.
+// TestReleasedMigrations: each migration released, up to v2.0.0's, is still
+// embedded, as it was.
 func TestReleasedMigrations(t *testing.T) {
 	files, err := migrationFiles(migrations)
 	if err != nil {

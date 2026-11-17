@@ -249,7 +249,8 @@ func setup(t *testing.T, work string) *rig {
 		}
 		if os.Getenv("DEEPCODE_BENCH_WIKI") != "0" {
 			r.wiki = &wiki.Generator{Store: &wikistore.Store{DB: db}, Graph: graphs, Catalog: r.cat, Retriever: r.ret, Chat: llm, Language: "English", MaxPages: pages,
-				Planned: func(p wiki.Planning) { r.last.Planning = &p }, Touched: func(_, why string) { r.last.Touched[why]++ }}
+				Planned: func(p wiki.Planning) { r.last.Planning = &p }, Touched: func(_, why string) { r.last.Touched[why]++ },
+				Written: func(p wiki.Writing) { r.last.wrote(p) }}
 		}
 		r.chat, r.judge = &chat.Service{Store: &chatstore.Store{DB: db}, Catalog: r.cat, Retriever: r.ret, Chat: llm, Tokens: counter}, score.Model(llm)
 	}

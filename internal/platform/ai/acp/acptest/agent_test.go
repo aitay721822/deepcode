@@ -54,6 +54,11 @@ func TestSessions(t *testing.T) {
 		!strings.HasPrefix(acptest.At(got, "prompt").(string), "<conversation>\n<user>\nq1\n</user>\n<assistant>\na1\n</assistant>\n</conversation>\n\nq2") {
 		t.Fatalf("claude: %v", got)
 	}
+	elsewhere := acptest.Echo(t, usage.WithRepository(context.Background(), 8), claude, ai.Prompt{Dynamic: "q3"}) // another project's: a new session, in its folder
+	if filepath.Base(acptest.At(elsewhere, "cwd").(string)) != "8" || acptest.At(elsewhere, "opened") != acptest.At(got, "opened").(float64)+1 ||
+		acptest.At(elsewhere, "open") != 1.0 {
+		t.Errorf("another repository's request: %v", elsewhere)
+	}
 	options := acptest.At(got, "meta", "claudeCode", "options")
 	if b, _ := json.Marshal(options); string(b) != `{"promptSuggestions":false,"settingSources":[],"settings":{"autoMemoryEnabled":false,"disableClaudeAiConnectors":true},"strictMcpConfig":true,"tools":[]}` {
 		t.Errorf("claude's options: %s", b)

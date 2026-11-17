@@ -145,11 +145,13 @@
 2. 停掉舊版，換上新的執行檔，再 `./deepcode serve`。資料庫在啟動時自動升級。
 3. `secret_key`（`DEEPCODE_SECRET_KEY`）要沿用；沒設定時用的是 `data/secret.key`，這個檔要留著。換了 key，存下的 Git 伺服器 token 就解不開。
 
+從 1.x 升到 2.0 沒有不相容的改動，照上面做即可：設定檔不必改，不設 `chat_provider` 時照舊使用 OpenAI 相容的 API；資料庫從 1.1 多一個 migration（從 1.0.x 另加 1.1 的兩個），用量表加上沒回報 token 的呼叫數、估算的 token 與耗時，舊的用量列這些欄位是 0；呼叫數從此也算失敗或被拒的請求。要改用訂閱的 agent，見 [ACP](#用訂閱的-agentacp)。
+
 要退回舊版，換回舊的執行檔，並用升級前的備份取代資料庫：新版跑過的 migration 無法倒回。
 
 ## 相容性
 
-1.0.0 起，以下只會新增，不會改名或移除；要移除的，會先在一個 minor 版本標為 deprecated 並在 log 警告，到 2.0 才移除：
+1.0.0 起，以下只會新增，不會改名或移除；要移除的，會先在一個 minor 版本標為 deprecated 並在 log 警告，到下一個 major 版本才移除。2.0 沒有移除任何一項，它新增的設定、路由與 migration 也一併納入：
 
 - 設定：`deepcode.yaml` 的鍵、對應的 `DEEPCODE_*` 環境變數，以及 `DEEPCODE_CONFIG`。
 - HTTP API 的路由，以及 MCP（`/mcp`）的工具和參數。路由與網址中資源的 id 一律是 24 字元的 CUID2（OAuth 應用的 client id 除外）；舊版的數字 id 不再有效，會回 404。

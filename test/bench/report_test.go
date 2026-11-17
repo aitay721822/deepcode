@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -94,6 +93,8 @@ type wikiRun struct {
 	Planning *wiki.Planning `json:"planning,omitempty"`
 	// Touched counts the carried pages written again, by why (wiki.Generator.Touched).
 	Touched map[string]int `json:"touched,omitempty"`
+	// Writing sums its pages' contract counts, by rule (wiki.Generator.Written, wrote); nil in older runs.
+	Writing map[aicontract.Rule]aicontract.Count `json:"writing,omitempty"`
 }
 
 type evalResult struct {
@@ -225,7 +226,7 @@ func (rep report) markdown() string {
 				c.ToolingPages, 100*c.ToolingPages/max(r.Pages, 1), cmp.Or(strings.Join(c.Missing, ", "), "–"), listed(c.Unnamed))
 		}
 	}
-	p("\n## Plan\n\nThe head wiki's pages against DeepWiki's count. Thin pages hold files weighing under %d lines, crowded ones over %d. Ceiling and Contracts are the base wiki's plan, which head carries: Ceiling, when it bound, the pages the code's structure wanted; Contracts, per rule the plan broke, how often on the first reply / after its one repair / left for code to fix.\n\n| Repository | Pages | DeepWiki | Thin | Crowded | Projects without a page | Ceiling | Contracts |\n|---|---|---|---|---|---|---|---|",
+	p("\n## Plan\n\nThe head wiki's pages against DeepWiki's count. Thin pages hold files weighing under %d lines, crowded ones over %d. Ceiling and Contracts are the base wiki's plan, which head carries: Ceiling, when it bound, the pages the code's structure wanted; Contracts, per rule the plan or, after pages:, its pages broke, how often on the first reply / after its one repair / left for code to fix.\n\n| Repository | Pages | DeepWiki | Thin | Crowded | Projects without a page | Ceiling | Contracts |\n|---|---|---|---|---|---|---|---|",
 		place.LinesPerPage, shape.CrowdedPages*place.LinesPerPage)
 	for _, r := range rep.Repos {
 		if s := r.Plan; s != nil {
@@ -403,23 +404,6 @@ func listed(names []string) string {
 	return s
 }
 
-// planned is the ceiling and contracts cells of w's plan, "–" for a wiki no
-// model planned: each rule broken, as first/afterRepair/residual.
-func planned(w *wikiRun) string {
-	if w == nil || w.Planning == nil {
-		return "– | –"
-	}
-	ceiling, rules := "–", []string{}
-	if c := w.Planning.Ceiling; c != nil {
-		ceiling = fmt.Sprintf("%d wanted, %d planned (limit %d)", c.Wanted, c.Planned, c.Limit)
-	}
-	for _, r := range slices.Sorted(maps.Keys(w.Planning.Contracts)) {
-		c := w.Planning.Contracts[r]
-		rules = append(rules, fmt.Sprintf("%s %d/%d/%d", r, c.First, c.Repaired, c.Residual))
-	}
-	return ceiling + " | " + cmp.Or(strings.Join(rules, ", "), "none broken")
-}
-
 // took shows how long a wiki run took, and if it failed.
 func took(w *wikiRun) string {
 	if w.Failed {
@@ -449,7 +433,8 @@ func reported(n, est int) string {
 // has no row); the report lands whole, with no file left aside.
 func TestMarkdown(t *testing.T) {
 	ok := result{Repo: "ok", Wiki: &wikiRun{Seconds: 10, Pages: 6, InTokens: 200, CachedTokens: 150, Planning: &wiki.Planning{Seconds: 4.25, Requests: 9,
-		Contracts: map[aicontract.Rule]aicontract.Count{"section.missing": {First: 2, Repaired: 1}, "flat.json": {First: 1}}, Ceiling: &wiki.Ceiling{Limit: 64, Wanted: 80, Planned: 64}}}}
+		Contracts: map[aicontract.Rule]aicontract.Count{"section.missing": {First: 2, Repaired: 1}, "flat.json": {First: 1}}, Ceiling: &wiki.Ceiling{Limit: 64, Wanted: 80, Planned: 64}},
+		Writing: map[aicontract.Rule]aicontract.Count{"skeleton.missing": {First: 3, Repaired: 1}}}}
 	broken := result{Repo: "broken", Wiki: &wikiRun{Failed: true, Seconds: 3, Planning: &wiki.Planning{Seconds: 1, Requests: 2}}}
 	ok.Plan, ok.DeepWiki, broken.Plan = &shape.Shape{Pages: 10, Thin: 1, Homeless: []string{"svc/"}}, 28, &shape.Shape{Pages: 3}
 	ok.Update.Wiki, ok.Update.PagesRewritten = &wikiRun{Seconds: 5, Pages: 6, Touched: map[string]int{"skeleton": 1, "cites": 2}}, 1
@@ -469,7 +454,7 @@ func TestMarkdown(t *testing.T) {
 		"The judge is advisory, hand labels gate; its measured error: " + judgeError + ".", "embeddings none · judge j · questions 4 at a time\n",
 		"Evidence budget: 4 hits evicted, 1 refused; 3 citation references resolved to a path that differs from the one written by leading folders.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |",
 		"Answer decode |\n|---|---|---|---|---|---|---|\n| ok | 2 | 1.0 | 1.0 s | 0.7 s | 2.0 s | 10.0 tokens/s |\n\n**broken errors:**", "| 0 | 0 | 7 | 3, at most 40 | 4.2 s, 9 requests |", "| 0 | 0 | failed | failed | 1.0 s, 2 requests |",
-		"| Repository | Pages | DeepWiki | Thin | Crowded | Projects without a page | Ceiling | Contracts |\n|---|---|---|---|---|---|---|---|\n", "| ok | 10 | 28 | 1 | 0 | 1: svc/ | 80 wanted, 64 planned (limit 64) | flat.json 1/0/0, section.missing 2/1/0 |", "| broken | 3 | 0 | 0 | 0 | 0 | – | none broken |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |",
+		"| Repository | Pages | DeepWiki | Thin | Crowded | Projects without a page | Ceiling | Contracts |\n|---|---|---|---|---|---|---|---|\n", "| ok | 10 | 28 | 1 | 0 | 1: svc/ | 80 wanted, 64 planned (limit 64) | flat.json 1/0/0, section.missing 2/1/0 · pages: skeleton.missing 3/1/0 |", "| broken | 3 | 0 | 0 | 0 | 0 | – | none broken |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |",
 		"| uncited | 0 s | 0 | 0 | ≈90 (est.) | – | 4 + ≈2 (est.) |"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the report lacks %q:\n%s", want, md)

@@ -186,11 +186,12 @@ func TestFailures(t *testing.T) {
 	if r, err := a.Ask(context.Background(), ai.Prompt{Dynamic: "fake:spent"}, nil, nil); err != nil || !r.Spent || r.Text != `{"a": ` {
 		t.Errorf("an answer cut at the budget: %+v, %v", r, err)
 	}
-	for _, line := range []string{"no-such-agent-x7 --acp", `"` + os.Args[0] + `" acpfake -login`, `npx "unclosed`} {
+	for line, says := range map[string]string{"no-such-agent-x7 --key=SECRET": "acp_command: install", `"` + os.Args[0] + `" acpfake -login`: "claude /login", `npx "unclosed --key=SECRET`: "acp_command: give"} {
 		gone, _ := fake(t, "", func(a *Agent) { a.Command = line })
-		for range 2 { // the second within the backoff, failing as the first did
-			if _, err := ai.Generate(context.Background(), gone, ai.Prompt{}); !errors.Is(err, ai.ErrRefused) {
-				t.Errorf("%s: %v", line, err)
+		for range 2 { // the second within the backoff, failing as the first did, saying what to do, never the line's key
+			if _, err := ai.Generate(context.Background(), gone, ai.Prompt{}); !errors.Is(err, ai.ErrRefused) || err == nil || !strings.Contains(err.Error(), says) ||
+				strings.Contains(err.Error(), "SECRET") || strings.Contains(gone.Status().Trouble, "SECRET") {
+				t.Errorf("%s: %v, %+v", line, err, gone.Status())
 			}
 		}
 		if gone.fails != 1 {

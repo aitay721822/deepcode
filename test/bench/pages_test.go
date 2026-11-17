@@ -1,14 +1,20 @@
 package bench
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 
+	"deepcode/internal/knowledge/wiki"
+	aicontract "deepcode/internal/platform/ai/contract"
 	"deepcode/internal/platform/storage"
 	"deepcode/internal/repo/index/analyzer"
 	"deepcode/test/bench/score"
@@ -245,4 +251,57 @@ func pageTree(ctx context.Context, db *sql.DB, snap int64) ([]string, error) {
 		out = append(out, fmt.Sprintf("- %d %s", top, title))
 	}
 	return out, rows.Err()
+}
+
+// writing is wrote's: pages are written at a time.
+var writing sync.Mutex
+
+// wrote adds a page's contract counts to w's (wiki.Generator.Written).
+func (w *wikiRun) wrote(p wiki.Writing) {
+	writing.Lock()
+	defer writing.Unlock()
+	if w.Writing == nil {
+		w.Writing = map[aicontract.Rule]aicontract.Count{}
+	}
+	for r, c := range p.Contracts {
+		s := w.Writing[r]
+		w.Writing[r] = aicontract.Count{First: s.First + c.First, Repaired: s.Repaired + c.Repaired, Residual: s.Residual + c.Residual}
+	}
+}
+
+// planned is the ceiling and contracts cells of w, "–" for a wiki no model
+// planned: each rule the plan broke, then each its pages broke, as
+// first/afterRepair/residual.
+func planned(w *wikiRun) string {
+	if w == nil || w.Planning == nil {
+		return "– | –"
+	}
+	ceiling, rules := "–", cmp.Or(strings.Join(broken(w.Planning.Contracts), ", "), "none broken")
+	if c := w.Planning.Ceiling; c != nil {
+		ceiling = fmt.Sprintf("%d wanted, %d planned (limit %d)", c.Wanted, c.Planned, c.Limit)
+	}
+	if pages := broken(w.Writing); len(pages) > 0 {
+		rules += " · pages: " + strings.Join(pages, ", ")
+	}
+	return ceiling + " | " + rules
+}
+
+// broken is each rule of counts that was broken, as first/afterRepair/residual.
+func broken(counts map[aicontract.Rule]aicontract.Count) []string {
+	var out []string
+	for _, r := range slices.Sorted(maps.Keys(counts)) {
+		c := counts[r]
+		out = append(out, fmt.Sprintf("%s %d/%d/%d", r, c.First, c.Repaired, c.Residual))
+	}
+	return out
+}
+
+// TestWrote: the pages' counts add up by rule.
+func TestWrote(t *testing.T) {
+	var w wikiRun
+	w.wrote(wiki.Writing{Contracts: map[aicontract.Rule]aicontract.Count{"a": {First: 1, Repaired: 1}}})
+	w.wrote(wiki.Writing{Contracts: map[aicontract.Rule]aicontract.Count{"a": {First: 2, Residual: 1}, "b": {First: 1}}})
+	if w.Writing["a"] != (aicontract.Count{First: 3, Repaired: 1, Residual: 1}) || w.Writing["b"] != (aicontract.Count{First: 1}) || len(w.Writing) != 2 {
+		t.Errorf("summed: %+v", w.Writing)
+	}
 }

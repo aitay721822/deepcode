@@ -78,9 +78,9 @@ func TestTrustedProxies(t *testing.T) {
 	}
 }
 
-// frozen are the routes v1.0.0 serves (README's compatibility promise): a
-// release may add routes, never drop or rename one of these. /mcp counts by
-// the methods its transport answers.
+// frozen are the routes v1.0.0 serves, and v2.0.0's GET /api/admin/model
+// (README's compatibility promise): a release may add routes, never drop or
+// rename one of these. /mcp counts by the methods its transport answers.
 const frozen = `
 	GET /.well-known/oauth-authorization-server, GET /.well-known/oauth-protected-resource
 	GET /.well-known/oauth-protected-resource/mcp, GET /api/admin/jobs, GET /api/admin/jobs/:id
@@ -101,10 +101,10 @@ const frozen = `
 	GET /api/repos/:id/symbols, POST /api/repos/:id/sync, DELETE /api/repos/:id/webhook
 	GET /api/repos/:id/webhook, POST /api/repos/:id/webhook, GET /api/repos/:id/wiki
 	GET /api/repos/:id/wiki/export, GET /api/servers, DELETE /mcp, GET /mcp, POST /mcp
-	POST /oauth/register, POST /oauth/token
+	POST /oauth/register, POST /oauth/token, GET /api/admin/model
 `
 
-// TestFrozenRoutes: every route of v1.0.0 is still served, the webhook's among them.
+// TestFrozenRoutes: every route of v1.0.0 and v2.0.0 is still served, the webhook's among them.
 func TestFrozenRoutes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r, err := Router(&authapi.API{}, &repoapi.API{Webhooks: &hooks.API{}}, &adminapi.API{}, gin.H{}, http.NotFoundHandler(), true, nil)
@@ -117,7 +117,7 @@ func TestFrozenRoutes(t *testing.T) {
 	}
 	for _, route := range strings.FieldsFunc(frozen, func(r rune) bool { return r == ',' || r == '\n' }) {
 		if route = strings.TrimSpace(route); !served[route] {
-			t.Errorf("v1.0.0's route %s is gone", route)
+			t.Errorf("released route %s is gone", route)
 		}
 	}
 }

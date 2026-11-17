@@ -243,9 +243,10 @@ func TestDataDir(t *testing.T) {
 	}
 }
 
-// TestFrozenSettings: every setting v1.0.0 reads is still read, by the same key
-// in the config file and the same DEEPCODE_ variable (README's compatibility
-// promise): a release may add settings, never drop or rename one of these.
+// TestFrozenSettings: every setting v1.0.0 and v2.0.0 read is still read, by
+// the same key in the config file and the same DEEPCODE_ variable (README's
+// compatibility promise): a release may add settings, never drop or rename one
+// of these.
 // DEEPCODE_CONFIG, read outside defaults, is pinned by TestFileThenEnv.
 func TestFrozenSettings(t *testing.T) {
 	for _, k := range strings.Fields(`addr data
@@ -255,6 +256,11 @@ func TestFrozenSettings(t *testing.T) {
 		wiki_language wiki_parallel wiki_max_pages admin_password secret_key session_ttl trusted_proxies`) {
 		if _, ok := defaults[k]; !ok {
 			t.Errorf("v1.0.0's setting %s (DEEPCODE_%s) is gone", k, strings.ToUpper(k))
+		}
+	}
+	for _, k := range strings.Fields(`chat_provider acp_command acp_sessions acp_codex_home acp_claude_connectors acp_user_config`) {
+		if _, ok := defaults[k]; !ok {
+			t.Errorf("v2.0.0's setting %s (DEEPCODE_%s) is gone", k, strings.ToUpper(k))
 		}
 	}
 }

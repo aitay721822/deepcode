@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -428,5 +431,70 @@ func checkPublicID(t *testing.T, admin *client, id string) {
 	}
 	if code := admin.post("/api/repos", `{"url":"https://github.com/acme/other","serverId":"zzzzzzzzzzzzzzzzzzzzzzzz"}`, nil); code != http.StatusNotFound {
 		t.Fatalf("an import from no such server: %d, want 404", code)
+	}
+}
+
+// checkIsolation: two users, each allowed to read and ask about one repository
+// (design 5.9: projects kept apart by deepcode's accounts), ask through the
+// same model, an agent's under acp in each repository's folder under work (""
+// for a server), and each sees only their repository, conversation and usage; a
+// conversation is gone with its repository's grant.
+func checkIsolation(t *testing.T, base string, db *sql.DB, admin *client, demoID, toolsID, work string) {
+	t.Helper()
+	repos, users, convs, roles := map[string]string{"alice": demoID, "bob": toolsID}, map[string]*client{}, map[string]string{}, map[string]string{}
+	for name, repo := range repos {
+		var row int64
+		if err := db.QueryRow(`SELECT id FROM repositories WHERE public_id = ?`, repo).Scan(&row); err != nil {
+			t.Fatal(err)
+		}
+		folder := filepath.Join(work, fmt.Sprint(row))
+		if work != "" {
+			os.RemoveAll(folder)
+		}
+		var role, conv struct{ ID string } // json takes "id" too
+		body := fmt.Sprintf(`{"name":"%s's project","permissions":["repo.read","repo.chat","jobs.view"],"repositoryIds":[%q]}`, name, repo)
+		if code := admin.post("/api/admin/roles", body, &role); code != http.StatusCreated {
+			t.Fatalf("%s's role: %d", name, code)
+		}
+		if code := admin.post("/api/admin/users", fmt.Sprintf(`{"username":%q,"password":"%s-password","roleIds":[%q]}`, name, name, role.ID), nil); code != http.StatusCreated {
+			t.Fatalf("create %s: %d", name, code)
+		}
+		users[name], roles[name] = newClient(t, base), role.ID
+		if code := users[name].login(name, name+"-password"); code != http.StatusOK {
+			t.Fatalf("%s signs in: %d", name, code)
+		}
+		_, events := users[name].events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"question":"What does %s's project do?"}`, repo, name))
+		if len(events["error"]) > 0 || len(events["done"]) != 1 || len(events["conversation"]) != 1 || json.Unmarshal(events["conversation"][0], &conv) != nil {
+			t.Fatalf("%s asks: %v", name, events)
+		}
+		convs[name] = conv.ID
+		if fi, err := os.Stat(folder); work != "" && (err != nil || !fi.IsDir()) {
+			t.Errorf("%s's question, not in the agent's folder %s: %v", name, folder, err)
+		}
+	}
+	for name, other := range map[string]string{"alice": "bob", "bob": "alice"} {
+		c, theirs := users[name], repos[other]
+		var list []repoView
+		if c.get("/api/repos", &list); len(list) != 1 || list[0].ID != repos[name] {
+			t.Errorf("%s sees %+v, want only their repository", name, list)
+		}
+		for path, want := range map[string]int{"/api/conversations/" + convs[name]: http.StatusOK, "/api/conversations/" + convs[other]: http.StatusNotFound,
+			"/api/repos/" + theirs: http.StatusNotFound, "/api/repos/" + theirs + "/wiki": http.StatusNotFound} {
+			if code := c.get(path, nil); code != want {
+				t.Errorf("%s GET %s: %d, want %d", name, path, code, want)
+			}
+		}
+		if code, _ := c.events(http.MethodPost, "/api/chat/stream", fmt.Sprintf(`{"repoId":%q,"question":"hi"}`, theirs)); code == http.StatusOK {
+			t.Errorf("%s asked about %s's repository", name, other)
+		}
+		var usage []map[string]any
+		if c.get("/api/admin/usage", &usage); len(usage) == 0 || slices.ContainsFunc(usage, func(u map[string]any) bool { return u["repoId"] != repos[name] }) {
+			t.Errorf("%s sees the usage %v, want only their repository's", name, usage)
+		}
+	}
+	if code := admin.patch("/api/admin/roles/"+roles["alice"], fmt.Sprintf(`{"repositoryIds":[%q]}`, toolsID), nil); code != http.StatusOK {
+		t.Fatalf("alice's role moved: %d", code)
+	} else if code := users["alice"].get("/api/conversations/"+convs["alice"], nil); code != http.StatusNotFound {
+		t.Errorf("alice's conversation once the role no longer grants its repository: %d, want 404", code)
 	}
 }
