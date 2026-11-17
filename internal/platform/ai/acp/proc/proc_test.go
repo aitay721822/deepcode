@@ -66,8 +66,13 @@ func TestSplit(t *testing.T) {
 	if _, err := Split(`npx "unclosed`); !errors.Is(err, ErrLine) {
 		t.Errorf("an unclosed quote: %v", err)
 	}
-	if _, err := Start("  ", nil, nil); !errors.Is(err, ErrLine) {
-		t.Errorf("no command: %v", err)
+	for _, line := range []string{"  ", "KEY=k3y npx -y codex-acp"} { // no command; a shell's variable, never in the error
+		if _, err := Start(line, nil, nil); !errors.Is(err, ErrLine) || strings.Contains(err.Error(), "k3y") {
+			t.Errorf("Start(%q): %v", line, err)
+		}
+	}
+	if _, err := Start(`"C:\no=such\agent.exe" --acp`, nil, nil); err == nil || errors.Is(err, ErrLine) { // a path with =: not found, no variable
+		t.Errorf("a path with =: %v", err)
 	}
 }
 
@@ -86,6 +91,8 @@ func TestName(t *testing.T) {
 		"npx":                                                  "npx",
 		"npx --token k3y codex-acp":                            "codex-acp", // a flag's value given apart from it
 		"npx --no-such-flag codex-acp":                         "npx",       // as a value it might be: not taken
+		"KEY=k3y npx -y codex-acp":                             "codex-acp", // a shell's variable: no program
+		`"C:\tools\v=2\npx.cmd" -y codex-acp`:                  "codex-acp", // a path with =
 		"npx -y --yes codex-acp@2.6.0":                         "codex-acp", // switches take no value
 		"uvx --quiet agent-tool==1.2":                          "agent-tool",
 		"npx @notes codex-acp":                                 "codex-acp",

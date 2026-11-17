@@ -32,7 +32,8 @@ type Process struct {
 
 // Start runs line with env, nothing else of this process's environment, its
 // standard error written to stderr (nil discards it), and its tree held so
-// that Stop ends every process it starts.
+// that Stop ends every process it starts. No shell runs line: one starting
+// with a shell's NAME=value is ErrLine, without the word, which may hold a key.
 func Start(line string, env []string, stderr *os.File) (*Process, error) {
 	args, err := Split(line)
 	if err != nil {
@@ -40,6 +41,9 @@ func Start(line string, env []string, stderr *os.File) (*Process, error) {
 	}
 	if len(args) == 0 {
 		return nil, fmt.Errorf("%w: no command", ErrLine)
+	}
+	if assignment(args[0]) {
+		return nil, fmt.Errorf("%w: a variable before the command, which no shell runs", ErrLine)
 	}
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = env
@@ -129,20 +133,31 @@ func Split(line string) ([]string, error) {
 	return args, nil
 }
 
+// assignment is whether w is a shell's NAME=value (KEY=k3y): a name of
+// letters, digits and _, which no path is (C:\a=b\npx.cmd, /opt/a=b/x).
+func assignment(w string) bool {
+	name, _, ok := strings.Cut(w, "=")
+	return ok && name != "" && strings.IndexFunc(name, func(r rune) bool { return r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) }) < 0
+}
+
 // switches are the runners' flags that take no value.
 var switches = []string{"--", "-y", "--yes", "-q", "--quiet", "-s", "--silent", "--offline", "--prefer-offline", "--bun", "--no-install", "--ignore-scripts"}
 
 // Name is the package a runner (npx, bunx, pnpm dlx, uvx) runs in line, the
 // first scoped one (@scope/pkg) else the first word after the runner, without
 // its scope and version (@1.2, ==1.2); else the program's name; acp when line
-// names none. A flag's value may hold a key (--token k3y, a registry's URL,
-// user:k3y@host), so none is taken: the word after a flag that is not one of
-// the runners' switches (and --) and has no =, unless a scoped package, any
-// word with a colon, and one starting with @ that is no scope.
+// names none. The program is the first word that is neither a flag nor a
+// shell's NAME=value (assignment). A flag's value may hold a key (--token k3y,
+// a registry's URL, user:k3y@host), so none is taken: the word after a flag
+// that is not one of the runners' switches (and --) and has no =, unless a
+// scoped package, any word with a colon, and one starting with @ that is no
+// scope.
 func Name(line string) string {
 	args, _ := Split(line)
 	base := func(w string) string { return w[strings.LastIndexAny(w, `/\`)+1:] }
-	i := slices.IndexFunc(args, func(w string) bool { return !strings.HasPrefix(w, "-") && !strings.Contains(w, "://") })
+	i := slices.IndexFunc(args, func(w string) bool {
+		return !strings.HasPrefix(w, "-") && !assignment(w) && !strings.Contains(w, "://")
+	})
 	if i < 0 {
 		return "acp"
 	}

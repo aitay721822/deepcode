@@ -145,7 +145,7 @@
 2. 停掉舊版，換上新的執行檔，再 `./deepcode serve`。資料庫在啟動時自動升級。
 3. `secret_key`（`DEEPCODE_SECRET_KEY`）要沿用；沒設定時用的是 `data/secret.key`，這個檔要留著。換了 key，存下的 Git 伺服器 token 就解不開。
 
-從 1.x 升到 2.0 沒有不相容的改動，照上面做即可：設定檔不必改，不設 `chat_provider` 時照舊使用 OpenAI 相容的 API；資料庫從 1.1 多一個 migration（從 1.0.x 另加 1.1 的兩個），用量表加上沒回報 token 的呼叫數、估算的 token 與耗時，舊的用量列這些欄位是 0；呼叫數從此也算失敗或被拒的請求。要改用訂閱的 agent，見 [ACP](#用訂閱的-agentacp)。
+從 1.x 升到 2.0 沒有不相容的改動，照上面做即可：設定檔不必改，不設 `chat_provider` 時照舊使用 OpenAI 相容的 API；資料庫多一個 migration（026），用量表加上沒回報 token 的呼叫數、估算的 token 與耗時，舊的用量列這些欄位是 0；呼叫數從此也算失敗或被拒的請求。從 1.0.x 升級的，還會跑 1.1 的 024、025。要改用訂閱的 agent，見 [ACP](#用訂閱的-agentacp)。
 
 要退回舊版，換回舊的執行檔，並用升級前的備份取代資料庫：新版跑過的 migration 無法倒回。
 

@@ -448,8 +448,8 @@ func checkIsolation(t *testing.T, base string, db *sql.DB, admin *client, demoID
 			t.Fatal(err)
 		}
 		folder := filepath.Join(work, fmt.Sprint(row))
-		if work != "" {
-			os.RemoveAll(folder)
+		if work != "" && os.RemoveAll(folder) != nil { // only under acp: folder is a relative path for a server
+			t.Fatalf("clear the agent's folder %s", folder)
 		}
 		var role, conv struct{ ID string } // json takes "id" too
 		body := fmt.Sprintf(`{"name":"%s's project","permissions":["repo.read","repo.chat","jobs.view"],"repositoryIds":[%q]}`, name, repo)
