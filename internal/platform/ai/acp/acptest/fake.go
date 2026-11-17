@@ -77,7 +77,13 @@ func Main(args []string) {
 	flags.StringVar(&f.setfail, "setfail", "", "")
 	flags.BoolVar(&f.login, "login", false, "")
 	flags.BoolVar(&f.hang, "hang", false, "")
-	flags.StringVar(&f.stall, "stall", "", "")
+	flags.Func("stall", "", func(v string) error { // a request it does not have would stall nothing
+		if v != "initialize" && v != "session/new" {
+			return fmt.Errorf("-stall %q: initialize or session/new", v)
+		}
+		f.stall = v
+		return nil
+	})
 	flags.IntVar(&f.quota, "quota", 0, "")
 	flags.StringVar(&f.relay, "relay", "", "")
 	flags.Parse(args)
@@ -298,6 +304,7 @@ func (f *fake) Prompt(ctx context.Context, q acp.PromptRequest) (acp.PromptRespo
 	case strings.Contains(t, "fake:slow"):
 		return slow(ctx)
 	case strings.Contains(t, "fake:deaf"):
+		waits("a deaf prompt")
 		time.Sleep(time.Hour) // till the process ends
 		return acp.PromptResponse{}, nil
 	case strings.Contains(t, "fake:big"):
@@ -411,7 +418,8 @@ func slow(ctx context.Context) (acp.PromptResponse, error) {
 func waits(what string) { fmt.Fprintf(os.Stderr, "fake: waits on %s\n", what) }
 
 // Await returns once the fake whose agent.log is in dir waits on what (a
-// stalled session/new, a slow prompt), failing t if it does not in 20 s.
+// stalled session/new, a slow prompt), failing t if it does not in 20 s. The
+// log keeps the mark: a test waiting on what twice needs an agent each time.
 func Await(t testing.TB, dir, what string) {
 	t.Helper()
 	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(10 * time.Millisecond) {

@@ -2,7 +2,6 @@ package bench
 
 import (
 	"cmp"
-	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -31,6 +30,7 @@ type report struct {
 	EmbedModel      string   `json:"embedModel,omitempty"` // "": lexical search only
 	Judged          bool     `json:"judged,omitempty"`     // its selfTalk and language are the judge's (judge_test.go); an older run's selfTalk is a detector's
 	JudgeModel      string   `json:"judgeModel,omitempty"` // DEEPCODE_JUDGE_MODEL; "": the chat model judged
+	Asks            int      `json:"asks,omitempty"`       // questions asked at a time (design D10); 0 in older runs, which asked one
 	Repos           []result `json:"repos"`
 }
 
@@ -113,6 +113,7 @@ type answer struct {
 	Calls              map[string]int `json:"calls,omitempty"` // the gathering's calls, by tool
 	Stop               string         `json:"stop,omitempty"`  // the rule that ended the gathering
 	Citations          int            `json:"citations"`
+	Lines              int            `json:"lines"`           // the lines its citations cover (score.Lines); 0 in older runs
 	Missing            []string       `json:"missingKeywords"` // the words it must hold and does not
 	SelfTalk           bool           `json:"selfTalk"`        // it talks to itself, as the judge reads it
 	SelfTalkSentence   string         `json:"selfTalkSentence,omitempty"`
@@ -161,7 +162,7 @@ func (rep report) markdown() string {
 	if rep.Judged {
 		judge = " · judge " + cmp.Or(rep.JudgeModel, rep.Model)
 	}
-	p("# deepcode bench\n\nStarted %s · deepcode %s · model %s · reasoning effort %q · temperature %q · embeddings %s%s\n", rep.Started, rep.Deepcode, rep.Model, rep.ReasoningEffort, rep.Temperature, cmp.Or(rep.EmbedModel, "none"), judge)
+	p("# deepcode bench\n\nStarted %s · deepcode %s · model %s · reasoning effort %q · temperature %q · embeddings %s%s · questions %d at a time\n", rep.Started, rep.Deepcode, rep.Model, rep.ReasoningEffort, rep.Temperature, cmp.Or(rep.EmbedModel, "none"), judge, max(rep.Asks, 1))
 	p("The first index's time includes fetching the repository from GitHub. A repository with errors (listed below the tables) has numbers that are partial.\n")
 	p("## Index and graph (head)\n\n| Repository | Files | Generated | Languages | Chunks | Symbols | Import edges | Diagram edges | First index | Errors |\n|---|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
@@ -237,10 +238,10 @@ func (rep report) markdown() string {
 			p("| %s | %d | %.3f | %.3f |", r.Repo, e.Questions, e.Recall, e.MRR)
 		}
 	}
-	var asked, passed, uncited, talking, foreign, unjudged, evicted, refused, resolved int
+	var asked, passed, uncited, lines, talking, foreign, unjudged, evicted, refused, resolved int
 	for _, r := range rep.Repos {
 		for _, a := range r.Answers {
-			asked++
+			asked, lines = asked+1, lines+a.Lines
 			if tr := a.Trace; tr != nil {
 				evicted, refused, resolved = evicted+len(tr.Evicted), refused+len(tr.Refused), resolved+tr.Resolved
 			}
@@ -261,12 +262,12 @@ func (rep report) markdown() string {
 			}
 		}
 	}
-	p("\n## Questions (head)\n\n%d of %d answers hold their keywords; %d cite nothing; %d think aloud; %d answer in another language; %d were not judged. Answer start: the first words of the draft an answer ended with; self-talk and language as the judge reads them. The judge is advisory, hand labels gate; its measured error: %s.\n", passed, asked, uncited, talking, foreign, unjudged, judgeError)
+	p("\n## Questions (head)\n\n%d of %d answers hold their keywords; %d cite nothing; their citations cover %d lines; %d think aloud; %d answer in another language; %d were not judged. Answer start: the first words of the draft an answer ended with; self-talk and language as the judge reads them. The judge is advisory, hand labels gate; its measured error: %s.\n", passed, asked, uncited, lines, talking, foreign, unjudged, judgeError)
 	p("Evidence budget: %d hits evicted, %d refused; %d citation references resolved to a path that differs from the one written by leading folders.\n", evicted, refused, resolved)
 	p("| Repository | Question | First token | Answer start | Total | Citations | Keywords | Self-talk | Language |\n|---|---|---|---|---|---|---|---|---|")
 	for _, r := range rep.Repos {
 		for _, a := range r.Answers {
-			first, total, cites, keys, talk, lang := fmt.Sprintf("%.1f s", a.FirstTokenSeconds), fmt.Sprintf("%.1f s", a.Seconds), fmt.Sprint(a.Citations), "pass", "no", "same"
+			first, total, cites, keys, talk, lang := fmt.Sprintf("%.1f s", a.FirstTokenSeconds), fmt.Sprintf("%.1f s", a.Seconds), fmt.Sprintf("%d, %d lines", a.Citations, a.Lines), "pass", "no", "same"
 			begun := fmt.Sprintf("%.1f s", a.AnswerStartSeconds)
 			if len(a.Missing) > 0 {
 				keys = "fail: no " + strings.Join(a.Missing, ", ")
@@ -374,20 +375,6 @@ func TestPace(t *testing.T) {
 	}
 }
 
-// TestMeter: a take returns the model's answers since the last, summed and
-// each in order, and starts again.
-func TestMeter(t *testing.T) {
-	var m meter
-	m.Record(context.Background(), "m", ai.Usage{InTokens: 5, OutTokens: 1})
-	m.take()
-	m.Record(context.Background(), "m", ai.Usage{InTokens: 10, OutTokens: 2})
-	m.Record(context.Background(), "m", ai.Usage{InTokens: 20, OutTokens: 3, CachedTokens: 4})
-	if calls, u, each := m.take(); calls != 2 || u != (ai.Usage{InTokens: 30, OutTokens: 5, CachedTokens: 4}) ||
-		!slices.Equal(each, []ai.Usage{{InTokens: 10, OutTokens: 2}, {InTokens: 20, OutTokens: 3, CachedTokens: 4}}) {
-		t.Errorf("%d calls, %+v, each %+v", calls, u, each)
-	}
-}
-
 // count shows n, or "failed" when step, the query that counts it, failed.
 func count(r result, step string, n int) string {
 	if slices.Contains(r.Failed, step) {
@@ -469,17 +456,17 @@ func TestMarkdown(t *testing.T) {
 	broken.Update.Failed, broken.Errors = true, []string{"update index: boom"}
 	ok.Failed = []string{"symbols", "pages rewritten"} // a count whose query failed
 	broken.Answers = []answer{{Question: "q", Error: "timeout", Trace: &trace.Trace{Gathered: 1}}}
-	ok.Answers = []answer{{Question: "k", Citations: 2, Missing: []string{"Mount"}, SelfTalk: true, Language: "German", OtherLanguage: true, FirstTokenSeconds: 3, AnswerStartSeconds: 9.5, Seconds: 20,
+	ok.Answers = []answer{{Question: "k", Citations: 2, Lines: 7, Missing: []string{"Mount"}, SelfTalk: true, Language: "German", OtherLanguage: true, FirstTokenSeconds: 3, AnswerStartSeconds: 9.5, Seconds: 20,
 		Rounds: 3, Trace: &trace.Trace{Gathered: 2, Shown: make([]trace.Source, 1), Evicted: make([]trace.Source, 3), Refused: make([]trace.Source, 1), Resolved: 2}, Requests: []ai.Usage{{OutTokens: 100}, {OutTokens: 50}, {OutTokens: 170}}},
-		{Question: "u", Citations: 1, FirstTokenSeconds: 1, AnswerStartSeconds: 1, Seconds: 2, Rounds: 1, Trace: &trace.Trace{Gathered: 0.6, Shown: make([]trace.Source, 1), Evicted: make([]trace.Source, 1), Resolved: 1}}} // its judge failed; no reply, no usage
+		{Question: "u", Citations: 1, Lines: 3, FirstTokenSeconds: 1, AnswerStartSeconds: 1, Seconds: 2, Rounds: 1, Trace: &trace.Trace{Gathered: 0.6, Shown: make([]trace.Source, 1), Evicted: make([]trace.Source, 1), Resolved: 1}}} // its judge failed; no reply, no usage
 	ok.WikiRuns, ok.Tree = []wikiRun{{Parallel: 1, Seconds: 20}, {Parallel: 2, Seconds: 12}}, []string{"- 1 Overview", "- 2 Core", "  - 2.1 Mux"}
 	ok.Pages, ok.Topics, ok.CitationSpan, ok.PageCitations = 10, &coverage{Topics: 4, Covered: 3, Missing: []string{"SSE"}, ToolingPages: 2}, citationSpan{3, 40}, 7
 	uncited, uncounted := result{Repo: "uncited", Wiki: &wikiRun{EstInTokens: 90, OutTokens: 4, EstOutTokens: 2}}, result{Repo: "uncounted", Wiki: &wikiRun{}, Failed: []string{"page citations"}}
-	md := report{Model: "m", Judged: true, JudgeModel: "j", Repos: []result{ok, broken, uncited, uncounted}}.markdown()
+	md := report{Model: "m", Judged: true, JudgeModel: "j", Asks: 4, Repos: []result{ok, broken, uncited, uncounted}}.markdown()
 	for _, want := range []string{"| ok | 0 | 0.0 s | 5 s | failed of 6 (1 by skeleton) |", "| ok | 0 | 0 | 0 | 0 | failed | 0 | 0 | 0.0 s | 0 |", "failed after 3 s", "| broken | failed | failed |", "| broken | failed | failed | failed | failed | failed | failed | failed | 0.0 s | 1 |", "| broken | q | failed | failed | failed after 0.0 s | – | fail | no | – |", "update index: boom", "Error: timeout",
-		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 3.0 s | 9.5 s | 20.0 s | 2 | fail: no Mount | yes | other |", "| ok | u | 1.0 s | 1.0 s | 2.0 s | 1 | pass | not judged | not judged |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
-		"1 of 3 answers hold their keywords; 0 cite nothing; 1 think aloud; 1 answer in another language; 1 were not judged.",
-		"The judge is advisory, hand labels gate; its measured error: " + judgeError + ".", "embeddings none · judge j\n",
+		"| ok | 1 at a time: 20 s · 2 at a time: 12 s | 6 | 0 | 200 | 150 (75%) | – |", "| broken | failed after 3 s | 0 | 0 | – | – | – |", "| ok | k | 3.0 s | 9.5 s | 20.0 s | 2, 7 lines | fail: no Mount | yes | other |", "| ok | u | 1.0 s | 1.0 s | 2.0 s | 1, 3 lines | pass | not judged | not judged |", "### ok (3 pages)\n\n- 1 Overview\n- 2 Core\n  - 2.1 Mux",
+		"1 of 3 answers hold their keywords; 0 cite nothing; their citations cover 10 lines; 1 think aloud; 1 answer in another language; 1 were not judged.",
+		"The judge is advisory, hand labels gate; its measured error: " + judgeError + ".", "embeddings none · judge j · questions 4 at a time\n",
 		"Evidence budget: 4 hits evicted, 1 refused; 3 citation references resolved to a path that differs from the one written by leading folders.", "| ok | 3 of 4 (75%) | 10 | 2 (20%) | SSE |",
 		"Answer decode |\n|---|---|---|---|---|---|---|\n| ok | 2 | 1.0 | 1.0 s | 0.7 s | 2.0 s | 10.0 tokens/s |\n\n**broken errors:**", "| 0 | 0 | 7 | 3, at most 40 | 4.2 s, 9 requests |", "| 0 | 0 | failed | failed | 1.0 s, 2 requests |",
 		"| Repository | Pages | DeepWiki | Thin | Crowded | Projects without a page | Ceiling | Contracts |\n|---|---|---|---|---|---|---|---|\n", "| ok | 10 | 28 | 1 | 0 | 1: svc/ | 80 wanted, 64 planned (limit 64) | flat.json 1/0/0, section.missing 2/1/0 |", "| broken | 3 | 0 | 0 | 0 | 0 | – | none broken |", "| 0 | 0 | 0 | – |", "| uncounted | 0 s | 0 | 0 | – | – | – | 0 | 0 | failed | failed | – |",

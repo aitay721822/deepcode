@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"deepcode/internal/knowledge/evidence"
 )
 
 // TestCover: a topic is covered when a heading holds one of its words as a
@@ -42,5 +44,33 @@ func TestCover(t *testing.T) {
 		"````\n```\n## in four\n```go\n````\n    ```\n## Five\n```\n## in three\n```go\n## still in three\n```  \n## Six\n"
 	if got := Headings(page); !slices.Equal(got, []string{"One", "Two", "Four", "Five", "Six"}) {
 		t.Errorf("Headings = %q, want One, Two, Four, Five and Six, nothing of the code blocks", got)
+	}
+}
+
+// TestChinese: an answer is Chinese by its prose, its code and links aside.
+func TestChinese(t *testing.T) {
+	for s, want := range map[string]bool{
+		"How does Mount work?": false,
+		"Mount 如何運作？":          true,
+		"It returns `錯誤` on failure, then retries the whole request.":                                                                   false,
+		"The error says 「找不到 Git 伺服器」 when the server id is unknown to the catalog.":                                                    false,
+		"為何 PaymentSucceededEventHandlerFactory 會觸發 InvoiceProjectionRebuildCoordinator":                                                true,
+		"設定如下：\n```go\nfunc Mount(pattern string, h http.Handler) { r.mux.Handle(pattern, h) }\n```\n見 [chi/mux.go:10-20](https://x/y)": true,
+		"見 [mux.go:10-20]，程式碼如下：\n```go\nfunc (mx *Mux) Mount(pattern string, handler http.Handler) {\n\tif handler == nil {":           true,
+		"": false,
+	} {
+		if Chinese(s) != want {
+			t.Errorf("Chinese(%q) = %v", s, !want)
+		}
+	}
+}
+
+// TestLines: overlapping ranges of a file count once, other files' apart, a
+// citation of one line as one.
+func TestLines(t *testing.T) {
+	cites := []evidence.Citation{{Path: "a.go", StartLine: 3, EndLine: 8}, {Path: "b.go", StartLine: 1, EndLine: 1}, {Path: "a.go", StartLine: 1, EndLine: 5},
+		{Path: "a.go", StartLine: 10}, {Path: "a.go", StartLine: 2, EndLine: 4}, {Path: "b.go", StartLine: 3, EndLine: 4}}
+	if n := Lines(cites); n != 8+1+1+2 {
+		t.Errorf("Lines = %d, want 12: a.go 1-8 and 10, b.go 1 and 3-4", n)
 	}
 }

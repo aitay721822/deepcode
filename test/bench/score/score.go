@@ -1,13 +1,16 @@
 // Package score is how the bench and the probes score what deepcode writes:
 // DeepWiki's topics of each bench repository and whether a wiki's headings
-// cover them (this file), and the judge reading prose for self-talk and its
-// language (judge.go).
+// cover them and the lines an answer's citations cover (this file), and the
+// judge reading prose for self-talk and its language (judge.go).
 package score
 
 import (
+	"cmp"
 	"regexp"
 	"slices"
 	"strings"
+
+	"deepcode/internal/knowledge/evidence"
 )
 
 // Topic is a subject of DeepWiki's wiki of a repository, covered when a page's
@@ -303,3 +306,24 @@ func Headings(content string) []string {
 // fenceRe matches a code block's fence line: its mark ("```", "~~~~") and
 // what follows it on the line ("go").
 var fenceRe = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})([^\n]*)")
+
+// Lines is how many lines cites cover, a range overlapping another of its
+// file's counted once: how much code an answer cites, however finely it splits
+// it (design D11).
+func Lines(cites []evidence.Citation) int {
+	cs := slices.Clone(cites)
+	slices.SortFunc(cs, func(a, b evidence.Citation) int {
+		return cmp.Or(strings.Compare(a.Path, b.Path), a.StartLine-b.StartLine)
+	})
+	n, path, end := 0, "", 0 // end: the last line of path counted
+	for _, c := range cs {
+		if c.Path != path {
+			path, end = c.Path, 0
+		}
+		if last := max(c.EndLine, c.StartLine); last > end {
+			n += last - max(c.StartLine, end+1) + 1
+			end = last
+		}
+	}
+	return n
+}

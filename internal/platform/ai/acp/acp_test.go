@@ -242,17 +242,20 @@ func TestStatus(t *testing.T) {
 	if short.fails != 2 || short.Status().Trouble == "" {
 		t.Errorf("a probe failed twice on its second request: %d starts failed, %+v", short.fails, short.Status())
 	}
-	slow, _ := fake(t, "", func(a *Agent) { a.Timeout = time.Second })
+	slow, _ := fake(t, "", func(a *Agent) { a.Timeout = 5 * time.Second })
 	gone, cancel := context.WithCancel(ctx)
-	time.AfterFunc(200*time.Millisecond, cancel)
-	ai.Generate(gone, slow, ai.Prompt{Dynamic: "fake:slow"}) // a reader who left: not the agent's failure
-	left := slow.Status().Trouble
-	due, cancelDue := context.WithTimeout(ctx, 200*time.Millisecond)
+	left := make(chan struct{})
+	go func() { ai.Generate(gone, slow, ai.Prompt{Dynamic: "fake:slow"}); close(left) }() // a reader who left: not the agent's failure
+	acptest.Await(t, slow.Dir, "a slow prompt")
+	cancel()
+	<-left
+	due, cancelDue := context.WithTimeout(ctx, time.Second) // a job's own deadline, the process up: nor that
 	defer cancelDue()
-	ai.Generate(due, slow, ai.Prompt{Dynamic: "fake:slow"}) // a job's own deadline: nor that
-	left += slow.Status().Trouble
-	if _, err := ai.Generate(ctx, slow, ai.Prompt{Dynamic: "fake:slow"}); left != "" || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(slow.Status().Trouble, "no whole answer") {
-		t.Errorf("a request its caller ended: %q; one past its time: %v, %q", left, err, slow.Status().Trouble)
+	ai.Generate(due, slow, ai.Prompt{Dynamic: "fake:slow"})
+	noted := slow.Status().Trouble
+	slow.Timeout = 300 * time.Millisecond
+	if _, err := ai.Generate(ctx, slow, ai.Prompt{Dynamic: "fake:slow"}); noted != "" || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(slow.Status().Trouble, "no whole answer") {
+		t.Errorf("a request its caller ended: %q; one past its time: %v, %q", noted, err, slow.Status().Trouble)
 	}
 	ai.Generate(ctx, slow, ai.Prompt{Dynamic: "fake:logout"}) // answered, then signed out: each session/new refused
 	if _, err := ai.Generate(ctx, slow, ai.Prompt{}); !errors.Is(err, ai.ErrRefused) || !strings.Contains(slow.Status().Trouble, "not signed in") {
@@ -423,29 +426,37 @@ func TestExchange(t *testing.T) {
 		ex.Close()
 	}
 	ex = a.Exchange(ai.Prompt{Dynamic: `fake:script:not JSON|||fake:slow|||{"calls": []}`}, tools)
-	short, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	_, _, err = ex.Next(short)
-	cancel()
+	err = cancelled(t, ex, a.Dir, "a slow prompt") // asked again, then cancelled
 	e = ex.(*exchange)
 	texts = e.Texts(e.Len())
 	held = len(texts[len(texts)-1]) // the request asked again, sent again
 	for _, s := range texts {
 		held += len(s)
 	}
-	if _, calls, again := ex.Next(ctx); !errors.Is(err, context.DeadlineExceeded) || again != nil || len(calls) != 0 || ex.Used().InTokens != held/4 {
+	if _, calls, again := ex.Next(ctx); !errors.Is(err, context.Canceled) || again != nil || len(calls) != 0 || ex.Used().InTokens != held/4 {
 		t.Errorf("after a request that failed: %v, then %+v, %v, %d tokens, want %d", err, calls, again, ex.Used().InTokens, held/4)
 	}
 	ex.Close()
 	defer func(was time.Duration) { grace = was }(grace)
 	grace = 300 * time.Millisecond
 	ex = a.Exchange(ai.Prompt{Dynamic: "fake:deaf"}, tools) // its turn never ends
-	short, cancel = context.WithTimeout(ctx, 200*time.Millisecond)
-	_, _, err = ex.Next(short)
-	cancel()
-	if _, _, again := ex.Next(ctx); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(again, ai.ErrUnavailable) || !strings.Contains(again.Error(), "did not end") {
+	err = cancelled(t, ex, a.Dir, "a deaf prompt")
+	if _, _, again := ex.Next(ctx); !errors.Is(err, context.Canceled) || !errors.Is(again, ai.ErrUnavailable) || !strings.Contains(again.Error(), "did not end") {
 		t.Errorf("a turn not ended once cancelled: %v, then %v", err, again)
 	}
 	ex.Close()
+}
+
+// cancelled is the error of ex's next request, cancelled once the fake agent
+// whose log is in dir waits on what.
+func cancelled(t *testing.T, ex ai.Exchange, dir, what string) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // should Await fail
+	failed := make(chan error, 1)
+	go func() { _, _, err := ex.Next(ctx); failed <- err }()
+	acptest.Await(t, dir, what)
+	cancel()
+	return <-failed
 }
 
 // TestQuiet: a notification the SDK has no method for is dropped from the

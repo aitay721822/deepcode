@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"deepcode/internal/platform/ai"
 	"deepcode/internal/platform/ai/compat"
@@ -69,4 +71,23 @@ func Judge(ctx context.Context, model ai.Chat, answer string) (Verdict, error) {
 func Speaks(language, want string) bool {
 	language, _, _ = strings.Cut(language, "(")
 	return strings.Contains(strings.ToLower(language), strings.ToLower(want))
+}
+
+var (
+	codeOrLink = regexp.MustCompile("(?s)```.*?```|```.*|`[^`\n]*`|\\[[^\\]\n]*\\](\\([^)\n]*\\))?") // a fence left open (a cut-off answer) runs to the end
+	latinWord  = regexp.MustCompile(`[A-Za-z]+`)
+)
+
+// Chinese reports whether s, its code and links aside, has at least as many
+// Han characters as Latin words: a Chinese sentence naming identifiers stays
+// Chinese, an English one quoting a Chinese string stays English.
+func Chinese(s string) bool {
+	s = codeOrLink.ReplaceAllString(s, " ")
+	han := 0
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) {
+			han++
+		}
+	}
+	return han > 0 && han >= len(latinWord.FindAllStringIndex(s, -1))
 }

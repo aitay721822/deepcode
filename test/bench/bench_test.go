@@ -9,7 +9,10 @@
 // DEEPCODE_EMBED_MODEL). DEEPCODE_BENCH_REPOS=chi,axum picks repositories, and DEEPCODE_BENCH_PARALLEL=1,2
 // writes each first wiki once per number of pages written at a time (DEEPCODE_WIKI_PARALLEL, else 1, by
 // default), the last one kept. Without a chat model only indexing, the graph and the retrieval eval are
-// measured; DEEPCODE_BENCH_WIKI=0 leaves the wikis out, for a run of the answers alone. TestJudge
+// measured; DEEPCODE_BENCH_WIKI=0 leaves the wikis out, for a run of the answers alone. An agent
+// (DEEPCODE_CHAT_PROVIDER=acp) is asked DEEPCODE_ACP_SESSIONS questions at a time, a server one. The
+// answers are judged by DEEPCODE_JUDGE_MODEL at DEEPCODE_JUDGE_BASE_URL with DEEPCODE_JUDGE_API_KEY, at
+// that server's own reasoning effort and temperature, else by the chat model (score.Model). TestJudge
 // re-judges a stored run's answers (judge_test.go).
 package bench
 
@@ -22,14 +25,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-	"unicode"
 
 	"deepcode/internal/knowledge/chat"
 	chatstore "deepcode/internal/knowledge/chat/store"
@@ -38,6 +39,7 @@ import (
 	"deepcode/internal/knowledge/wiki"
 	wikistore "deepcode/internal/knowledge/wiki/store"
 	"deepcode/internal/platform/ai"
+	"deepcode/internal/platform/ai/acp"
 	"deepcode/internal/platform/ai/tokens"
 	"deepcode/internal/platform/cache"
 	"deepcode/internal/platform/events"
@@ -61,20 +63,57 @@ import (
 )
 
 // meter sums the model's answers between two reads, and keeps each: the chat
-// model's Meter.
+// model's Meter. The answers to a question, which questions asked at a time
+// would mix, it keeps apart by the question (asking) for requests.
 type meter struct {
 	mu    sync.Mutex
 	calls int
 	u     ai.Usage
 	each  []ai.Usage
+	asked map[*answer][]ai.Usage
 }
 
-func (m *meter) Record(_ context.Context, _ string, u ai.Usage) {
+// asking keys a question's context: its value is the question's *answer.
+type asking struct{}
+
+func (m *meter) Record(ctx context.Context, _ string, u ai.Usage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if a, ok := ctx.Value(asking{}).(*answer); ok {
+		m.asked[a] = append(m.asked[a], u)
+		return
+	}
 	m.calls++
 	m.u.Add(u)
 	m.each = append(m.each, u)
+}
+
+// requests returns the answers to a's question in the order they came, and
+// forgets them.
+func (m *meter) requests(a *answer) []ai.Usage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	each := m.asked[a]
+	delete(m.asked, a)
+	return each
+}
+
+// TestMeter: a take returns the model's answers since the last, summed and
+// each in order, and starts again; a question's are its own.
+func TestMeter(t *testing.T) {
+	m, a := meter{asked: map[*answer][]ai.Usage{}}, &answer{}
+	m.Record(context.Background(), "m", ai.Usage{InTokens: 5, OutTokens: 1})
+	m.take()
+	m.Record(context.Background(), "m", ai.Usage{InTokens: 10, OutTokens: 2})
+	m.Record(context.WithValue(context.Background(), asking{}, a), "m", ai.Usage{InTokens: 7})
+	m.Record(context.Background(), "m", ai.Usage{InTokens: 20, OutTokens: 3, CachedTokens: 4})
+	if calls, u, each := m.take(); calls != 2 || u != (ai.Usage{InTokens: 30, OutTokens: 5, CachedTokens: 4}) ||
+		!slices.Equal(each, []ai.Usage{{InTokens: 10, OutTokens: 2}, {InTokens: 20, OutTokens: 3, CachedTokens: 4}}) {
+		t.Errorf("%d calls, %+v, each %+v", calls, u, each)
+	}
+	if each, again := m.requests(a), m.requests(a); !slices.Equal(each, []ai.Usage{{InTokens: 7}}) || again != nil {
+		t.Errorf("the question's: %+v, then %+v", each, again)
+	}
 }
 
 // take returns what was summed since the last take, and each answer summed in
@@ -97,6 +136,7 @@ type rig struct {
 	chat     *chat.Service
 	judge    ai.Chat // the answers' (score.Model)
 	meter    *meter
+	asks     int      // questions asked at a time: an agent's sessions (design D10), else 1
 	parallel []int    // the first wiki's runs, by pages written at a time
 	last     *wikiRun // the wiki being written, which the generator's hooks tell of its plan and carried pages
 }
@@ -130,7 +170,7 @@ func TestBench(t *testing.T) {
 	rep := report{Started: time.Now().UTC().Format(time.RFC3339), ReasoningEffort: os.Getenv("DEEPCODE_REASONING_EFFORT"),
 		Temperature: os.Getenv("DEEPCODE_TEMPERATURE"), Deepcode: head(), Judged: true, JudgeModel: os.Getenv("DEEPCODE_JUDGE_MODEL")}
 	if r.chat != nil { // an agent by its name and model: claude-agent-acp/default
-		rep.Model, rep.ChatSchema = r.chat.Chat.Name(), r.chat.Chat.SchemaMode()
+		rep.Model, rep.ChatSchema, rep.Asks = r.chat.Chat.Name(), r.chat.Chat.SchemaMode(), r.asks
 	}
 	if r.ret.Embed != nil {
 		rep.EmbedModel = r.ret.Embed.ModelName
@@ -178,7 +218,7 @@ func setup(t *testing.T, work string) *rig {
 		t.Fatal(err)
 	}
 	vectors := &vectorstore.SQLite{DB: db}
-	r := &rig{db: db, meter: &meter{}, ret: &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: graphs,
+	r := &rig{db: db, meter: &meter{asked: map[*answer][]ai.Usage{}}, asks: 1, ret: &retrieval.Retriever{Store: &retrievalstore.Store{DB: db}, Graph: graphs,
 		Embed: embed, Vectors: vectors, Cache: cache.New(1 << 20)}}
 	r.cat = &catalog.Catalog{Store: &catalogstore.Store{DB: db}, Queue: jobs.New(&jobstore.Store{DB: db}, bus, 2*time.Hour), Git: gitc, Servers: servers}
 	r.ix = &indexer.Indexer{Store: &indexstore.Store{DB: db}, Graph: graphs, Git: gitc, Servers: servers, Events: bus,
@@ -194,6 +234,14 @@ func setup(t *testing.T, work string) *rig {
 	if llm != nil {
 		if c, ok := llm.(interface{ Close() }); ok { // an agent's process ends with the bench
 			t.Cleanup(c.Close)
+		}
+		if a, ok := llm.(*acp.Agent); ok { // its questions asked as many at a time as it takes prompts: its set within 10 minutes
+			r.asks = max(a.Sessions, 1)
+		}
+		for u := 2; u <= r.asks; u++ { // a user of its own for each question asked at a time
+			if _, err := db.Exec(`INSERT INTO users(id, username, password_hash) VALUES (?, ?, '')`, u, fmt.Sprint("bench", u)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		pages, err := strconv.Atoi(cmp.Or(os.Getenv("DEEPCODE_WIKI_MAX_PAGES"), "0")) // 0, the default, when unset
 		if err != nil || pages < 0 {
@@ -214,7 +262,10 @@ func setup(t *testing.T, work string) *rig {
 func (r *rig) measure(t *testing.T, id int64, tg target) result {
 	ctx := context.Background()
 	res := result{Repo: tg.name, URL: tg.url, Base: tg.base, Head: tg.head, DeepWiki: tg.pages}
+	var mu sync.Mutex // fail's: questions asked at a time fail at once
 	fail := func(step string, err error) {
+		mu.Lock()
+		defer mu.Unlock()
 		res.Errors, res.Failed = append(res.Errors, step+": "+err.Error()), append(res.Failed, step)
 		t.Logf("%s %s: %v", tg.name, step, err)
 	}
@@ -336,94 +387,48 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 		res.Eval = &evalResult{Questions: len(eval.Corpora[i].Questions), Recall: e.Recall, MRR: e.MRR, Misses: e.Misses}
 	}
 	if r.chat != nil {
-		for n, q := range tg.questions {
-			a := r.ask(ctx, id, q.ask)
-			low := strings.ToLower(a.Answer)
-			for _, w := range q.want {
-				if !slices.ContainsFunc(strings.Split(strings.ToLower(w), "|"), func(alt string) bool { return strings.Contains(low, alt) }) {
-					a.Missing = append(a.Missing, w)
-				}
-			}
-			if len(a.Trace.Dropped) > 0 { // the gathering's budget keeps all it gathered within what Format shows
-				fail(fmt.Sprintf("question %d", n+1), fmt.Errorf("its evidence dropped %d hits gathered", len(a.Trace.Dropped)))
-			}
-			if a.Error != "" {
-				fail(fmt.Sprintf("question %d", n+1), errors.New(a.Error))
-			} else if v, err := judge(ctx, r.judge, a.Answer); err != nil {
-				fail(fmt.Sprintf("judging question %d", n+1), err)
-			} else {
-				a.SelfTalk, a.SelfTalkSentence, a.Language, a.OtherLanguage = v.SelfTalk, v.Sentence, v.Language, !speaks(v.Language, q.language())
-			}
-			res.Answers = append(res.Answers, a)
-		}
+		res.Answers = make([]answer, len(tg.questions))
+		inTurn(len(tg.questions), r.asks, func(n int, user int64) { res.Answers[n] = r.answer(ctx, id, user, n, tg.questions[n], fail) })
 	}
 	return res
 }
 
-var (
-	codeOrLink = regexp.MustCompile("(?s)```.*?```|```.*|`[^`\n]*`|\\[[^\\]\n]*\\](\\([^)\n]*\\))?") // a fence left open (a cut-off answer) runs to the end
-	latinWord  = regexp.MustCompile(`[A-Za-z]+`)
-)
-
-// chinese reports whether s, its code and links aside, has at least as many
-// Han characters as Latin words: a Chinese sentence naming identifiers stays
-// Chinese, an English one quoting a Chinese string stays English.
-func chinese(s string) bool {
-	s = codeOrLink.ReplaceAllString(s, " ")
-	han := 0
-	for _, r := range s {
-		if unicode.Is(unicode.Han, r) {
-			han++
-		}
+// inTurn runs ask on n questions in order, users at a time, each by a user
+// (1 to users) that no other question has meanwhile: chat lets a user write
+// but two answers at a time.
+func inTurn(n, users int, ask func(n int, user int64)) {
+	free, wg := make(chan int64, users), sync.WaitGroup{}
+	for u := range users {
+		free <- int64(u + 1)
 	}
-	return han > 0 && han >= len(latinWord.FindAllStringIndex(s, -1))
+	for i := range n {
+		user := <-free
+		wg.Go(func() { defer func() { free <- user }(); ask(i, user) })
+	}
+	wg.Wait()
 }
 
-func TestChinese(t *testing.T) {
-	for s, want := range map[string]bool{
-		"How does Mount work?": false,
-		"Mount 如何運作？":          true,
-		"It returns `錯誤` on failure, then retries the whole request.":                                                                   false,
-		"The error says 「找不到 Git 伺服器」 when the server id is unknown to the catalog.":                                                    false,
-		"為何 PaymentSucceededEventHandlerFactory 會觸發 InvoiceProjectionRebuildCoordinator":                                                true,
-		"設定如下：\n```go\nfunc Mount(pattern string, h http.Handler) { r.mux.Handle(pattern, h) }\n```\n見 [chi/mux.go:10-20](https://x/y)": true,
-		"見 [mux.go:10-20]，程式碼如下：\n```go\nfunc (mx *Mux) Mount(pattern string, handler http.Handler) {\n\tif handler == nil {":           true,
-		"": false,
-	} {
-		if chinese(s) != want {
-			t.Errorf("chinese(%q) = %v", s, !want)
+// answer asks q, the n-th question, as user, and scores its answer: the
+// keywords it lacks and the judge's verdict.
+func (r *rig) answer(ctx context.Context, id, user int64, n int, q question, fail func(string, error)) answer {
+	a := r.ask(ctx, id, user, q.ask)
+	low := strings.ToLower(a.Answer)
+	for _, w := range q.want {
+		if !slices.ContainsFunc(strings.Split(strings.ToLower(w), "|"), func(alt string) bool { return strings.Contains(low, alt) }) {
+			a.Missing = append(a.Missing, w)
 		}
 	}
-}
-
-// pageTree is the outline of the snapshot's wiki, as a Markdown list: each
-// page numbered, a section's pages under it.
-func pageTree(ctx context.Context, db *sql.DB, snap int64) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT title, position, coalesce(parent, -1) FROM wiki_pages WHERE snapshot_id = ? ORDER BY position`, snap)
-	if err != nil {
-		return nil, err
+	if len(a.Trace.Dropped) > 0 { // the gathering's budget keeps all it gathered within what Format shows
+		fail(fmt.Sprintf("question %d", n+1), fmt.Errorf("its evidence dropped %d hits gathered", len(a.Trace.Dropped)))
 	}
-	defer rows.Close()
-	var out []string
-	numbers, under := map[int]string{}, map[int]int{}
-	top := 0
-	for rows.Next() {
-		var title string
-		var position, parent int
-		if err := rows.Scan(&title, &position, &parent); err != nil {
-			return nil, err
-		}
-		if section, ok := numbers[parent]; ok {
-			under[parent]++
-			numbers[position] = fmt.Sprintf("%s.%d", section, under[parent])
-			out = append(out, fmt.Sprintf("  - %s %s", numbers[position], title))
-			continue
-		}
-		top++
-		numbers[position] = fmt.Sprint(top)
-		out = append(out, fmt.Sprintf("- %d %s", top, title))
+	if a.Error != "" {
+		fail(fmt.Sprintf("question %d", n+1), errors.New(a.Error))
+	} else if v, err := judge(ctx, r.judge, a.Answer); err != nil {
+		fail(fmt.Sprintf("judging question %d", n+1), err)
+	} else {
+		a.SelfTalk, a.SelfTalkSentence, a.Language, a.OtherLanguage = v.SelfTalk, v.Sentence, v.Language, !speaks(v.Language, q.language())
 	}
-	return out, rows.Err()
+	return a
 }
 
 // writeWiki writes the wiki of the snapshot at sha and measures it.
@@ -441,13 +446,14 @@ func (r *rig) writeWiki(ctx context.Context, id int64, sha string, fail func(str
 	return r.last
 }
 
-// ask asks q as a user would and times it (trace.Clock), keeping what its evidence
+// ask asks q as user would and times it (trace.Clock), keeping what its evidence
 // event tells of the search: its rounds, and the gathering's calls and stop,
-// the trace of its events, and each of its model requests' usage.
-func (r *rig) ask(ctx context.Context, id int64, q string) answer {
-	r.meter.take()
+// the trace of its events, the lines its citations cover, and each of its
+// model requests' usage.
+func (r *rig) ask(ctx context.Context, id, user int64, q string) answer {
 	a, start, c := answer{Question: q, Trace: &trace.Trace{}}, time.Now(), trace.Clock{}
-	err := r.chat.Ask(ctx, chat.Request{RepoID: id, Question: q, UserID: 1}, func(event string, data any) {
+	ctx = context.WithValue(ctx, asking{}, &a)
+	err := r.chat.Ask(ctx, chat.Request{RepoID: id, Question: q, UserID: user}, func(event string, data any) {
 		at := time.Since(start)
 		c.Tick(event, at)
 		a.Trace.Take(event, data, at)
@@ -456,12 +462,12 @@ func (r *rig) ask(ctx context.Context, id int64, q string) answer {
 			a.Calls, _ = d["calls"].(map[string]int)
 			a.Stop, _ = d["stop"].(string)
 		} else if m, ok := data.(chat.Message); ok && event == "done" {
-			a.Answer, a.Citations = m.Content, len(m.Citations)
+			a.Answer, a.Citations, a.Lines = m.Content, len(m.Citations), score.Lines(m.Citations)
 		}
 	})
 	first, begun, rewrites := c.Read()
 	a.FirstTokenSeconds, a.AnswerStartSeconds, a.Rewrites, a.Seconds = first.Seconds(), begun.Seconds(), rewrites, since(start)
-	_, _, a.Requests = r.meter.take()
+	a.Requests = r.meter.requests(&a)
 	if err != nil {
 		a.Error = err.Error()
 	}

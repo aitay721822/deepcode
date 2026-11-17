@@ -216,3 +216,33 @@ func TestTooling(t *testing.T) {
 		t.Errorf("%d pages cite tooling alone, want 1", n)
 	}
 }
+
+// pageTree is the outline of the snapshot's wiki, as a Markdown list: each
+// page numbered, a section's pages under it.
+func pageTree(ctx context.Context, db *sql.DB, snap int64) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT title, position, coalesce(parent, -1) FROM wiki_pages WHERE snapshot_id = ? ORDER BY position`, snap)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	numbers, under := map[int]string{}, map[int]int{}
+	top := 0
+	for rows.Next() {
+		var title string
+		var position, parent int
+		if err := rows.Scan(&title, &position, &parent); err != nil {
+			return nil, err
+		}
+		if section, ok := numbers[parent]; ok {
+			under[parent]++
+			numbers[position] = fmt.Sprintf("%s.%d", section, under[parent])
+			out = append(out, fmt.Sprintf("  - %s %s", numbers[position], title))
+			continue
+		}
+		top++
+		numbers[position] = fmt.Sprint(top)
+		out = append(out, fmt.Sprintf("- %d %s", top, title))
+	}
+	return out, rows.Err()
+}

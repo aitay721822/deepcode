@@ -4,7 +4,9 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unicode"
 
 	"deepcode/test/bench/score"
@@ -28,7 +30,7 @@ func (tg target) topics() []score.Topic { return score.Topics[tg.name] }
 // alternatives, a|b, for a name written more than one way. A word the question
 // itself holds checks nothing, so each question has one that it does not.
 // lang is the language it is asked in, as the judge names one; "" for English,
-// Japanese when it holds kana, or Chinese when it holds Han (chinese).
+// Japanese when it holds kana, or Chinese when it holds Han (score.Chinese).
 type question struct {
 	ask  string
 	want []string
@@ -42,7 +44,7 @@ func (q question) language() string {
 		return q.lang
 	case strings.ContainsFunc(q.ask, func(r rune) bool { return unicode.In(r, unicode.Hiragana, unicode.Katakana) }):
 		return "Japanese"
-	case chinese(q.ask):
+	case score.Chinese(q.ask):
 		return "Chinese"
 	}
 	return "English"
@@ -135,5 +137,28 @@ func TestKeywords(t *testing.T) {
 				t.Errorf("%s: every word of %q is in the question", tg.name, q.ask)
 			}
 		}
+	}
+}
+
+// TestInTurn: every question is asked once, at most users at a time, by one
+// of the users, none on two questions at once.
+func TestInTurn(t *testing.T) {
+	var mu sync.Mutex
+	busy, asked, most := map[int64]bool{}, map[int]int64{}, 0
+	inTurn(9, 4, func(n int, user int64) {
+		mu.Lock()
+		if busy[user] || user < 1 || user > 4 {
+			t.Errorf("question %d by user %d: busy or none of the four", n, user)
+		}
+		busy[user], asked[n] = true, user
+		most = max(most, len(busy))
+		mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+		mu.Lock()
+		delete(busy, user)
+		mu.Unlock()
+	})
+	if len(asked) != 9 || most > 4 {
+		t.Errorf("asked %v, at most %d at a time", asked, most)
 	}
 }
