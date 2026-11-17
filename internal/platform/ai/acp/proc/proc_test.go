@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,13 +67,16 @@ func TestSplit(t *testing.T) {
 	if _, err := Split(`npx "unclosed`); !errors.Is(err, ErrLine) {
 		t.Errorf("an unclosed quote: %v", err)
 	}
-	for _, line := range []string{"  ", "KEY=k3y npx -y codex-acp"} { // no command; a shell's variable, never in the error
+	for _, line := range []string{"  ", "KEY=k3y npx -y codex-acp", `$env:KEY="k3y"; npx -y codex-acp`, "a-b=k3y npx", "https://k3y@host/agent --acp"} { // no command; a variable set or a URL, never in the error
 		if _, err := Start(line, nil, nil); !errors.Is(err, ErrLine) || strings.Contains(err.Error(), "k3y") {
 			t.Errorf("Start(%q): %v", line, err)
 		}
 	}
-	if _, err := Start(`"C:\no=such\agent.exe" --acp`, nil, nil); err == nil || errors.Is(err, ErrLine) { // a path with =: not found, no variable
-		t.Errorf("a path with =: %v", err)
+	for _, line := range []string{`"C:\no=k3y\agent.exe" --acp`, "/x/a=k3y", "//u:k3y@h/agent", "k3y@host/agent --acp"} { // paths, not found: no variable, never quoted
+		_, err := Start(line, nil, nil)
+		if err == nil || errors.Is(err, ErrLine) || !errors.Is(err, exec.ErrNotFound) && !errors.Is(err, fs.ErrNotExist) || strings.Contains(err.Error(), "k3y") {
+			t.Errorf("Start(%q): %v", line, err)
+		}
 	}
 }
 
@@ -91,8 +95,19 @@ func TestName(t *testing.T) {
 		"npx":                                                  "npx",
 		"npx --token k3y codex-acp":                            "codex-acp", // a flag's value given apart from it
 		"npx --no-such-flag codex-acp":                         "npx",       // as a value it might be: not taken
-		"KEY=k3y npx -y codex-acp":                             "codex-acp", // a shell's variable: no program
-		`"C:\tools\v=2\npx.cmd" -y codex-acp`:                  "codex-acp", // a path with =
+		"KEY=k3y npx -y codex-acp":                             "acp",       // a shell's variable: no program, nor the words after it
+		"KEY= k3y npx":                                         "acp",
+		"A=1 B=2 codex-acp":                                    "acp",
+		"--token k3y npx":                                      "acp", // a flag: no program
+		"https://k3y@host/agent":                               "acp",
+		`$env:KEY="k3y"; npx -y codex-acp`:                     "acp", // PowerShell's variable
+		"=k3y npx":                                             "acp",
+		"a-b=k3y npx":                                          "acp",
+		"/x/a=k3y":                                             "a",         // a path's program, up to its =
+		"npx -y ./a=b/codex-acp":                               "codex-acp", // a package's path with =
+		"npx -y KEY=x/k3y":                                     "KEY",       // what follows = is no package's
+		`"C:\tools\v=2\npx.cmd" -y codex-acp`:                  "codex-acp", // paths with =
+		`"C:\a=b\codex-acp.exe" --acp`:                         "codex-acp",
 		"npx -y --yes codex-acp@2.6.0":                         "codex-acp", // switches take no value
 		"uvx --quiet agent-tool==1.2":                          "agent-tool",
 		"npx @notes codex-acp":                                 "codex-acp",

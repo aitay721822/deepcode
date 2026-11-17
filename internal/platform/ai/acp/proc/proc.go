@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,7 +34,9 @@ type Process struct {
 // Start runs line with env, nothing else of this process's environment, its
 // standard error written to stderr (nil discards it), and its tree held so
 // that Stop ends every process it starts. No shell runs line: one starting
-// with a shell's NAME=value is ErrLine, without the word, which may hold a key.
+// with a variable set (assignment: KEY=k3y, $env:KEY=k3y) or a URL is ErrLine,
+// without the word, which may hold a key; a program that cannot start is its
+// cause, without its path (unquoted).
 func Start(line string, env []string, stderr *os.File) (*Process, error) {
 	args, err := Split(line)
 	if err != nil {
@@ -42,8 +45,8 @@ func Start(line string, env []string, stderr *os.File) (*Process, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("%w: no command", ErrLine)
 	}
-	if assignment(args[0]) {
-		return nil, fmt.Errorf("%w: a variable before the command, which no shell runs", ErrLine)
+	if assignment(args[0]) || strings.Contains(args[0], "://") {
+		return nil, fmt.Errorf("%w: a variable or a URL for the command, which no shell runs", ErrLine)
 	}
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = env
@@ -65,7 +68,7 @@ func Start(line string, env []string, stderr *os.File) (*Process, error) {
 	w.Close() // the process holds its own
 	if err != nil {
 		out.Close()
-		return nil, err
+		return nil, unquoted(err)
 	}
 	if p.tree, err = hold(cmd.Process); err != nil {
 		_ = cmd.Process.Kill()
@@ -78,6 +81,23 @@ func Start(line string, env []string, stderr *os.File) (*Process, error) {
 		close(p.done)
 	}()
 	return p, nil
+}
+
+// unquoted is a failed start's cause without the program's path, which exec's
+// errors (*exec.Error, *fs.PathError) quote whole and which may hold a key
+// (/x/a=k3y, //user:k3y@host/agent); the caller names the agent. A
+// *fs.PathError is looked for first, as an *exec.Error may hold one (Windows'
+// stat of the program).
+func unquoted(err error) error {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return fmt.Errorf("the program: %s: %w", pe.Op, pe.Err)
+	}
+	var ee *exec.Error
+	if errors.As(err, &ee) {
+		return fmt.Errorf("the program: %w", ee.Err)
+	}
+	return err
 }
 
 // Done is closed once the process has ended.
@@ -133,11 +153,13 @@ func Split(line string) ([]string, error) {
 	return args, nil
 }
 
-// assignment is whether w is a shell's NAME=value (KEY=k3y): a name of
-// letters, digits and _, which no path is (C:\a=b\npx.cmd, /opt/a=b/x).
+// assignment is whether w sets a variable, as a shell's NAME=value or
+// PowerShell's $env:NAME=value would (KEY=k3y): a word with = and no / or \
+// before it, which a path to a program has (C:\a=b\npx.cmd, ./a=b/x); a
+// program on the PATH named a=b is taken for one.
 func assignment(w string) bool {
 	name, _, ok := strings.Cut(w, "=")
-	return ok && name != "" && strings.IndexFunc(name, func(r rune) bool { return r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) }) < 0
+	return ok && !strings.ContainsAny(name, `/\`)
 }
 
 // switches are the runners' flags that take no value.
@@ -145,30 +167,29 @@ var switches = []string{"--", "-y", "--yes", "-q", "--quiet", "-s", "--silent", 
 
 // Name is the package a runner (npx, bunx, pnpm dlx, uvx) runs in line, the
 // first scoped one (@scope/pkg) else the first word after the runner, without
-// its scope and version (@1.2, ==1.2); else the program's name; acp when line
-// names none. The program is the first word that is neither a flag nor a
-// shell's NAME=value (assignment). A flag's value may hold a key (--token k3y,
-// a registry's URL, user:k3y@host), so none is taken: the word after a flag
-// that is not one of the runners' switches (and --) and has no =, unless a
-// scoped package, any word with a colon, and one starting with @ that is no
-// scope.
+// its scope and version (@1.2, ==1.2); else the program's name, up to an =.
+// The program is line's first word, as Start runs it; Name is acp when there
+// is none, its name is empty, or it is no program's (a flag, an assignment, a
+// URL), and then takes none of the words after it.
+//
+// A flag's value may hold a key (--token k3y, a registry's URL, user:k3y@host),
+// so none is taken: the word after a flag that is not one of the runners'
+// switches (and --) and has no =, unless a scoped package, any word with a
+// colon, and one starting with @ that is no scope.
 func Name(line string) string {
 	args, _ := Split(line)
 	base := func(w string) string { return w[strings.LastIndexAny(w, `/\`)+1:] }
-	i := slices.IndexFunc(args, func(w string) bool {
-		return !strings.HasPrefix(w, "-") && !assignment(w) && !strings.Contains(w, "://")
-	})
-	if i < 0 {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") || assignment(args[0]) || strings.Contains(args[0], "://") {
 		return "acp"
 	}
-	name := strings.ToLower(base(args[i]))
+	name, _, _ := strings.Cut(strings.ToLower(base(args[0])), "=")
 	name = strings.TrimSuffix(name, filepath.Ext(name))
 	if !slices.Contains([]string{"npx", "bunx", "pnpx", "pnpm", "yarn", "bun", "uvx"}, name) {
 		return cmp.Or(name, "acp")
 	}
 	scoped := func(w string) bool { return strings.HasPrefix(w, "@") && strings.Contains(w, "/") }
 	var pkgs []string
-	for rest := args[i+1:]; len(rest) > 0; rest = rest[1:] {
+	for rest := args[1:]; len(rest) > 0; rest = rest[1:] {
 		switch w := rest[0]; {
 		case strings.HasPrefix(w, "-"):
 			if !strings.Contains(w, "=") && !slices.Contains(switches, w) && len(rest) > 1 && !scoped(rest[1]) {
@@ -184,7 +205,11 @@ func Name(line string) string {
 	if len(pkgs) == 0 {
 		return name
 	}
-	pkg := base(pkgs[0])
+	pkg := pkgs[0]
+	if assignment(pkg) { // KEY=x/k3y: what follows = is no package's
+		pkg, _, _ = strings.Cut(pkg, "=")
+	}
+	pkg = base(pkg)
 	if k := strings.IndexAny(pkg, "@=<>~!"); k >= 0 {
 		pkg = pkg[:k]
 	}
