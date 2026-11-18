@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/aitay721822/deepcode)](https://github.com/aitay721822/deepcode/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
 
-<img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/tour.gif" alt="在 go-chi/chi 的 Wiki 頁點一個引用，原始碼從右側抽屜滑出，關掉後頁面停在原處；接著提問：deepcode 先搜尋程式碼，再串流出附行號引用的答案，右側打開引用的原始碼" width="900">
+<img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@862189a44434523c7c27dff7bbc3e083f50086fb/.github/assets/tour.gif" alt="在 go-chi/chi 的 Wiki 頁點一個引用，原始碼從右側抽屜滑出，關掉後頁面停在原處；接著提問：deepcode 先搜尋程式碼，再串流出附行號引用的答案，右側打開引用的原始碼" width="900">
 
 </div>
 
@@ -28,22 +28,22 @@
 **Wiki**：兩層目錄、由 import 圖畫出的架構圖，右側是同步、branch 與 webhook。點引用時，原始碼從右側抽屜打開，頁面停在原處。
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/wiki-dark.png">
-  <img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/wiki-light.png" alt="go-chi/chi 的 Wiki 首頁與架構圖">
+  <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@862189a44434523c7c27dff7bbc3e083f50086fb/.github/assets/wiki-dark.png">
+  <img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@862189a44434523c7c27dff7bbc3e083f50086fb/.github/assets/wiki-light.png" alt="go-chi/chi 的 Wiki 首頁與架構圖">
 </picture>
 
 **問答**：答案裡的每個引用都能點開，右側直接顯示那幾行原始碼。
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/answer-dark.png">
-  <img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/answer-light.png" alt="回答 chi 如何把請求路徑對應到 handler，右側是引用的原始碼">
+  <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@862189a44434523c7c27dff7bbc3e083f50086fb/.github/assets/answer-dark.png">
+  <img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@862189a44434523c7c27dff7bbc3e083f50086fb/.github/assets/answer-light.png" alt="回答 chi 如何把請求路徑對應到 handler，右側是引用的原始碼">
 </picture>
 
 **Codemap**：把答案畫成依執行順序編號的程式路徑，可以切換成圖。
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/codemap-dark.png">
-  <img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/codemap-light.png" alt="Mount 子路由時路由 context 如何傳遞的 code map">
+  <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@862189a44434523c7c27dff7bbc3e083f50086fb/.github/assets/codemap-dark.png">
+  <img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@862189a44434523c7c27dff7bbc3e083f50086fb/.github/assets/codemap-light.png" alt="Mount 子路由時路由 context 如何傳遞的 code map">
 </picture>
 
 ## Quick start
