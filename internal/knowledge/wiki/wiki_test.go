@@ -271,7 +271,7 @@ func TestRunPlansSections(t *testing.T) {
 		if under := strings.Contains(u, `This page is part of the section "Page 1"`); under != (i >= 6) { // six at the top first
 			t.Fatalf("write %d of %d is under a section: %v", i+1, len(model.writes), under)
 		}
-		if s := strings.Index(u, `Sources the pages of the section "Page 1" share`); strings.Contains(u, `the section "Page 1"`) && (s < 0 || s > strings.Index(u, "Write the page")) {
+		if s := strings.Index(u, `Code the pages of the section "Page 1" share`); strings.Contains(u, `the section "Page 1"`) && (s < 0 || s > strings.Index(u, "Write the page")) {
 			t.Fatalf("write %d shares no sources ahead of its request:\n%s", i+1, u)
 		}
 	}
@@ -411,9 +411,9 @@ func TestRunOutcomes(t *testing.T) {
 // TestRunWritesSkeleton: a page is held to its skeleton, its chosen file's
 // type with its function at level 3. A fenced, titled first draft lacking
 // them is cleaned and repaired for those sections alone, after the intro; the
-// page renders with it, cited, and Written tells it. Its placed file, with no
-// heading, is listed last under the Other files label, linked, by its first
-// three types and functions; its folder of tests, unsourced, by its path.
+// page renders with it, cited, and Written tells it. Its placed file, no heading
+// or block (not among the request's files), is listed last under the Other files
+// label, linked, by its first three types and functions; its tests' folder by path.
 func TestRunWritesSkeleton(t *testing.T) {
 	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status, wiki_status, wiki_language, wiki_labels) VALUES (1, 1, 'abc', 'ready', 'failed', 'English', '{"stack":"Stack","otherFiles":"More files"}')`,
 		`INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`,
@@ -431,9 +431,9 @@ func TestRunWritesSkeleton(t *testing.T) {
 		!strings.HasSuffix(pages[1].Content, "\n\n## More files\n\n- [b.go](https://example.com/o/r/blob/abc/b.go): `B`, `c`, `d`\n- `e2e/`") {
 		t.Fatalf("%+v %v", pages, err)
 	}
-	if len(model.writes) != 2 || len(model.plans) != 0 || !strings.Contains(model.writes[0], "Its headings, in order:\n## Router\n### route\nIts files: a.go, b.go\n") ||
+	if len(model.writes) != 2 || len(model.plans) != 0 || !strings.Contains(model.writes[0], "Its headings, in order:\n## Router\n### route\nIts files: a.go\n") ||
 		!slices.Equal(w.Headings, []string{"Router", "route"}) || len(w.Lacking) != 0 || !slices.Equal(w.Unsourced, []string{"e2e"}) || !w.Repaired ||
-		w.Contracts["write.heading"] != (aicontract.Count{First: 2}) {
+		w.Contracts["write.heading"] != (aicontract.Count{First: 2}) || !strings.HasSuffix(model.writes[0], "</source>\n\nWrite about the repository, never about these <source> blocks, in English.") {
 		t.Errorf("asked %q; written %+v", model.writes, w)
 	}
 }

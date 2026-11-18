@@ -85,7 +85,8 @@ func service(db *sql.DB, model *compat.Client) *Service {
 // TestAnswers: an answer is written from the evidence, with the model's
 // <think> block dropped; a follow-up is searched together with the previous
 // question and sent after the turns before it; a question no code matches is
-// answered so without asking the model for an answer.
+// answered so without asking the model for an answer, in Chinese for a Chinese
+// one, else in English, as streamed, with no footer.
 func TestAnswers(t *testing.T) {
 	ctx := context.Background()
 	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "a.db"))
@@ -136,9 +137,13 @@ func TestAnswers(t *testing.T) {
 	}))
 	defer model.Close()
 	s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m"})
-	started := "" // the public id of the conversation the last ask started or went on with
+	started, delta := "", "" // the public id of the conversation the last ask started or went on with; what it streamed
 	ask := func(conv string, q string) (done Message) {
+		delta = ""
 		err := s.Ask(ctx, Request{RepoID: 1, ConversationID: conv, Question: q, UserID: 1}, func(event string, data any) {
+			if event == "delta" {
+				delta += data.(string)
+			}
 			if event == "conversation" { // public ids, the snapshot's too
 				d := data.(map[string]any)
 				if started = d["id"].(string); len(started) != 24 || len(d["snapshotId"].(string)) != 24 {
@@ -160,11 +165,15 @@ func TestAnswers(t *testing.T) {
 	if m := ask(started, "and then?"); !strings.HasPrefix(m.Content, "It subscribes") { // in the conversation just started
 		t.Fatalf("a follow-up: %+v", m)
 	}
-	if m := ask("", "zzzz qqqq"); m.Content != noEvidence || len(m.Citations) != 0 {
-		t.Fatalf("no evidence: %+v", m)
+	const none = "No indexed code matched this question, so it can't be confirmed from the current code." // in English for German, as uncited, with no footer
+	if m := ask("", "zzzz qqqq"); m.Content != none || delta != none || len(m.Citations) != 0 {
+		t.Fatalf("no evidence: %+v, streamed %q", m, delta)
 	}
 	if want := []string{"its language", "an answer in German. with 2 messages", "its language", "an answer in German. with 4 messages", "its language", "search terms"}; !slices.Equal(asked, want) { // none in kana or Han
 		t.Fatalf("the model was asked for %q, want %q", asked, want)
+	}
+	if none := "無法從目前程式碼確認：沒有任何已索引的程式碼符合這個問題。"; ask("", "zzzz 什麼").Content != none || delta != none {
+		t.Fatalf("no evidence in Chinese: %q", delta)
 	}
 	refuse = 1 // with the counts: the context learned, the request fitted again and sent once more
 	if m := ask("", "subscribe"); !strings.HasPrefix(m.Content, "It subscribes") || s.Chat.Window().Context != 100000 || refuse != 0 {
@@ -315,7 +324,8 @@ func TestGathered(t *testing.T) {
 }
 
 // TestConverges: a plain answer's gathering ends on a reply that only reads a file the first search found
-// (loop.StopConverged); a deep answer's goes on, reading it again, until it stalls.
+// and adds nothing, the model's second (loop.StopConverged; the event's rounds count the answer's too);
+// a deep answer's goes on, reading it again, until it stalls.
 func TestConverges(t *testing.T) {
 	ctx := context.Background()
 	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "c.db"))
@@ -350,14 +360,14 @@ func TestConverges(t *testing.T) {
 	}))
 	defer model.Close()
 	for deep, want := range map[bool]string{false: loop.StopConverged, true: loop.StopStalled} {
-		var stop any
+		var stop, rounds any
 		err := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m"}).Ask(ctx, Request{RepoID: 1, Question: "How does subscribe work?", Deep: deep, UserID: 1}, func(event string, data any) {
 			if event == "evidence" {
-				stop = data.(map[string]any)["stop"]
+				stop, rounds = data.(map[string]any)["stop"], data.(map[string]any)["rounds"]
 			}
 		})
-		if err != nil || stop != want {
-			t.Errorf("deep %v: stopped %v, want %s (%v)", deep, stop, want, err)
+		if err != nil || stop != want || (!deep && rounds != 3) {
+			t.Errorf("deep %v: stopped %v after %v rounds, want %s (%v)", deep, stop, rounds, want, err)
 		}
 	}
 }
@@ -402,7 +412,8 @@ func TestEvidenceEvent(t *testing.T) {
 // TestCodemap: a code map is drawn with drawing events, its locations linked
 // (a path's brackets escaped) and cited, and stored to be read back; an answer
 // that is no map is told as errSchema, and logged; a map that shows no line of
-// the sources, twice, as errMap. A context that holds a plain answer's request
+// the sources, twice, as errMap; a question no code matches, as an answer's in
+// its language. A context that holds a plain answer's request
 // but not a code map's with its retry tells the asker the context it needs.
 func TestCodemap(t *testing.T) {
 	ctx := context.Background()
@@ -450,6 +461,18 @@ func TestCodemap(t *testing.T) {
 			t.Fatalf("%.20q: %v, told %q", reply, err, msg)
 		}
 	}
+	kept, drawn := drawn, "zzzz" // the language and the search terms named: none matches a chunk, so no map is drawn
+	for q, want := range map[string]string{"zzzz qqqq": "No indexed code matched this question, so it can't be confirmed from the current code.", "zzzz 什麼": "無法從目前程式碼確認：沒有任何已索引的程式碼符合這個問題。"} {
+		err := s.Ask(ctx, Request{RepoID: 1, Question: q, Codemap: true, UserID: 1}, func(event string, data any) {
+			if event == "done" {
+				done = data.(Message)
+			}
+		})
+		if err != nil || done.Content != want || len(done.Citations) != 0 {
+			t.Fatalf("no evidence for %q: %v %+v", q, err, done)
+		}
+	}
+	drawn = kept
 	m := codemap.Request{Repo: "o/r", Commit: "abc", Question: "How is a Page rendered?", Language: "English"} // as Ask asks
 	if err := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m", MaxTokens: 100, Context: (codemap.Fixed(m, &compat.Client{}, harness.New(&compat.Client{}, o200k).Prompt) + 2000) * 10 / 8}).Ask(ctx, Request{RepoID: 1, Question: m.Question, Codemap: true, UserID: 1}, func(string, any) {}); !errors.As(err, new(*harness.ErrSmall)) {
 		t.Fatalf("a context without the retry's room: %v", err)

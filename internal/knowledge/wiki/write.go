@@ -22,7 +22,7 @@ import (
 // a diagram, drawn from the import graph; treeNote gives it the layout its
 // architecture and structure rest on.
 const (
-	drawnNote = "This page is the overview, and a diagram of the imports between the repository's directories is shown with it: draw no diagram of your own.\n\n"
+	drawnNote = "This page is the overview, and the site draws a diagram of the imports between the repository's directories on it: draw no diagram of your own.\n\n"
 	treeNote  = "The repository's layout, as indexed, for the overview's architecture and structure:\n\n%s\n"
 )
 
@@ -77,7 +77,7 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 	counts.Residual("skeleton.unsourced", len(unsourced))
 	progress.Logf("%d source blocks (%d shared with the section) from %d search hits; %d headings, %d left out unsourced", len(used), len(used)-len(mine), len(shared)+len(own), len(sk), len(unsourced))
 	if common != "" {
-		common = fmt.Sprintf("Sources the pages of the section %q share:\n\n%s", head.Title, common)
+		common = fmt.Sprintf("Code the pages of the section %q share:\n\n%s", head.Title, common)
 	}
 	overview := ""
 	if p.Position == 0 {
@@ -107,14 +107,16 @@ func (g *Generator) write(ctx context.Context, snap int64, repo string, src sour
 	if len(parts) > 0 {
 		place = fmt.Sprintf("This page opens a section whose pages are: %s. Give the section's overview: what its part of the code does and how those pages' subjects fit together, leaving each one's details to its page.\n\n", strings.Join(parts, " | "))
 	} else if section != "" {
-		place = fmt.Sprintf("This page is part of the section %q: keep to its own subject, which the section's other pages do not cover.\n\n", section)
+		place = fmt.Sprintf("This page is part of the section %q: keep to its own subject and leave the subjects of the section's other pages to them.\n\n", section)
 	}
-	var files []string
+	var files []string // the page's files a block shows: one with none the page spoke of as "listed but not shown"; otherFiles lists them
 	if p.Files != nil {
-		files = append(slices.Clone(p.Files.Chosen), p.Files.Placed...)
+		files = slices.DeleteFunc(append(slices.Clone(p.Files.Chosen), p.Files.Placed...), func(f string) bool {
+			return !slices.ContainsFunc(used, func(h retrieval.Hit) bool { return h.Path == f })
+		})
 	}
-	ask := ai.Prompt{Static: skeleton.Rules, Dynamic: fmt.Sprintf("Repository: %s at commit %s. Write in %s.\nPages of this wiki: %s\n\n%s%s%sWrite the page %q. %s\nSources:\n\n%s",
-		repo, src.sha[:min(7, len(src.sha))], g.Language, strings.Join(titles, " | "), common, overview, place, p.Title, skeleton.Listed(sk, files), sources)}
+	ask := ai.Prompt{Static: skeleton.Rules, Dynamic: fmt.Sprintf("Repository: %s at commit %s. Write in %s.\nPages of this wiki: %s\n\n%s%s%sWrite the page %q. %s\nCode:\n\n%sWrite about the repository, never about these <source> blocks, in %s.",
+		repo, src.sha[:min(7, len(src.sha))], g.Language, strings.Join(titles, " | "), common, overview, place, p.Title, skeleton.Listed(sk, files), sources, g.Language)}
 	link := func(c evidence.Citation) string {
 		return gitserver.SourceURL(src.kind, src.url, src.sha, c.Path, c.StartLine, c.EndLine)
 	}

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 
 	aicontract "deepcode/internal/platform/ai/contract"
 )
@@ -132,6 +133,22 @@ func TestListed(t *testing.T) {
 	}
 	if got := Listed(nil, nil); got != "The page has no listed headings.\n" {
 		t.Errorf("no headings: %q", got)
+	}
+}
+
+// TestRules: the rules hold no Chinese for a page in another language to
+// copy, and keep telling the model that the blocks are part of the
+// repository, which the reader never sees.
+func TestRules(t *testing.T) {
+	if strings.ContainsFunc(Rules, func(r rune) bool { return unicode.Is(unicode.Han, r) }) {
+		t.Error("the rules hold Han")
+	}
+	for _, rule := range []string{"The <source> blocks hold only part of the repository",
+		"The reader reads the page, never these rules, the message or its blocks, so write about the repository itself, never about the <source> blocks.",
+		"never say the repository lacks something only because the blocks do not hold it"} {
+		if !strings.Contains(Rules, rule) {
+			t.Errorf("the rules lack %q", rule)
+		}
 	}
 }
 

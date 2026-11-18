@@ -215,8 +215,8 @@ func TestGather(t *testing.T) {
 
 // TestStops: each rule ends a gathering, and none fails it: the model's
 // failure leaves the first search's hits. Under Converge, a reply that only
-// reads files found before it (by path or one ending it) and finds no other
-// converges; a search, another tool or a failed read goes on. A case's first word is its rule.
+// reads files found before it (by path or one ending it), adding nothing,
+// converges; new lines, a search, another tool or a failed read go on. A case's first word is its rule.
 func TestStops(t *testing.T) {
 	read := func(p string) call { return call{"read_file", `{"path":"` + p + `","start_line":0,"end_line":0}`} }
 	module := call{"search_code", `{"query":"module","path_prefix":""}`} // finds only what the first search found
@@ -229,15 +229,17 @@ func TestStops(t *testing.T) {
 		StopAnswered: {nil, four, 1, 2},
 		StopRounds:   {[][]call{{read("src/mux.go")}, {read("src/tree.go")}, {read("gen/big.go")}}, Limits{Rounds: 2, Limit: evidence.Limit{Chars: 40000}}, 2, 4},
 		// Only what the first search found, then the same call again: two rounds in a row that added nothing.
-		StopStalled:                           {[][]call{{module}, {module}}, four, 2, 2},
-		StopConverged:                         {[][]call{{read("src/mux.go")}, {read("mux.go"), read("src/handler.go")}}, four, 2, 3},
-		StopAnswered + " after a search":      {[][]call{{read("go.mod"), module}}, four, 2, 2},
-		StopAnswered + " after another tool":  {[][]call{{read("go.mod"), {"users", `{"path":"go.mod","start_line":0,"end_line":0}`}}}, four, 2, 2},
-		StopAnswered + " after no such file":  {[][]call{{read("go.mod"), read("src/nope.go")}}, four, 2, 2},
-		StopAnswered + " after bad arguments": {[][]call{{read("go.mod"), {"read_file", `{"path":5}`}}}, four, 2, 2},
-		StopAnswered + " without Converge":    {[][]call{{read("src/mux.go")}, {read("mux.go"), read("src/handler.go")}}, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}, 3, 3},
-		StopError:                             {nil, four, 0, 2},
-		StopTime:                              {nil, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}, Time: 100 * time.Millisecond}, 0, 2},
+		StopStalled:                              {[][]call{{module}, {module}}, four, 2, 2},
+		StopConverged:                            {[][]call{{read("src/mux.go")}, {read("mux.go")}}, four, 2, 3},
+		StopAnswered + " after a read that grew": {[][]call{{read("src/mux.go")}, {read("mux.go"), read("src/handler.go")}}, four, 3, 3},
+		StopAnswered + " after a search":         {[][]call{{read("src/mux.go")}, {read("mux.go"), module}}, four, 3, 3},
+		StopAnswered + " after another tool":     {[][]call{{read("src/mux.go")}, {read("mux.go"), {"users", `{"path":"go.mod","start_line":0,"end_line":0}`}}}, four, 3, 3},
+		StopAnswered + " after no such file":     {[][]call{{read("src/mux.go")}, {read("mux.go"), read("src/nope.go")}}, four, 3, 3},
+		StopAnswered + " after bad arguments":    {[][]call{{read("src/mux.go")}, {read("mux.go"), {"read_file", `{"path":5}`}}}, four, 3, 3},
+		StopConverged + " before stalled":        {[][]call{{read("src/handler.go")}, {module}, {call{"read_file", `{"path":"handler.go","start_line":1,"end_line":1}`}}}, four, 3, 2},
+		StopAnswered + " without Converge":       {[][]call{{read("src/mux.go")}, {read("mux.go")}}, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}}, 3, 3},
+		StopError:                                {nil, four, 0, 2},
+		StopTime:                                 {nil, Limits{Rounds: 4, Limit: evidence.Limit{Chars: 40000}, Time: 100 * time.Millisecond}, 0, 2},
 	} {
 		srv, _ := model(t, tc.replies...)
 		switch name {
@@ -438,17 +440,6 @@ func TestTwins(t *testing.T) {
 	}
 }
 
-// chunkAt is the one chunk of g's snapshot at path p.
-func chunkAt(t *testing.T, g Gatherer, p string) retrieval.Hit {
-	var id int64
-	err := g.Retriever.Store.DB.QueryRowContext(context.Background(), `SELECT id FROM chunks WHERE path = ?`, p).Scan(&id)
-	hits, err2 := g.Retriever.Store.Chunks(context.Background(), []int64{id})
-	if err != nil || err2 != nil || len(hits) != 1 {
-		t.Fatal(p, err, err2)
-	}
-	return hits[0]
-}
-
 // TestFollow: the loop follows the message types the code found names, the
 // first search's too, each once a gathering and three steps from a call: from
 // Worker.cs (OrderPaid) to OrderPaid's users, then OrderShipped's, then
@@ -458,7 +449,7 @@ func chunkAt(t *testing.T, g Gatherer, p string) retrieval.Hit {
 // type followed and the ranges found.
 func TestFollow(t *testing.T) {
 	ctx := context.Background()
-	// The read is of a file follow found, but what it names is followed to another: no convergence.
+	// The read is of a file follow found, but its lines are new: no convergence.
 	srv, asked := model(t, []call{{"read_file", `{"path":"src/Ordering/CloseHandler.cs","start_line":0,"end_line":0}`}}, []call{{"search_code", `{"query":"Ledger","path_prefix":""}`}})
 	g, req := twinsFixture(t, srv.URL)
 	worker := chunkAt(t, g, "src/Payment/Worker.cs")

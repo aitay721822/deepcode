@@ -31,7 +31,7 @@ type Limits struct {
 	Rounds int // the model's replies
 	evidence.Limit
 	Time     time.Duration // 0: none but the caller's
-	Converge bool          // a reply that only reads files found before it ends the gathering (StopConverged)
+	Converge bool          // a reply that only reads files found before it, and adds nothing, ends the gathering (StopConverged)
 }
 
 // Request is a question to gather the evidence for.
@@ -78,7 +78,7 @@ const (
 	StopAnswered  = "answered"  // a reply that called no tool
 	StopRounds    = "rounds"    // Limits.Rounds replies
 	StopBudget    = "budget"    // a reply added nothing and the budget refused some of it, a refusal told before
-	StopConverged = "converged" // a reply only read files found before it, and found no other (converged)
+	StopConverged = "converged" // a reply only read files found before it, found no other and added nothing (converged)
 	StopStalled   = "stalled"   // maxStalls rounds in a row added nothing
 	StopTime      = "time"      // Limits.Time, or the caller's deadline, passed
 	StopError     = "error"     // the model failed: what was gathered stands
@@ -200,7 +200,7 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 			s.res.Stop = StopDone
 		case !grew && full && told:
 			s.res.Stop = StopBudget
-		case req.Converge && converged():
+		case req.Converge && !grew && converged():
 			s.res.Stop = StopConverged
 		case stalls == maxStalls:
 			s.res.Stop = StopStalled
@@ -307,6 +307,8 @@ func (s *state) covered(h retrieval.Hit) bool {
 // has. A call of another tool reads no file found, nor does a read that fails,
 // which reaches for one: arguments not read_file's leave no path to find.
 // Calls past maxCalls count too, though not run: the model asked for them.
+// The stop asks too that the reply added nothing: lines of a found file not
+// read before are code the answer may need, so the gathering goes on.
 func (s *state) converged(calls []ai.ToolCall) func() bool {
 	known := len(s.files)
 	reads := !slices.ContainsFunc(calls, func(c ai.ToolCall) bool {

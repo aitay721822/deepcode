@@ -63,8 +63,9 @@ func shown(t *testing.T, s *state) []string {
 // TestBudgetStop: the first search's hits fit, with 20 bytes left; each read
 // is refused, the first told after its lines, so the second reply, which adds
 // nothing past a refusal told, ends the gathering, whose exchange is closed.
+// That reply only reads a file found before it: the budget's stop comes first.
 func TestBudgetStop(t *testing.T) {
-	srv, asked := model(t, []call{{"read_file", `{"path":"src/tree.go","start_line":0,"end_line":0}`}}, []call{{"read_file", `{"path":"gen/big.go","start_line":0,"end_line":0}`}})
+	srv, asked := model(t, []call{{"read_file", `{"path":"src/tree.go","start_line":0,"end_line":0}`}}, []call{{"read_file", `{"path":"tree.go","start_line":0,"end_line":0}`}})
 	g, req := fixture(t, srv.URL)
 	req.Chars = size(req.First.Hits) + 20
 	closed := 0
@@ -74,6 +75,20 @@ func TestBudgetStop(t *testing.T) {
 	}
 	if got := results(asked())["r0c0"]; !strings.HasPrefix(got, "src/tree.go, lines 1-30 of 30:\n") || !strings.HasSuffix(got, "20 bytes left of "+fmt.Sprint(req.Chars)+". Read a narrower range, or call done.\n") {
 		t.Errorf("the refused read was told %q", got)
+	}
+}
+
+// TestElsewhere: a path ending a found file and another file's is found, yet
+// reads the other, a new file: a read that adds no range does not converge.
+func TestElsewhere(t *testing.T) {
+	big := strings.Repeat("//\n", 249) + "//"
+	g, req := seed(t, "", []file{{"d/x.go", "package d", [][3]any{{1, 1, ""}}}, {"x.go", big, [][3]any{{1, 250, ""}}}})
+	srv, _ := model(t, []call{{"read_file", `{"path":"x.go","start_line":0,"end_line":0}`}})
+	g.Model = &compat.Client{BaseURL: srv.URL, ModelName: "m"}
+	req.First = retrieval.Result{Hits: []retrieval.Hit{chunkAt(t, g, "d/x.go")}}
+	req.Chars = size(req.First.Hits) + 20
+	if res := g.Gather(context.Background(), req, func(string, any) {}); res.Stop != StopAnswered || res.Rounds != 2 || len(res.Hits) != 1 {
+		t.Errorf("stopped %q after %d rounds, evidence %q", res.Stop, res.Rounds, paths(res.Hits))
 	}
 }
 
@@ -462,4 +477,15 @@ type closer struct {
 func (c closer) Close() {
 	*c.closed++
 	c.Exchange.Close()
+}
+
+// chunkAt is the one chunk of g's snapshot at path p.
+func chunkAt(t *testing.T, g Gatherer, p string) retrieval.Hit {
+	var id int64
+	err := g.Retriever.Store.DB.QueryRowContext(context.Background(), `SELECT id FROM chunks WHERE path = ?`, p).Scan(&id)
+	hits, err2 := g.Retriever.Store.Chunks(context.Background(), []int64{id})
+	if err != nil || err2 != nil || len(hits) != 1 {
+		t.Fatal(p, err, err2)
+	}
+	return hits[0]
 }

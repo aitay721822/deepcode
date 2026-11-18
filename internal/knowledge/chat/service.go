@@ -97,14 +97,14 @@ const (
 	evidenceChars = 64000 // a deep answer's too while the context is unknown: at 40000 an eShop payment answer evicted the handler it found
 	maxQuestion   = 4000  // runes
 	maxAsking     = 2     // answers one user may have written at a time, in all their tabs
-	noEvidence    = "無法從目前程式碼確認 — no indexed code matched this question."
 )
 
 // What gathering the evidence may take, its budget aside (limit). A deep
 // answer, and a code map, may take twice the rounds and more time, and go on
-// when a reply only reads files found before it: the convergence stop that
-// ends a plain answer's gathering then (loop.StopConverged) was measured on
-// plain answers alone, and a deep one is to reach as far as its room allows.
+// when a reply only reads files found before it and adds nothing: the
+// convergence stop that ends a plain answer's gathering then
+// (loop.StopConverged) was measured on plain answers alone, and a deep one is
+// to reach as far as its room allows.
 var (
 	gathering     = loop.Limits{Rounds: 4, Time: 45 * time.Second, Converge: true}
 	deepGathering = loop.Limits{Rounds: 8, Time: 120 * time.Second}
@@ -224,9 +224,9 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 // answer streams the model's answer to p, written from used, and stores it
 // with its citations linked; with no evidence it says so without the model.
 func (s *Service) answer(ctx context.Context, conv int64, p ai.Prompt, used []retrieval.Hit, lang string, link func(evidence.Citation) string, emit Emit) error {
-	answer := noEvidence
+	answer := noEvidence(lang)
 	if len(used) == 0 {
-		emit("delta", noEvidence)
+		emit("delta", answer)
 	} else if reply, err := ai.Stream(ctx, s.Chat, p, func(d string) { emit("delta", d) }); err != nil {
 		return fmt.Errorf("%w: %w", errModel, err)
 	} else {
@@ -234,7 +234,7 @@ func (s *Service) answer(ctx context.Context, conv int64, p ai.Prompt, used []re
 	}
 	content, cites, resolved := evidence.LinkCitations(answer, used, link)
 	emit("cited", map[string]any{"resolved": resolved})
-	if len(cites) == 0 && answer != noEvidence {
+	if len(cites) == 0 && len(used) > 0 {
 		content += "\n\n" + uncited(lang)
 	}
 	msg, err := s.Store.AddMessage(ctx, conv, "assistant", content, cites)
@@ -251,7 +251,7 @@ func (s *Service) answer(ctx context.Context, conv int64, p ai.Prompt, used []re
 // answer's citations are linked; a map without traces (the model found nothing
 // to map) is answered as having no evidence.
 func (s *Service) drawMap(ctx context.Context, conv int64, r codemap.Request, link func(evidence.Citation) string, emit Emit) error {
-	content, cites, drawn := noEvidence, []evidence.Citation{}, 0
+	content, cites, drawn := noEvidence(r.Language), []evidence.Citation{}, 0
 	var stored json.RawMessage
 	if len(r.Hits) > 0 {
 		m, err := codemap.Draw(ctx, s.Chat, r, func(n int) {

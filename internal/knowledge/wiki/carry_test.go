@@ -7,11 +7,14 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
+	"deepcode/internal/knowledge/wiki/outline/skeleton"
 	"deepcode/internal/platform/ai/compat"
+	aicontract "deepcode/internal/platform/ai/contract"
 	"deepcode/internal/platform/jobs"
 )
 
@@ -221,7 +224,7 @@ func TestOverviewSkeleton(t *testing.T) {
 // imports a changed declaration, not when only a body changed; a change that
 // adds a section's worth of code other code imports is planned anew, the plan
 // and the overview seeing the imports between directories and the overview
-// told the diagram is drawn.
+// told the diagram is drawn, in no words naming its code as given material.
 func TestRunFollowsImports(t *testing.T) {
 	common := map[string]string{"a.go": "alpha", "b.go": "beta", "d.go": "delta", "e.go": "epsilon", "h.go": "core helper", "tools/t.go": "tooling"} // a planned overview searches "core"
 	next := maps.Clone(common)
@@ -259,6 +262,7 @@ func TestRunFollowsImports(t *testing.T) {
 				c.plans == 0 && c.writes == 1 && drawn {
 				t.Fatalf("plan requests %q\nwrite requests %q", model.plans, model.writes)
 			}
+			noMaterial(t, model.writes...)
 		})
 	}
 }
@@ -328,6 +332,57 @@ func TestRunReadsAnchors(t *testing.T) {
 		!slices.Equal(w.Headings, []string{"Alpha", "Beta"}) || !slices.Equal(w.Unsourced, []string{"first"}) {
 		t.Fatalf("written %+v; %+v %v", w, pages, err)
 	}
+}
+
+// materialRe holds the words a write request once used for the code it
+// carries, which pages then copied ("not shown here", "covered on this page");
+// blocksRe is the request's <source> blocks and tags, the repository's text.
+var (
+	materialRe = regexp.MustCompile(`(?i)\b(show\w*|cover\w*|provid\w*|given|excerpt\w*|sources?|visible|available|snippet\w*|includ\w*)\b`)
+	blocksRe   = regexp.MustCompile(`(?s)<source path=.*?</source>|</?source\b[^>]*>`)
+)
+
+// noMaterial fails t for each text sent to the model to write a page that
+// names its code in one of those words. ponytail: words a screen saw; a new
+// one passes until a screen sees it and it is added.
+func noMaterial(t *testing.T, texts ...string) {
+	t.Helper()
+	for _, s := range texts {
+		if m := materialRe.FindString(blocksRe.ReplaceAllString(s, "")); m != "" {
+			t.Errorf("a write request says %q:\n%s", m, s)
+		}
+	}
+}
+
+// TestRunListsShownFiles: a page's request lists its chosen, then its placed,
+// files a block shows, its own or one its section's pages share (a.go); a
+// chosen file no block shows is listed under Other files instead, and a page
+// none of whose files a block shows lists no files. No request, nor the
+// rules or a repair's message, names its code as given material (noMaterial).
+func TestRunListsShownFiles(t *testing.T) {
+	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status, wiki_status, wiki_language) VALUES (1, 1, 'abc', 'ready', 'failed', 'English')`,
+		`INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash) VALUES (1, 'a.go', 'route', 1, 1, 'func route() {}', 'a'), (1, 'b.go', 'Mux', 1, 1, 'type Mux struct {}', 'b')`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'b.go', 'Mux', 'Mux', 'struct', 1, 1)`,
+		`INSERT INTO wiki_pages(snapshot_id, slug, title, query, position, parent, content, files) VALUES (1, '1-overview', 'Overview', '', 0, NULL, 'Written before.', NULL),
+			(1, '2-routing', 'Routing', 'route', 1, NULL, '', NULL), (1, '3-mux', 'Mux', 'mux', 2, 1, '', '{"chosen":["c.go","b.go"],"placed":["a.go"],"units":[]}'),
+			(1, '4-gone', 'Gone', 'gone', 3, 1, '', '{"chosen":["c.go"],"placed":[],"units":[]}')`)
+	model := &fakeModel{}
+	pages, err := runWiki(t, db, model, "abc").Store.Pages(context.Background(), 1)
+	asked := map[string]string{}
+	for _, w := range model.writes {
+		for _, title := range []string{"Mux", "Gone"} {
+			if strings.Contains(w, fmt.Sprintf("Write the page %q.", title)) {
+				asked[title] = w
+			}
+		}
+	}
+	if err != nil || len(pages) != 4 || !strings.Contains(asked["Mux"], "Its files: b.go, a.go\n") || asked["Gone"] == "" || strings.Contains(asked["Gone"], "Its files:") ||
+		!strings.Contains(pages[2].Content, "## Other files\n\n- [c.go](https://example.com/o/r/blob/abc/c.go)") {
+		t.Fatalf("asked %q; %+v %v", asked, pages, err)
+	}
+	fix := skeleton.Note(skeleton.Skeleton{{Name: "Mux", Level: 2}}, "[b.go:1-1]")
+	noMaterial(t, append(model.writes, skeleton.Rules, fix([]aicontract.Violation{{}}), fix([]aicontract.Violation{
+		{Rule: skeleton.Uncited, Where: "Mux", Detail: "cites nothing that can be checked"}, {Rule: skeleton.Diagram, Where: "Mux", Detail: "has a Mermaid diagram that Mermaid cannot read"}}))...)
 }
 
 // TestReplanKeepsPages: a wiki a full re-index asked to plan anew keeps

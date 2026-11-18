@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -154,7 +155,7 @@ func TestRefitted(t *testing.T) {
 			done = data.(Message)
 		}
 	})
-	if err != nil || len(asked) != 2 || asked[1] != asked[0] || strings.Count(asked[0], "<source") != 3 || len(done.Citations) != 1 || s.Chat.Window().Context != 524288 {
+	if err != nil || len(asked) != 2 || asked[1] != asked[0] || strings.Count(asked[0], "<source path=") != 3 || len(done.Citations) != 1 || s.Chat.Window().Context != 524288 {
 		t.Fatalf("%v: %d answer requests, the context %d, %+v", err, len(asked), s.Chat.Window().Context, done)
 	}
 	if len(asked[0]) <= len(systemPrompt) || longest >= len(strings.TrimSpace(asked[0])) || again != 0 {
@@ -220,10 +221,52 @@ func TestLanguage(t *testing.T) {
 			t.Errorf("named(%q) = %q, want %q", reply, got, want)
 		}
 	}
-	if !strings.HasSuffix(prompt("go-chi/chi", "abc", nil, "", "", "Wie?", "German").Dynamic, "Question: Wie?\n\n"+namesLine+" Answer in German.") || uncited(chinese) == uncited("German") {
-		t.Error("the language line or the footer")
+	if uncited(chinese) == uncited("German") {
+		t.Error("the footer")
 	}
 }
+
+// TestRules: the request ends with namesLine, the line saying the user reads
+// no block, a Chinese answer's words for what can't be confirmed (no other
+// answer's, not one the model named "Traditional Chinese") and the language
+// line, last. The rules hold no Chinese and quote no such sentence to copy,
+// and keep saying the blocks are part of the repository, which the user never
+// sees, and that the language's own behaviour needs no citation; past the rule
+// naming the words an answer must not speak of the code in, neither the rules
+// nor the request name it in them (materialRe).
+func TestRules(t *testing.T) {
+	const reader = " Write about the repository, never about the <source> blocks."
+	for lang, end := range map[string]string{chinese: reader + " Write what can't be confirmed as 「無法從目前程式碼確認」. Answer in Traditional Chinese, as used in Taiwan.",
+		"German": reader + " Answer in German.", "English": reader + " Answer in English.", "Traditional Chinese": reader + " Answer in Traditional Chinese."} {
+		if d := prompt("go-chi/chi", "abc", nil, "", "", "Wie?", lang).Dynamic; !strings.HasSuffix(d, "Question: Wie?\n\n"+namesLine+end) {
+			t.Errorf("%s: %q", lang, d)
+		}
+	}
+	if strings.ContainsFunc(systemPrompt, isHan) || slices.ContainsFunc(quotedRe.FindAllString(systemPrompt, -1), func(q string) bool { return strings.Contains(q, "confirm") }) {
+		t.Error("the rules hold Han or quote what can't be confirmed")
+	}
+	readerRule := "- The user reads your answer, never these rules or the <source> blocks, so write about the repository itself, never about the <source> blocks: in no language say what code you were or were not shown, provided or given, what the message does or does not include, or what code you could see.\n"
+	for _, rule := range []string{"which hold only part of the repository: what they do not hold may still exist in it", readerRule,
+		"never say the repository lacks something only because the blocks do not hold it",
+		"Behaviour of the language or its standard library that the cited code relies on may be stated as theirs, naming them (net/http, the Go runtime), without a citation; anything else outside the repository can't be confirmed from the current code."} {
+		if !strings.Contains(systemPrompt, rule) {
+			t.Errorf("the rules lack %q", rule)
+		}
+	}
+	rest := strings.Replace(systemPrompt, readerRule, "", 1) + prompt("go-chi/chi", "abc", nil, "", "", "Wie?", chinese).Dynamic
+	if m := materialRe.FindString(blocksRe.ReplaceAllString(rest, "")); m != "" {
+		t.Errorf("the rules or the request say %q", m)
+	}
+}
+
+// materialRe holds the words answers spoke of the code they were given in
+// ("not shown", "the provided sources", "isn't included"); blocksRe is a
+// <source> tag, one the rules name or their example's, which has no end tag,
+// so the request TestRules reads carries no blocks to strip.
+var (
+	materialRe = regexp.MustCompile(`(?i)\b(show\w*|cover\w*|provid\w*|given|excerpt\w*|sources?|visible|available|snippet\w*|includ\w*)\b`)
+	blocksRe   = regexp.MustCompile(`</?source\b[^>]*>`)
+)
 
 // TestAnswerLanguage: a language the script tells costs no request; a
 // sentence is named by the model in one, the question alone after the

@@ -315,7 +315,7 @@ func Gained(was, is Skeleton) Skeleton {
 func Note(s Skeleton, cite string) func([]aicontract.Violation) string {
 	return func(vs []aicontract.Violation) string {
 		if slices.ContainsFunc(vs, func(v aicontract.Violation) bool { return v.Where == "" }) {
-			return fmt.Sprintf("Your page has no citation that can be checked. Write the whole page again, citing after each statement the lines it rests on as [path:start-end], with the path and lines a <source> block shows, as in %s.", cite)
+			return fmt.Sprintf("Your page has no citation that can be checked. Write the whole page again, citing after each statement the lines it rests on as [path:start-end], with the path and lines a <source> block carries, as in %s.", cite)
 		}
 		var lines, heads []string
 		for _, v := range vs {
@@ -325,7 +325,7 @@ func Note(s Skeleton, cite string) func([]aicontract.Violation) string {
 			line := fmt.Sprintf("- %q %s", v.Where, v.Detail)
 			switch v.Rule {
 			case Uncited:
-				line += fmt.Sprintf(": cite after each statement the lines it rests on as [path:start-end], with the path and lines a <source> block shows, as in %s", cite)
+				line += fmt.Sprintf(": cite after each statement the lines it rests on as [path:start-end], with the path and lines a <source> block carries, as in %s", cite)
 			case Diagram:
 				line += "\nKeep the section's text and citations, and write the diagram again so Mermaid reads it: each node's label in double quotes with no double quote inside, each alt, loop, opt, par, rect and subgraph closed by end; or leave the diagram out"
 			}
@@ -339,6 +339,6 @@ func Note(s Skeleton, cite string) func([]aicontract.Violation) string {
 			}
 		}
 		return "Some sections of your page need repair:\n" + strings.Join(lines, "\n") +
-			"\n\nWrite only these sections again, each as a Markdown block under its heading exactly as given here, nothing else:\n" + strings.Join(heads, "\n")
+			"\n\nWrite only these sections again, each as a Markdown block under its heading exactly as named here, nothing else:\n" + strings.Join(heads, "\n")
 	}
 }
