@@ -1,6 +1,6 @@
 import { useNavigate } from '@tanstack/react-router'
 import { AnimatePresence, motion } from 'motion/react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getHealth } from '../../api/repo/repos'
 import { getWiki } from '../../api/repo/wiki'
 import { AskBox } from '../../components/chat/AskBox'
@@ -9,12 +9,15 @@ import { isActive } from '../../components/repo/jobStage'
 import { RepoNotice } from '../../components/repo/RepoNotice'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/display/tabs'
 import { LoadError } from '../../components/ui/feedback/load-error'
+import { Dialog, DialogTitle, SheetContent } from '../../components/ui/overlay/dialog'
 import { formatDate, shortSha } from '../../lib/format'
 import { rise } from '../../lib/style/motion'
 import { useApi } from '../../lib/useApi'
+import type { Citation } from '../../types/repo/code'
 import { Frame } from '../Frame'
 import { useRepo } from '../useRepo'
 import { BranchCard } from './BranchCard'
+import { CitedFile } from './files/CitedFile'
 import { FilesPanel } from './files/FilesPanel'
 import { FileView } from './files/FileView'
 import { SyncCard } from './SyncCard'
@@ -27,7 +30,8 @@ import { WikiPlaceholder } from './wiki/WikiPlaceholder'
 
 type Tab = 'wiki' | 'files'
 
-/** ?page= a wiki page; or ?file= a file, L= its lines (5-9), s= the snapshot it is read at. */
+/** ?page= a wiki page; or ?file= a file, L= its lines (5-9), s= the snapshot it is read at (links made before wiki
+ * citations opened in the drawer: nothing writes it now). */
 type RepoSearch = { page?: string; file?: string; L?: string; s?: string }
 
 export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
@@ -62,6 +66,16 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const [tab, setTab] = useState<Tab>(file ? 'files' : 'wiki')
   useEffect(() => setTab(file ? 'files' : 'wiki'), [file]) // follow back/forward too
   const [toc, setToc] = useState<TocItem[]>([])
+  // What the drawer shows (openCitation); kept once it closes, while the drawer slides out. opener, the chip or file
+  // that opened it, takes focus back on close: with no Dialog.Trigger, Radix would leave it on the body.
+  const [cited, setCited] = useState<{
+    snapshot: string
+    sha: string
+    citation: Pick<Citation, 'path'> & Partial<Citation>
+    opener: HTMLElement | null
+    open: boolean
+  } | null>(null)
+  const closeCitation = useCallback(() => setCited((c) => c && { ...c, open: false }), []) // memo(CitedFile) holds
 
   if (!repo) {
     return (
@@ -80,19 +94,21 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const job = repo.job
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
   // The file tree and symbol search list the published snapshot, so their files open there.
-  const openFile = (path: string, start?: number, end?: number, snapshot?: string) =>
-    navigate({
-      ...here,
-      search: {
-        file: path,
-        L: start ? `${start}-${end ?? start}` : undefined,
-        s: snapshot || undefined,
-      },
+  const openFile = (path: string, start?: number, end?: number) =>
+    navigate({ ...here, search: { file: path, L: start ? `${start}-${end ?? start}` : undefined } })
+  // A wiki citation, or a file of the page, opens in the drawer over the page, which keeps its place, at the wiki's
+  // snapshot, which trails the published one while the next wiki is written.
+  const openCitation = (path: string, startLine?: number, endLine?: number) =>
+    wiki &&
+    setCited({
+      snapshot: wiki.snapshotId,
+      sha: wiki.commitSha,
+      citation: { path, startLine, endLine },
+      opener: document.activeElement as HTMLElement | null,
+      open: true,
     })
-  // A wiki citation points into the wiki's snapshot, which trails the published one while the next wiki is written.
-  const openCitation = (path: string, start?: number, end?: number) =>
-    openFile(path, start, end, wiki && ready && wiki.snapshotId !== ready.id ? wiki.snapshotId : undefined)
-  // The commit a file is shown at, known before (or without) the file loading: s= comes from the wiki's citations.
+  // The commit a file is shown at, known before (or without) the file loading: s= comes from links to a wiki
+  // citation made before citations opened in the drawer.
   const fileSha = fileSnapshot
     ? wiki && wiki.snapshotId === fileSnapshot
       ? wiki.commitSha
@@ -199,6 +215,27 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
           {!file && page?.content && toc.length > 0 && <Toc items={toc} />}
         </aside>
       </div>
+      {cited && (
+        <Dialog open={cited.open} onOpenChange={closeCitation}>
+          <SheetContent
+            aria-describedby={undefined}
+            onCloseAutoFocus={(e) => {
+              e.preventDefault()
+              cited.opener?.focus()
+            }}
+          >
+            <DialogTitle className="sr-only">{cited.citation.path}</DialogTitle>
+            <CitedFile
+              repo={repo}
+              snapshot={cited.snapshot}
+              sha={cited.sha}
+              citation={cited.citation}
+              onClose={closeCitation}
+              className="rounded-xl shadow-modal"
+            />
+          </SheetContent>
+        </Dialog>
+      )}
       {repo.permissions.includes('repo.chat') && (
         <AskBox
           placeholder={

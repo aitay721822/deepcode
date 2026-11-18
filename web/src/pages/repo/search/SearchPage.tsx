@@ -9,8 +9,8 @@ import type { Citation } from '../../../types/repo/code'
 import type { Repo } from '../../../types/repo/repo'
 import { Frame } from '../../Frame'
 import { useRepo } from '../../useRepo'
+import { CitedFile } from '../files/CitedFile'
 import { ChatTurn } from './ChatTurn'
-import { CitedFile } from './CitedFile'
 import { useChat } from './useChat'
 
 export function SearchPage({ id, conversationId }: { id: string; conversationId?: string }) {
@@ -76,7 +76,7 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
     last?.status === 'searching' ? (
       <SearchSteps sources={last.sources} steps={last.steps} />
     ) : selected && conv ? (
-      <CitedFile repo={repo} conv={conv} citation={selected} />
+      <CitedFile repo={repo} snapshot={conv.snapshotId} sha={conv.commitSha} citation={selected} />
     ) : null
   return (
     <Frame title={title}>

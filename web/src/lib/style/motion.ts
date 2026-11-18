@@ -17,6 +17,13 @@ export const pop = {
   exit: { opacity: 0, scale: 0.96, y: -4, transition: { duration: 0.12 } },
 } as const
 
+/** Slides a drawer in from the right edge, past which it leaves (SheetContent). */
+export const drawer = {
+  initial: { x: '105%' },
+  animate: { x: 0, transition: { duration: 0.3, ease } },
+  exit: { x: '105%', transition: { duration: 0.2, ease } },
+} as const
+
 /** Fades a backdrop in and out. */
 export const fade = {
   initial: { opacity: 0 },

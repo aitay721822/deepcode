@@ -7,26 +7,33 @@ import { CodeView } from '../../../components/source/CodeView'
 import { Button } from '../../../components/ui/controls/button'
 import { LoadError } from '../../../components/ui/feedback/load-error'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
+import { cn } from '../../../lib/style/cn'
 import { useApi } from '../../../lib/useApi'
-import type { ConversationRef } from '../../../types/repo/chat'
 import type { Citation } from '../../../types/repo/code'
 import type { Repo } from '../../../types/repo/repo'
 
 /**
- * The cited lines in their file, at the snapshot the conversation is pinned to.
+ * The cited lines in their file (the whole file when no lines are cited) at the snapshot, of commit sha, they cite:
+ * a conversation's, beside its answers, or the wiki's, in a drawer that onClose closes.
  * Memoised: an answer streaming beside it does not draw the whole file again on every frame.
  */
 export const CitedFile = memo(function CitedFile({
   repo,
-  conv,
+  snapshot,
+  sha,
   citation,
+  onClose,
+  className,
 }: {
   repo: Repo
-  conv: ConversationRef
-  citation: Citation
+  snapshot: string
+  sha: string
+  citation: Pick<Citation, 'path'> & Partial<Citation>
+  onClose?: () => void
+  className?: string
 }) {
-  const { data, error, reload } = useApi(`${repo.id}:${conv.snapshotId}:${citation.path}`, () =>
-    getFile(repo.id, citation.path, conv.snapshotId),
+  const { data, error, reload } = useApi(`${repo.id}:${snapshot}:${citation.path}`, () =>
+    getFile(repo.id, citation.path, snapshot),
   )
   const [copy, setCopy] = useState<'' | '已複製' | '複製失敗'>('')
   useEffect(() => {
@@ -35,7 +42,7 @@ export const CitedFile = memo(function CitedFile({
     return () => clearTimeout(t)
   }, [copy])
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-lg border bg-code">
+    <div className={cn('flex h-full flex-col overflow-hidden rounded-lg border bg-code', className)}>
       <div className="flex min-h-11 items-center gap-2.5 border-b bg-card py-1 pr-2 pl-4 font-mono text-[12.5px]">
         <span className="max-w-[40%] truncate text-muted-foreground">
           {repo.owner}/{repo.name}
@@ -66,12 +73,17 @@ export const CitedFile = memo(function CitedFile({
         <span className="sr-only" role="status">
           {copy}
         </span>
+        {onClose && (
+          <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label="關閉" onClick={onClose}>
+            <XIcon className="size-3.5" />
+          </Button>
+        )}
       </div>
       {error ? (
         <LoadError className="m-0 p-4" error={error} onRetry={reload}>
           <a
             className="text-sm text-brand underline underline-offset-4"
-            href={sourceUrl(repo, conv.commitSha, citation.path, citation.startLine, citation.endLine)}
+            href={sourceUrl(repo, sha, citation.path, citation.startLine, citation.endLine)}
             target="_blank"
             rel="noreferrer"
           >

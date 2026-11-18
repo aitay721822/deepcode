@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/aitay721822/deepcode)](https://github.com/aitay721822/deepcode/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE.md)
 
-<img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/tour.gif" alt="在 go-chi/chi 的 Wiki 頁提問：deepcode 先搜尋程式碼，再串流出附行號引用的答案，右側打開引用的原始碼" width="900">
+<img src="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/tour.gif" alt="在 go-chi/chi 的 Wiki 頁點一個引用，原始碼從右側抽屜滑出，關掉後頁面停在原處；接著提問：deepcode 先搜尋程式碼，再串流出附行號引用的答案，右側打開引用的原始碼" width="900">
 
 </div>
 
@@ -25,7 +25,7 @@
 
 ## 截圖
 
-**Wiki**：兩層目錄、由 import 圖畫出的架構圖，右側是同步、branch 與 webhook。
+**Wiki**：兩層目錄、由 import 圖畫出的架構圖，右側是同步、branch 與 webhook。點引用時，原始碼從右側抽屜打開，頁面停在原處。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/gh/aitay721822/deepcode@6c8e65c075303eeb2d65a34b10f698accaa0e60b/.github/assets/wiki-dark.png">
