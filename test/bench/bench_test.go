@@ -9,7 +9,8 @@
 // DEEPCODE_EMBED_MODEL). DEEPCODE_BENCH_REPOS=chi,axum picks repositories, and DEEPCODE_BENCH_PARALLEL=1,2
 // writes each first wiki once per number of pages written at a time (DEEPCODE_WIKI_PARALLEL, else 1, by
 // default), the last one kept. Without a chat model only indexing, the graph and the retrieval eval are
-// measured; DEEPCODE_BENCH_WIKI=0 leaves the wikis out, for a run of the answers alone. An agent
+// measured; DEEPCODE_BENCH_WIKI=0 leaves the wikis out, for a run of the answers alone, and
+// DEEPCODE_BENCH_ANSWERS=0 the answers, for one of the wikis alone. An agent
 // (DEEPCODE_CHAT_PROVIDER=acp) is asked DEEPCODE_ACP_SESSIONS questions at a time, a server one. The
 // answers are judged by DEEPCODE_JUDGE_MODEL at DEEPCODE_JUDGE_BASE_URL with DEEPCODE_JUDGE_API_KEY, at
 // that server's own reasoning effort and temperature, else by the chat model (score.Model). TestJudge
@@ -387,7 +388,7 @@ func (r *rig) measure(t *testing.T, id int64, tg target) result {
 	} else {
 		res.Eval = &evalResult{Questions: len(eval.Corpora[i].Questions), Recall: e.Recall, MRR: e.MRR, Misses: e.Misses}
 	}
-	if r.chat != nil {
+	if r.chat != nil && os.Getenv("DEEPCODE_BENCH_ANSWERS") != "0" {
 		res.Answers = make([]answer, len(tg.questions))
 		inTurn(len(tg.questions), r.asks, func(n int, user int64) { res.Answers[n] = r.answer(ctx, id, user, n, tg.questions[n], fail) })
 	}

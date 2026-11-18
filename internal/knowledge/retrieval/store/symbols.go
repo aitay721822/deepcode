@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"strings"
+	"unicode"
 
 	"deepcode/internal/platform/storage"
 )
@@ -132,4 +134,151 @@ func (s *Store) Users(ctx context.Context, snapshotID int64, names []string, lim
 		}
 	}
 	return ids, nil
+}
+
+// Reached is, for each (path, line) of the snapshot, the chunks the
+// declaration holding the line reaches in its own file, in this order: the
+// rest of its lines, its members' (a qualified name its own and "."), then
+// those of the file's functions, methods and constructors whose name its own
+// lines hold as a word, members and named ones by their first line; each
+// chunk once in the list, the one holding the line left out; none for line 0
+// or a line no declaration holds. Its own lines are its doc comment's too, so
+// a name a comment holds counts, and a common name (New) another package's
+// call holds: one more chunk of related code. Calls into other files are left
+// to search, as call_edges resolve them by name alone.
+// ponytail: no cap on a list (a large class reaches every chunk of it), as
+// evidence.Format cuts it to the budget; cap it if reading them shows.
+func (s *Store) Reached(ctx context.Context, snapshotID int64, paths []string, lines []int) ([][]int64, error) {
+	out := make([][]int64, len(paths))
+	type file struct {
+		decls  []decl
+		chunks []span
+	}
+	files := map[string]file{}
+	for i, p := range paths {
+		if lines[i] == 0 {
+			continue
+		}
+		f, ok := files[p]
+		if !ok {
+			var err error
+			if f.decls, err = s.decls(ctx, snapshotID, p); err != nil {
+				return nil, err
+			}
+			if len(f.decls) > 0 {
+				if f.chunks, err = s.spans(ctx, snapshotID, p); err != nil {
+					return nil, err
+				}
+			}
+			files[p] = f
+		}
+		out[i] = reach(f.decls, f.chunks, lines[i])
+	}
+	return out, nil
+}
+
+// decl is a symbol of one file; span a chunk of it.
+type (
+	decl struct {
+		name, qualified, kind string
+		start, end            int
+	}
+	span struct {
+		id         int64
+		start, end int
+		content    string
+	}
+)
+
+// reach is Reached's list for line, from its file's symbols and chunks, both
+// by their first line.
+func reach(decls []decl, chunks []span, line int) []int64 {
+	var d *decl // the innermost: the last to start, then the shortest
+	for i, x := range decls {
+		if x.start <= line && line <= x.end && (d == nil || x.start > d.start || x.start == d.start && x.end < d.end) {
+			d = &decls[i]
+		}
+	}
+	if d == nil {
+		return nil
+	}
+	holding := func(line int) int64 {
+		for _, c := range chunks {
+			if c.start <= line && line <= c.end {
+				return c.id
+			}
+		}
+		return 0
+	}
+	own := holding(line)
+	var ids []int64
+	add := func(id int64) {
+		if id != 0 && id != own && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	words := map[string]bool{}
+	for _, c := range chunks {
+		if c.start > d.end || c.end < d.start {
+			continue
+		}
+		add(c.id)
+		ls := strings.Split(c.content, "\n") // a chunk's content is its lines, start to end; a fixture's may be fewer
+		for n := max(d.start, c.start); n <= min(d.end, c.end) && n-c.start < len(ls); n++ {
+			for _, w := range strings.FieldsFunc(ls[n-c.start], func(r rune) bool {
+				return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' && r != '$'
+			}) {
+				words[w] = true
+			}
+		}
+	}
+	for _, x := range decls {
+		if strings.HasPrefix(x.qualified, d.qualified+".") {
+			add(holding(x.start))
+		}
+	}
+	for _, x := range decls {
+		if words[x.name] && (x.kind == "function" || x.kind == "method" || x.kind == "constructor") {
+			add(holding(x.start))
+		}
+	}
+	return ids
+}
+
+// decls reads the symbols of the snapshot's file p, by their first line.
+func (s *Store) decls(ctx context.Context, snapshotID int64, p string) ([]decl, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT name, qualified_name, kind, start_line, end_line FROM symbols
+		WHERE snapshot_id = ? AND path = ? ORDER BY start_line, id`, snapshotID, p)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []decl
+	for rows.Next() {
+		var d decl
+		if err := rows.Scan(&d.name, &d.qualified, &d.kind, &d.start, &d.end); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// spans reads the chunks of the snapshot's file p, by their first line.
+func (s *Store) spans(ctx context.Context, snapshotID int64, p string) ([]span, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, start_line, end_line, content FROM chunks
+		WHERE snapshot_id = ? AND path = ? ORDER BY start_line`, snapshotID, p)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []span
+	for rows.Next() {
+		var c span
+		if err := rows.Scan(&c.id, &c.start, &c.end, &c.content); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

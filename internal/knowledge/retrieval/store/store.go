@@ -308,21 +308,17 @@ func scanIDs(rows *sql.Rows, err error) ([]int64, error) {
 	return ids, rows.Err()
 }
 
-// Holding reads the id of the chunk of each (path, line) of the snapshot
-// that holds the line, in order: the file's first for line 0, none for a
-// line no chunk holds.
+// Holding reads, for each (path, line) of the snapshot, the id of the chunk
+// that holds the line: the file's first for line 0, 0 for a line no chunk
+// holds, so that ids[i] is the i-th's.
 func (s *Store) Holding(ctx context.Context, snapshotID int64, paths []string, lines []int) ([]int64, error) {
-	var ids []int64
+	ids := make([]int64, len(paths))
 	for i, p := range paths {
-		var id int64
 		err := s.DB.QueryRowContext(ctx, `SELECT id FROM chunks WHERE snapshot_id = ?1 AND path = ?2 AND end_line >= ?3 AND (start_line <= ?3 OR ?3 = 0)
-			ORDER BY start_line LIMIT 1`, snapshotID, p, lines[i]).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
-		} else if err != nil {
+			ORDER BY start_line LIMIT 1`, snapshotID, p, lines[i]).Scan(&ids[i])
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		ids = append(ids, id)
 	}
 	return ids, nil
 }

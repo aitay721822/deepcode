@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log"
 	"slices"
+	"strings"
 
 	"deepcode/internal/knowledge/retrieval/fusion"
 	"deepcode/internal/knowledge/retrieval/store"
@@ -97,16 +98,21 @@ func (r *Retriever) Search(ctx context.Context, snapshotID int64, query string, 
 }
 
 // SearchPage is a wiki page's evidence: first the chunk holding each of
-// anchors, in their order, sure of a place while limit allows; then FTS5 on
-// words within files and across the snapshot, symbols and vector search,
-// fused as Search fuses them, and the code the best hits import. It reads
-// files as given, never parsing names from words, so a path holding a space
-// is read whole. An anchor whose chunk is taken costs nothing more; one past
-// limit, or whose line no chunk holds, is left out, which the page's skeleton
-// sees in what its evidence shows. Unlike Search, a file may take several
-// places, as a page draws on a file's many parts and its anchors may share a
-// file. An embedding server it cannot reach fails it (ai.ErrUnavailable),
-// where Search goes on without vectors: a page is stored, so it waits for the
+// anchors, in their order, sure of a place while limit allows; then the code
+// those anchors reach (Store.Reached: the rest of a declaration, its members,
+// the functions of its file it names), each anchor's next in turn, outside
+// limit, as a heading promises its declaration whole; then FTS5 on words
+// within files and across the snapshot, symbols and vector search, fused as
+// Search fuses them, and the code the best hits import, in what limit leaves
+// the anchors. The caller's budget cuts the list where it stops fitting, so
+// its order is the priority. It reads files as given, never parsing names
+// from words, so a path holding a space is read whole. An anchor whose chunk
+// is taken costs nothing more; one past limit, or whose line no chunk holds,
+// is left out with what it reaches, which the page's skeleton sees in what
+// its evidence shows. Unlike Search, a file may take several places, as a
+// page draws on a file's many parts and its anchors may share a file. An
+// embedding server it cannot reach fails it (ai.ErrUnavailable), where
+// Search goes on without vectors: a page is stored, so it waits for the
 // evidence a later try finds.
 func (r *Retriever) SearchPage(ctx context.Context, snapshotID int64, words string, files []string, anchors []Anchor, limit int) (Result, error) {
 	var res Result
@@ -145,24 +151,44 @@ func (r *Retriever) SearchPage(ctx context.Context, snapshotID int64, words stri
 		return res, err
 	}
 	var first []int64
-	for _, id := range sure {
-		if !slices.Contains(first, id) && len(first) < limit {
+	for i, id := range sure {
+		if id == 0 || !slices.Contains(first, id) && len(first) >= limit {
+			lines[i] = 0 // left out: it reaches nothing (Reached)
+		} else if !slices.Contains(first, id) {
 			first = append(first, id)
 		}
 	}
-	fused := slices.DeleteFunc(fusion.Fuse(fts, vec, sym, own), func(id int64) bool { return slices.Contains(first, id) })
-	ids := first
+	lists, err := r.Store.Reached(ctx, snapshotID, paths, lines)
+	if err != nil {
+		return res, err
+	}
+	var reached []int64
+	for i, more := 0, true; more; i++ { // each list's i-th in turn, a list run out skipped
+		more = false
+		for _, l := range lists {
+			if i < len(l) {
+				more = true
+				if !slices.Contains(first, l[i]) && !slices.Contains(reached, l[i]) {
+					reached = append(reached, l[i])
+				}
+			}
+		}
+	}
+	taken := slices.Concat(first, reached)
+	isTaken := func(id int64) bool { return slices.Contains(taken, id) }
+	fused := slices.DeleteFunc(fusion.Fuse(fts, vec, sym, own), isTaken)
+	ids := taken
 	if room := limit - len(first); room > 0 && len(fused) > 0 {
 		near, err := r.near(ctx, snapshotID, words, fused)
 		if err != nil {
 			return res, err
 		}
 		var rest []int64
-		rest, res.Graph = supplement(fused, slices.DeleteFunc(near, func(id int64) bool { return slices.Contains(first, id) }), room)
+		rest, res.Graph = supplement(fused, slices.DeleteFunc(near, isTaken), room)
 		ids = append(ids, rest...)
 	}
 	res.FTS, res.Vector, res.Symbol, res.Named = len(fts), len(vec), len(sym), len(own)
-	res.Hits, err = r.Store.Read(ctx, snapshotID, then(ids, fused), limit, false)
+	res.Hits, err = r.Store.Read(ctx, snapshotID, then(ids, fused), limit+len(reached), false)
 	return res, err
 }
 
@@ -228,4 +254,32 @@ func head(limit int) int { return max(limit-nearSlots, 1) }
 // which the wiki's overview starts from.
 func (r *Retriever) Readme(ctx context.Context, snapshotID int64) ([]Hit, error) {
 	return r.Store.Readme(ctx, snapshotID)
+}
+
+type SymbolHit = store.SymbolHit // a symbol the search behind the UI found
+
+// Symbols is the symbol search behind the UI: substring match on names,
+// exact matches first, then prefixes, then shorter names.
+func (r *Retriever) Symbols(ctx context.Context, snapshotID int64, q string, limit int) ([]SymbolHit, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return []SymbolHit{}, nil
+	}
+	return r.Store.Symbols(ctx, snapshotID, q, limit)
+}
+
+// Users returns chunks of the files that import a file defining one of names
+// and use that name: the code that calls, handles or builds it, which a search
+// for the name finds only when its words win. Each file gives one chunk, the
+// files using most of names first, tests, docs and generated files aside; at
+// most limit. Names match exactly, case and all, as the code holds them.
+func (r *Retriever) Users(ctx context.Context, snapshotID int64, names []string, limit int) ([]Hit, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	ids, err := r.Store.Users(ctx, snapshotID, names, limit)
+	if err != nil {
+		return nil, err
+	}
+	return r.Store.Chunks(ctx, ids)
 }

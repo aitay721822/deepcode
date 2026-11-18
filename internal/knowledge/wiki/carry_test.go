@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"deepcode/internal/knowledge/evidence"
+	"deepcode/internal/knowledge/retrieval"
 	"deepcode/internal/knowledge/wiki/outline/skeleton"
 	"deepcode/internal/platform/ai/compat"
 	aicontract "deepcode/internal/platform/ai/contract"
@@ -76,8 +78,10 @@ func carryDB(t *testing.T, language string, base, next map[string]string) *sql.D
 // listed under the English label when the wiki has none.
 func TestRunCarriesPages(t *testing.T) {
 	reasons := map[string]map[string]string{"carry": {"Alpha": "cites", "Beta": "moved", "Epsilon": "search"}, "far new file": {"Beta": "moved"},
-		"renamed": {"Alpha": "cites"}, "empty files": {"Beta": "moved"}}
+		"renamed": {"Alpha": "cites"}, "empty files": {"Beta": "moved"}, "carry past the budget": {"Alpha": "cites", "Beta": "moved"}}
 	common := map[string]string{"a.go": "alpha one", "b.go": "beta", "d.go": "delta", "e.go": "epsilon", "f.go": "filler", "h.go": "core helper"} // a planned overview searches "core"
+	// Past the evidence alone: Format places it and no more.
+	big := "epsilon " + strings.Repeat("x", 70000)
 	files := func(changes map[string]string, drop ...string) map[string]string {
 		out := maps.Clone(common)
 		maps.Copy(out, changes)
@@ -100,6 +104,10 @@ func TestRunCarriesPages(t *testing.T) {
 		// the new g.go goes on Beta, which is written again; Epsilon's search finds it, beside e.go.
 		"carry": {"English", common, files(map[string]string{"a.go": "alpha two", "g.go": "gizmo"}, "d.go"), false,
 			[]string{"Alpha", "Beta", "Epsilon"}, nil},
+		// The same, e.go (Epsilon's anchor, first in its evidence) too big for g.go to fit beside it: what the
+		// writer would never see is no reason, so Epsilon is kept; g.go still goes on Beta.
+		"carry past the budget": {"English", files(map[string]string{"e.go": big}), files(map[string]string{"a.go": "alpha two", "g.go": "gizmo", "e.go": big}, "d.go"), false,
+			[]string{"Alpha", "Beta", "Epsilon=" + kept("Epsilon", "e.go")}, nil},
 		// Beta's search finds the edited manifest, and Alpha's, the overview's, the README: the same chunks, which no page cites.
 		"manifest and readme": {"English", files(map[string]string{"package.json": "beta deps one", "README.md": "Demo one"}),
 			files(map[string]string{"package.json": "beta deps two", "README.md": "Demo two"}), false,
@@ -145,7 +153,7 @@ func TestRunCarriesPages(t *testing.T) {
 					t.Fatalf("page %s left empty or without files", p.Title)
 				}
 				if strings.HasPrefix(p.Content, "Written.") {
-					if name == "carry" && p.Title == "Beta" && !strings.HasSuffix(p.Content, "\n\n## Other files\n\n- [g.go](https://example.com/o/r/blob/next/g.go)") {
+					if strings.HasPrefix(name, "carry") && p.Title == "Beta" && !strings.HasSuffix(p.Content, "\n\n## Other files\n\n- [g.go](https://example.com/o/r/blob/next/g.go)") {
 						t.Errorf("Beta lists its new file under no English label: %q", p.Content)
 					}
 					written++
@@ -160,6 +168,11 @@ func TestRunCarriesPages(t *testing.T) {
 			}
 			if !slices.Equal(got, c.want) || len(model.writes) != written {
 				t.Fatalf("pages %q, %d written; want %q", got, len(model.writes), c.want)
+			}
+			for _, w := range model.writes { // e.go is first by its anchor, not by rank, so it is first past the budget too
+				if _, after, ok := strings.Cut(w, `Write the page "Epsilon".`); ok && !strings.HasPrefix(after[max(0, strings.Index(after, "<source ")):], `<source path="e.go"`) {
+					t.Errorf("Epsilon's evidence starts elsewhere: %s", w)
+				}
 			}
 			for title, f := range c.chosen {
 				if i := slices.IndexFunc(pages, func(p page) bool { return p.Title == title }); pages[i].Files.Chosen[0] != f {
@@ -334,6 +347,31 @@ func TestRunReadsAnchors(t *testing.T) {
 	}
 }
 
+// TestRunReadsReached: a heading's whole declaration comes before the search
+// hits: a function of two chunks of about 28,000 bytes each, the page's only
+// heading, is written from both, and a 10,000-byte search hit past them is
+// left out, the budget holding two such blocks and not three.
+func TestRunReadsReached(t *testing.T) {
+	half := func(mark string) string { return "// " + mark + " " + strings.Repeat("x", 28000) }
+	db := testDB(t, `INSERT INTO snapshots(id, repository_id, commit_sha, status, wiki_status, wiki_language) VALUES (1, 1, 'abc', 'ready', 'failed', 'English')`,
+		`INSERT INTO file_contents(hash, content) VALUES ('h', 'x')`,
+		`INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) VALUES (1, 'a.go', 'go', 'h', 1, 4), (1, 's.go', 'go', 'h', 1, 1)`,
+		`INSERT INTO chunks(snapshot_id, path, symbol_name, start_line, end_line, content, content_hash) VALUES (1, 'a.go', 'big', 1, 2, 'func big() {' || char(10) || '`+half("FIRSTHALF")+`', 'a1'),
+			(1, 'a.go', '', 3, 4, '`+half("SECONDHALF")+`' || char(10) || '}', 'a2'), (1, 's.go', '', 1, 1, 'router `+strings.Repeat("y", 10000)+`', 's')`,
+		`INSERT INTO symbols(snapshot_id, path, name, qualified_name, kind, start_line, end_line) VALUES (1, 'a.go', 'big', 'big', 'function', 1, 4)`,
+		`INSERT INTO wiki_pages(snapshot_id, slug, title, query, position, content, files) VALUES (1, '1-overview', 'Overview', '', 0, 'Written before.', NULL),
+			(1, '2-routing', 'Routing', 'router', 1, '', '{"chosen":["a.go"],"placed":[],"units":["./"]}')`)
+	model := &fakeModel{}
+	runWiki(t, db, model, "abc")
+	if len(model.writes) != 1 || !strings.Contains(model.writes[0], "FIRSTHALF") || !strings.Contains(model.writes[0], "SECONDHALF") || strings.Contains(model.writes[0], "router y") {
+		t.Fatalf("%d written; want both halves of big and not the search hit", len(model.writes))
+	}
+	two := len(evidence.Block(retrieval.Hit{Path: "a.go", Symbol: "big", StartLine: 1, EndLine: 2, Content: "func big() {\n" + half("FIRSTHALF")})) * 2
+	if two <= 48000 || two+10000 <= evidenceChars || two > evidenceChars { // what the case rests on; 48000 is the old budget
+		t.Fatalf("two blocks are %d bytes, against a budget of %d", two, evidenceChars)
+	}
+}
+
 // materialRe holds the words a write request once used for the code it
 // carries, which pages then copied ("not shown here", "covered on this page");
 // blocksRe is the request's <source> blocks and tags, the repository's text.
@@ -343,12 +381,13 @@ var (
 )
 
 // noMaterial fails t for each text sent to the model to write a page that
-// names its code in one of those words. ponytail: words a screen saw; a new
-// one passes until a screen sees it and it is added.
+// names its code in one of those words, past skeleton.ReaderRule, which names
+// them to ban them. ponytail: words a screen saw; a new one passes until a
+// screen sees it and it is added.
 func noMaterial(t *testing.T, texts ...string) {
 	t.Helper()
 	for _, s := range texts {
-		if m := materialRe.FindString(blocksRe.ReplaceAllString(s, "")); m != "" {
+		if m := materialRe.FindString(blocksRe.ReplaceAllString(strings.ReplaceAll(s, skeleton.ReaderRule, ""), "")); m != "" {
 			t.Errorf("a write request says %q:\n%s", m, s)
 		}
 	}

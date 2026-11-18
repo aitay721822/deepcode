@@ -52,9 +52,13 @@ type Generator struct {
 
 const (
 	defaultMaxPages = 64 // enough for DeepWiki's page counts on the bench's repositories
-	pageHits        = 12
-	evidenceChars   = 48000 // a page's sources in all
-	sectionChars    = 24000 // of those, the ones a section's pages share
+	// A page's headings at most, and the places of its search: its anchors'
+	// chunks, then search hits; the code its anchors reach takes none.
+	pageHits = 12
+	// A page's sources in all: as deep chat's, room for what a crowded page's
+	// anchors reach.
+	evidenceChars = 64000
+	sectionChars  = 24000 // of those, the ones a section's pages share
 )
 
 // source is where the wiki's citations link: a commit of a repository on its git server.
@@ -414,7 +418,8 @@ func group(p page) int {
 // there as it was (for a manifest, only where the page says a word the change
 // lost: a new dependency version leaves the pages citing its scripts), or a
 // file it cites imports a declaration the change altered; "search", its
-// search, its skeleton's anchors first, now finds a declaration that is new:
+// search, its skeleton's anchors first, now finds, within the evidence
+// budget (what the writer would see), a declaration that is new:
 // in a changed file, or anywhere in a new file that belongs with p's group of
 // pages (change.Home), as a new file is for the pages nearest it; or
 // "skeleton", its plan now gives it a heading that its plan at base (was) did
@@ -442,11 +447,13 @@ func (g *Generator) touched(ctx context.Context, snap int64, p page, head bool, 
 	// section shares count where it cites them, so one changed file does not
 	// rewrite a whole section. A gained heading this evidence shows but write's,
 	// the section's first, leaves out costs one rewrite: the next base gives it.
+	// The check reads a cut hit's Path and Symbol alone, so used serves it.
 	_, hits, err := g.sources(ctx, snap, p, page{}, false, nil, sk.Anchors())
 	if err != nil {
 		return "", err
 	}
-	if slices.ContainsFunc(hits, func(h retrieval.Hit) bool {
+	_, used, _ := evidence.Format(hits, evidence.Limit{Chars: evidenceChars}) // as write holds them to the evidence
+	if slices.ContainsFunc(used, func(h retrieval.Hit) bool {
 		if !u.changed[h.Path] || change.Is(h.Path) {
 			return false
 		}
@@ -457,7 +464,6 @@ func (g *Generator) touched(ctx context.Context, snap int64, p page, head bool, 
 	}) {
 		return "search", nil
 	}
-	_, used, _ := evidence.Format(hits, evidence.Limit{Chars: evidenceChars}) // as write holds them to the evidence
 	if sk, _ = sourced(sk, used); len(skeleton.Lacking(skeleton.Gained(was, sk), skeleton.Parse(p.Content, sk))) > 0 {
 		return "skeleton", nil
 	}

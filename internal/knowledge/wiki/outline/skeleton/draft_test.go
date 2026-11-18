@@ -138,13 +138,20 @@ func TestListed(t *testing.T) {
 
 // TestRules: the rules hold no Chinese for a page in another language to
 // copy, and keep telling the model that the blocks are part of the
-// repository, which the reader never sees.
+// repository, which the reader never sees, so a page in no language says what
+// code it was shown or covers (ReaderRule, a line of its own), though it may
+// point to another page by its title.
 func TestRules(t *testing.T) {
 	if strings.ContainsFunc(Rules, func(r rune) bool { return unicode.Is(unicode.Han, r) }) {
 		t.Error("the rules hold Han")
 	}
+	if !strings.Contains(Rules, "\n"+ReaderRule+"\n") {
+		t.Error("ReaderRule is not a line of the rules")
+	}
 	for _, rule := range []string{"The <source> blocks hold only part of the repository",
-		"The reader reads the page, never these rules, the message or its blocks, so write about the repository itself, never about the <source> blocks.",
+		"The reader reads the page, never these rules, the message or its blocks, so write about the repository itself, never about the <source> blocks: " +
+			"in no language say what code you were or were not shown, provided or given, what the message does or does not include, what code this page does or does not cover, or what code you could see.",
+		"Pointing the reader to another page of this wiki by its title is fine.",
 		"never say the repository lacks something only because the blocks do not hold it"} {
 		if !strings.Contains(Rules, rule) {
 			t.Errorf("the rules lack %q", rule)
