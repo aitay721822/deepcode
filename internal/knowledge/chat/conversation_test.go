@@ -77,6 +77,8 @@ func TestAskSCIPContext(t *testing.T) {
 			[]string{`"alpha.go":5`, `/0/main.go":1, 2`, `/1/main.go":1`, `/2/main.go":1`, "More indexed references exist"}, 0},
 		{"bounded context preserves verdicts", "where are Busy and Resolve called?", []string{busy, empty, exact, fallback},
 			[]string{`"alpha.go":5`, `"alpha.go":4`, `"alpha.go":3`, `"alpha.go":99`, "not verified", "Some SCIP lookups or locations were omitted"}, 8192},
+		{"retry with smaller lookup budget", "where is Resolve called?", []string{exact},
+			[]string{"Some SCIP lookups or locations were omitted", "Do not treat other lines as SCIP-verified"}, 4000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			final := make(chan string, 1)
@@ -111,7 +113,10 @@ func TestAskSCIPContext(t *testing.T) {
 			}
 			select {
 			case prompt := <-final:
-				_, notes, _ := strings.Cut(prompt, "SCIP reference lookups:\n")
+				_, notes, ok := strings.Cut(prompt, "SCIP reference lookups:\n")
+				if !ok {
+					_, notes, _ = strings.Cut(prompt, "\n\n")
+				}
 				notes, _, _ = strings.Cut(notes, "\n\n")
 				for _, want := range tc.want {
 					if !strings.Contains(notes, want) {
