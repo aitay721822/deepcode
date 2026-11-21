@@ -214,6 +214,8 @@ deepcode import-scip --data /path/to/deepcode-data manifest.json index.scip
 
 匯入會核對 commit、索引檔 SHA-256 與每個文件的 Git blob ID，並驗證要儲存的 UTF-8 位置。若 Tree-sitter 跳過某個 Go 檔案，匯入只用本機 Git 快取核對該 commit 與 blob，不儲存該檔案的引用，也不會向遠端抓取；若快取已換到新 commit，請為目前的快照重新產生索引。雜湊只用來核對輸入是否一致，不能驗證來源。匯入失敗會保留所有語言的原有索引；重新匯入只會完整取代同一快照的 Go SCIP 資料，保留其他語言的自動索引，新 commit 不會沿用。
 
+啟用自動 SCIP 後，重建同一快照時，自動產生的索引會取代該快照的所有 SCIP 資料，包括手動匯入的 Go 資料。若要保留手動索引的建置組態，請在這類重建完成後重新執行 `import-scip`。
+
 只有 SCIP 已涵蓋的檔案與建置組態提供精確引用。未能識別指定宣告時，問答會退回名稱搜尋並標示；找得到宣告但沒有索引內的引用，不代表整個 repo 都沒有引用。試點上限是 16 MiB、5,000 個索引文件及 200,000 筆 occurrences；若超限可選擇較小的一組 Go packages。
 
 ## 升級
