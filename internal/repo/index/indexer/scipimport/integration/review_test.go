@@ -135,3 +135,23 @@ func TestAutomaticSCIPReviewEmptySolutions(t *testing.T) {
 		})
 	}
 }
+
+func TestAutomaticSCIPReviewTopLevel(t *testing.T) {
+	image := os.Getenv("DEEPCODE_TEST_SCIP_CSHARP_IMAGE")
+	if image == "" {
+		t.Skip("Csharp image required")
+	}
+	for _, tc := range []struct {
+		name, caller string
+		covered      bool
+	}{
+		{"top level", "Alpha.Resolve();\n", true},
+		{"library", "class Caller { void Run() { Alpha.Resolve(); } }\n", true},
+		{"compile error", "Missing.External.Resolve();\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, _, _, snap := reviewFixture(t, map[string]string{"Alpha.cs": "static class Alpha { public static void Resolve() {} }\n", "Caller.cs": tc.caller, "Directory.Build.props": `<Project><Import Project="/missing/repo.props" /></Project>`, "global.json": `{"sdk":{"version":"0.0.1"}}`}, scipimport.Images{CSharp: image})
+			checkLanguageUsers(t, db, snap, "Resolve", "Alpha.cs", 1, []string{"Caller.cs:1"}, tc.covered)
+		})
+	}
+}

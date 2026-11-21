@@ -140,7 +140,15 @@ printf '%s' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>ne
 printf '%s' '<configuration><packageSources><clear /></packageSources></configuration>' > /tmp/project/NuGet.Config
 cd /tmp/project
 dotnet restore --configfile NuGet.Config Index.csproj >&2
-dotnet build --no-restore Index.csproj >&2
+if ! dotnet build --no-restore Index.csproj > /tmp/build.log 2>&1; then
+  cat /tmp/build.log >&2
+  grep -q 'error CS8805:' /tmp/build.log || exit 1
+  sed -i 's|<TargetFramework>|<OutputType>Exe</OutputType><TargetFramework>|' Index.csproj
+  dotnet restore --configfile NuGet.Config Index.csproj >&2
+  dotnet build --no-restore Index.csproj >&2
+else
+  cat /tmp/build.log >&2
+fi
 if ! dotnet --roll-forward Major /opt/scip/scip-dotnet.dll index Index.csproj --skip-dotnet-restore --working-directory /src --output /tmp/index.scip > /tmp/scip.log 2>&1; then cat /tmp/scip.log >&2; exit 1; fi
 cat /tmp/scip.log >&2
 if grep -Ei 'WorkspaceDiagnosticKind[.]Failure|fail:' /tmp/scip.log >&2; then exit 1; fi
