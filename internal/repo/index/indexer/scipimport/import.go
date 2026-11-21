@@ -70,62 +70,23 @@ func Import(ctx context.Context, s *store.Store, gitc *git.Client, manifestFile,
 	if hex.EncodeToString(digest[:]) != m.IndexSHA {
 		return 0, errors.New("SCIP index SHA-256 does not match the manifest")
 	}
-	var idx scip.Index
-	if err := (proto.UnmarshalOptions{DiscardUnknown: true, RecursionLimit: 32}).Unmarshal(raw, &idx); err != nil {
-		return 0, fmt.Errorf("decode SCIP index: %w", err)
-	}
-	if idx.GetMetadata().GetToolInfo().GetName() != "scip-go" || idx.GetMetadata().GetTextDocumentEncoding() != scip.TextEncoding_UTF8 {
-		return 0, errors.New("SCIP pilot accepts UTF-8 indexes from scip-go only")
-	}
-	if len(idx.Documents) == 0 || len(idx.Documents) > maxDocuments {
-		return 0, fmt.Errorf("SCIP index must contain 1–%d documents", maxDocuments)
-	}
-	paths := make(map[string]bool, len(idx.Documents))
-	var rows []store.SCIPOccurrence
-	var occurrences int
-	symbols := make(map[string]bool)
 	var blobs map[string]string
-	for _, doc := range idx.Documents {
-		rel := doc.GetRelativePath()
-		name := path.Join(m.ModuleRoot, rel)
-		if !validPath(rel) || !strings.HasSuffix(rel, ".go") || paths[name] || !oid(m.Files[name]) {
-			return 0, fmt.Errorf("invalid, duplicate, or unlisted SCIP document path %q", rel)
-		}
-		paths[name] = true
-		occurrences += len(doc.Occurrences)
-		if occurrences > maxOccurrences {
-			return 0, fmt.Errorf("SCIP index exceeds %d occurrences", maxOccurrences)
-		}
-		if doc.GetLanguage() != "go" || doc.GetPositionEncoding() != scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart {
-			return 0, fmt.Errorf("SCIP document %q must use Go and UTF-8 byte offsets", name)
-		}
-		source, indexed, err := s.SCIPSource(ctx, snapshot, name, m.Files[name])
-		if err != nil {
-			return 0, err
-		}
-		if !indexed {
-			if blobs == nil {
-				tree, err := gitc.CachedTree(ctx, repoID, m.Commit)
-				if err != nil {
-					return 0, fmt.Errorf("cannot verify unindexed SCIP documents against the cached commit: %w", err)
-				}
-				blobs = make(map[string]string, len(tree))
-				for _, entry := range tree {
-					blobs[entry.Path] = entry.SHA
-				}
+	verifySkipped := func(name string) error {
+		if blobs == nil {
+			tree, err := gitc.CachedTree(ctx, repoID, m.Commit)
+			if err != nil {
+				return fmt.Errorf("cannot verify unindexed SCIP documents against the cached commit: %w", err)
 			}
-			if blobs[name] != m.Files[name] {
-				return 0, fmt.Errorf("SCIP document %q does not match a Go blob in the commit", name)
-			}
-			continue // The commit matches, but there is no base evidence for this file.
+			blobs = goBlobs(tree)
 		}
-		if doc.Text != "" && strings.ReplaceAll(doc.Text, "\r\n", "\n") != source {
-			return 0, fmt.Errorf("SCIP document %q text differs from the snapshot", name)
+		if blobs[name] != m.Files[name] {
+			return fmt.Errorf("SCIP document %q does not match a Go blob in the commit", name)
 		}
-		rows, err = appendDocument(rows, name, doc, strings.Split(source, "\n"), symbols)
-		if err != nil {
-			return 0, err
-		}
+		return nil
+	}
+	rows, err := readIndex(ctx, s, snapshot, m.ModuleRoot, m.Files, raw, verifySkipped)
+	if err != nil {
+		return 0, err
 	}
 	if len(rows) == 0 {
 		return 0, errors.New("SCIP index contains no global symbol occurrences in snapshot files")
@@ -134,6 +95,70 @@ func Import(ctx context.Context, s *store.Store, gitc *git.Client, manifestFile,
 		return 0, err
 	}
 	return len(rows), nil
+}
+
+// readIndex uses the manifest's blob list for external artifacts and the
+// pinned Git tree directly for locally generated ones.
+func readIndex(ctx context.Context, s *store.Store, snapshot int64, moduleRoot string, files map[string]string, raw []byte, verifySkipped func(string) error) ([]store.SCIPOccurrence, error) {
+	var idx scip.Index
+	if err := (proto.UnmarshalOptions{DiscardUnknown: true, RecursionLimit: 32}).Unmarshal(raw, &idx); err != nil {
+		return nil, fmt.Errorf("decode SCIP index: %w", err)
+	}
+	if idx.GetMetadata().GetToolInfo().GetName() != "scip-go" || idx.GetMetadata().GetTextDocumentEncoding() != scip.TextEncoding_UTF8 {
+		return nil, errors.New("SCIP pilot accepts UTF-8 indexes from scip-go only")
+	}
+	if len(idx.Documents) == 0 || len(idx.Documents) > maxDocuments {
+		return nil, fmt.Errorf("SCIP index must contain 1–%d documents", maxDocuments)
+	}
+	paths := make(map[string]bool, len(idx.Documents))
+	var rows []store.SCIPOccurrence
+	var occurrences int
+	symbols := make(map[string]bool)
+	for _, doc := range idx.Documents {
+		rel := doc.GetRelativePath()
+		name := path.Join(moduleRoot, rel)
+		if !validPath(rel) || !strings.HasSuffix(rel, ".go") || paths[name] || !oid(files[name]) {
+			return nil, fmt.Errorf("invalid, duplicate, or unlisted SCIP document path %q", rel)
+		}
+		paths[name] = true
+		occurrences += len(doc.Occurrences)
+		if occurrences > maxOccurrences {
+			return nil, fmt.Errorf("SCIP index exceeds %d occurrences", maxOccurrences)
+		}
+		if doc.GetLanguage() != "go" || doc.GetPositionEncoding() != scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart {
+			return nil, fmt.Errorf("SCIP document %q must use Go and UTF-8 byte offsets", name)
+		}
+		source, indexed, err := s.SCIPSource(ctx, snapshot, name, files[name])
+		if err != nil {
+			return nil, err
+		}
+		if !indexed {
+			if verifySkipped != nil {
+				if err := verifySkipped(name); err != nil {
+					return nil, err
+				}
+			}
+			continue // The commit matches, but there is no base evidence for this file.
+		}
+		if doc.Text != "" && strings.ReplaceAll(doc.Text, "\r\n", "\n") != source {
+			return nil, fmt.Errorf("SCIP document %q text differs from the snapshot", name)
+		}
+		rows, err = appendDocument(rows, name, doc, strings.Split(source, "\n"), symbols)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
+}
+
+func goBlobs(tree []git.TreeEntry) map[string]string {
+	blobs := make(map[string]string)
+	for _, entry := range tree {
+		if strings.HasSuffix(entry.Path, ".go") {
+			blobs[entry.Path] = entry.SHA
+		}
+	}
+	return blobs
 }
 
 func appendDocument(rows []store.SCIPOccurrence, name string, doc *scip.Document, lines []string, symbols map[string]bool) ([]store.SCIPOccurrence, error) {

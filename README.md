@@ -141,7 +141,20 @@
 
 ## Go 語意引用（SCIP 試點）
 
-SCIP 是可選的引用索引，不會取代 Tree-sitter、改動呼叫圖或觸發 Wiki 重建。deepcode 不會為了匯入執行 repo 的程式碼，也不需要安裝 `scip-go` 或啟動 LSP。
+SCIP 是可選的精確引用索引，不取代 Tree-sitter、呼叫圖或 Wiki，也不需要 LSP。啟用後，deepcode 在一般索引流程中對同一個 Git commit 自動執行 `scip-go`，不用每次手動匯入。
+
+```sh
+docker build -f scripts/scip-go.Dockerfile -t deepcode-scip-go:0.2.10 .
+DEEPCODE_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 deepcode serve
+```
+
+也可在 `deepcode.yaml` 設定 `scip_go_image: deepcode-scip-go:0.2.10`。預設留空，維持原本的索引流程。需要 deepcode 服務帳號能使用本機 Docker 的 Linux 容器；既有快照用「重建索引」補上，不必切到新 commit。
+
+索引容器使用唯讀的 Git 檔案、停用網路、CGO、測試與 Go workspace，不會自動拉取映像或下載依賴。依賴須已隨 repo vendoring、是 repo 內的本機模組，或由管理者預先放入可信映像的 `/opt/go-mod` Go 模組快取；不要在 deepcode 的主機上為不可信 repo 安裝依賴。上限為每份快照 16 個模組、20,000 個檔案、128 MiB 與兩分鐘（另有容器資源限制）。任一模組失敗或超限時，不寫入這次產生的 SCIP 資料，快照仍以原本的索引發布，原因可在工作日誌查看。
+
+### 從 CI 手動匯入（備用）
+
+若不使用本機 Docker，或要採用不同的建置組態，仍可從可信 CI 匯入：
 
 1. 在可信 CI 用乾淨的 checkout 產生索引。使用與 deepcode 快照相同的完整 commit，把依賴和建置組態固定在 CI；只匯入這個 job 產生的索引和清單。
 2. 在 deepcode 伺服器上，等對應快照索引完成，再匯入這兩個檔案。repo ID 是 deepcode 網址 `/repos/<id>` 中的 ID。

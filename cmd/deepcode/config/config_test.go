@@ -38,7 +38,7 @@ func TestDefaults(t *testing.T) {
 	if addr != "127.0.0.1:8080" || cfg.DataDir != "data" || cfg.ChatURL != "https://api.openai.com/v1" ||
 		cfg.EmbedURL != cfg.ChatURL || cfg.EmbedKey != "k" || cfg.ChatModel != "" || cfg.ReasoningEffort != "" ||
 		cfg.Workers != 2 || cfg.LLMTimeout != 5*time.Minute || cfg.JobTimeout != 2*time.Hour || cfg.SyncEvery != 0 ||
-		cfg.CacheMB != 64 || cfg.MaxRepoMB != 1024 || cfg.MaxFiles != 20000 || cfg.MaxFileKB != 512 || cfg.MaxIndexMB != 200 ||
+		cfg.CacheMB != 64 || cfg.MaxRepoMB != 1024 || cfg.MaxFiles != 20000 || cfg.MaxFileKB != 512 || cfg.MaxIndexMB != 200 || cfg.SCIPGoImage != "" ||
 		cfg.WikiLanguage != "Traditional Chinese (Taiwan)" || cfg.SessionTTL != 720*time.Hour || cfg.GitProtocols != "http:https" || len(cfg.TrustedProxies) != 0 ||
 		cfg.MaxOutputTokens != 0 || cfg.LLMRPM != 0 || cfg.WikiParallel != 1 || cfg.WikiMaxPages != 64 || cfg.Temperature != nil ||
 		cfg.ChatAPI != "completions" || cfg.ChatSchema != "server" || cfg.ChatContext != 0 || cfg.CompactRatio != 0.8 ||
@@ -87,25 +87,27 @@ trusted_proxies: [127.0.0.1, "10.0.0.0/8"]
 chat_context: 8193
 compact_ratio: 0.5
 chat_tokenizer: tok.json
+scip_go_image: deepcode-scip-go:file
 `)
 	t.Setenv("DEEPCODE_CHAT_MODEL", "")
 	cfg, addr, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if addr != "127.0.0.1:8080" || cfg.CacheMB != 64 || cfg.Workers != 4 || cfg.EmbedKey != "file-key" || cfg.ChatContext != 8193 || cfg.CompactRatio != 0.5 || cfg.ChatTokenizer != "tok.json" {
+	if addr != "127.0.0.1:8080" || cfg.CacheMB != 64 || cfg.Workers != 4 || cfg.EmbedKey != "file-key" || cfg.ChatContext != 8193 || cfg.CompactRatio != 0.5 || cfg.ChatTokenizer != "tok.json" || cfg.SCIPGoImage != "deepcode-scip-go:file" {
 		t.Errorf("empty values in the file: addr %q, %+v", addr, cfg)
 	}
 	t.Setenv("DEEPCODE_WORKERS", "8")
 	t.Setenv("DEEPCODE_CHAT_CONTEXT", "524288")
 	t.Setenv("DEEPCODE_COMPACT_RATIO", "1")
+	t.Setenv("DEEPCODE_SCIP_GO_IMAGE", "deepcode-scip-go:env")
 	cfg, _, err = Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.ChatModel != "file-model" || cfg.ChatAPI != "responses" || cfg.ChatSchema != "prompt" || cfg.EmbedURL != "http://embed:9000/v1" || cfg.ReasoningEffort != "none" ||
 		cfg.Workers != 8 || cfg.LLMTimeout != 90*time.Second || cfg.SyncEvery != 0 || cfg.Temperature == nil || *cfg.Temperature != 0.2 ||
-		!slices.Equal(cfg.TrustedProxies, []string{"127.0.0.1", "10.0.0.0/8"}) || cfg.ChatContext != 524288 || cfg.CompactRatio != 1 {
+		!slices.Equal(cfg.TrustedProxies, []string{"127.0.0.1", "10.0.0.0/8"}) || cfg.ChatContext != 524288 || cfg.CompactRatio != 1 || cfg.SCIPGoImage != "deepcode-scip-go:env" {
 		t.Errorf("file then env: %+v", cfg)
 	}
 

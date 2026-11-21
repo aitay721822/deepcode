@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"time"
 
 	"deepcode/internal/platform/ai/compat"
 	"deepcode/internal/platform/events"
@@ -15,6 +16,7 @@ import (
 	"deepcode/internal/repo/gitserver"
 	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/index/graph"
+	"deepcode/internal/repo/index/indexer/scipimport"
 	"deepcode/internal/repo/index/indexer/store"
 	"deepcode/internal/repo/index/indexer/vectorstore"
 )
@@ -26,14 +28,15 @@ type Limits struct {
 }
 
 type Indexer struct {
-	Store   *store.Store
-	Graph   *graph.Graph // the snapshots' imports
-	Git     *git.Client
-	Servers *gitserver.Service // where each repository is fetched from
-	Embed   *compat.Client     // nil: FTS5 and symbol search only
-	Vectors *vectorstore.SQLite
-	Events  *events.Bus // receives snapshot.published
-	Limits  Limits
+	Store       *store.Store
+	Graph       *graph.Graph // the snapshots' imports
+	Git         *git.Client
+	Servers     *gitserver.Service // where each repository is fetched from
+	Embed       *compat.Client     // nil: FTS5 and symbol search only
+	Vectors     *vectorstore.SQLite
+	Events      *events.Bus // receives snapshot.published
+	Limits      Limits
+	SCIPGoImage string // empty: no automatic SCIP generation
 }
 
 // Run indexes repoID at sha, publishes the snapshot and announces it with
@@ -100,6 +103,19 @@ func (ix *Indexer) run(ctx context.Context, repoID int64, sha string, full bool,
 			return err
 		}
 		progress.Logf("linked the files by %d imports", n)
+		if ix.SCIPGoImage != "" {
+			scipCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			n, err := scipimport.Generate(scipCtx, ix.Store, ix.Git, dir, sha, snap, ix.SCIPGoImage)
+			cancel()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err != nil {
+				progress.Logf("Go SCIP unavailable; kept the base index: %v", err)
+			} else if n > 0 {
+				progress.Logf("automatically indexed %d Go SCIP occurrences", n)
+			}
+		}
 	}
 	model := ""
 	if ix.Embed != nil {

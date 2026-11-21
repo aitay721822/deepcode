@@ -70,7 +70,7 @@ func (r Result) SCIPContext(maxBytes int) string {
 		return ""
 	}
 	const heading = "SCIP reference lookups:\n"
-	const guide = "SCIP covers only the imported build and files. Cite only lines present in the source blocks below.\n"
+	const guide = "SCIP covers only the indexed build and files. Cite only lines present in the source blocks below.\n"
 	const omitted = "Some SCIP lookups or locations were omitted. Do not treat other lines as SCIP-verified.\n"
 	full := len(heading) + len(guide) + 1
 	for _, lookup := range r.scip {

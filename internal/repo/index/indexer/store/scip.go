@@ -38,6 +38,15 @@ func (s *Store) SCIPSource(ctx context.Context, snapshot int64, path, hash strin
 
 // ReplaceSCIP publishes the entire index or keeps the previous one.
 func (s *Store) ReplaceSCIP(ctx context.Context, snapshot int64, rows []SCIPOccurrence) error {
+	return s.replaceSCIP(ctx, snapshot, rows, false)
+}
+
+// IndexSCIP also accepts the snapshot currently being built by the indexer.
+func (s *Store) IndexSCIP(ctx context.Context, snapshot int64, rows []SCIPOccurrence) error {
+	return s.replaceSCIP(ctx, snapshot, rows, true)
+}
+
+func (s *Store) replaceSCIP(ctx context.Context, snapshot int64, rows []SCIPOccurrence, building bool) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -45,8 +54,8 @@ func (s *Store) ReplaceSCIP(ctx context.Context, snapshot int64, rows []SCIPOccu
 	defer tx.Rollback()
 	var status string
 	err = tx.QueryRowContext(ctx, `SELECT status FROM snapshots WHERE id = ?`, snapshot).Scan(&status)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && status != "ready" {
-		return errors.New("snapshot is no longer ready for SCIP import")
+	if errors.Is(err, sql.ErrNoRows) || err == nil && status != "ready" && !(building && status == "indexing") {
+		return errors.New("snapshot is no longer available for SCIP indexing")
 	}
 	if err != nil {
 		return err
