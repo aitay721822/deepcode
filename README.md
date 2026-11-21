@@ -144,11 +144,11 @@
 SCIP 是可選的精確引用索引，不取代 Tree-sitter、呼叫圖或 Wiki，也不需要 LSP。啟用後，deepcode 對同一個 Git commit 以各自隔離的容器執行 Go、JavaScript／TypeScript／TSX、Python、Rust、Java、C# 索引，不用每次手動匯入。Java 與 C# 僅涵蓋 JDK／SDK-only 原始碼，不支援 Maven、Gradle 或 repo 的 MSBuild 建置。
 
 ```sh
-docker build -f scripts/scip-go.Dockerfile -t deepcode-scip-go:0.2.10 .
-docker build -f scripts/scip-node.Dockerfile -t deepcode-scip-node:0.6.2-0.6.8 .
+docker build -f scripts/scip/scip-go.Dockerfile -t deepcode-scip-go:0.2.10 .
+docker build -f scripts/scip/scip-node.Dockerfile -t deepcode-scip-node:0.6.2-0.6.8 .
 docker build -f scripts/scip/scip-rust.Dockerfile -t deepcode-scip-rust:2026-11-16 .
-docker build -f scripts/scip-java.Dockerfile -t deepcode-scip-java:0.14.2 .
-docker build -f scripts/scip-dotnet.Dockerfile -t deepcode-scip-dotnet:0.2.14 .
+docker build -f scripts/scip/scip-java.Dockerfile -t deepcode-scip-java:0.14.2 .
+docker build -f scripts/scip/scip-dotnet.Dockerfile -t deepcode-scip-dotnet:0.2.14 .
 DEEPCODE_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 \
 DEEPCODE_SCIP_TYPESCRIPT_IMAGE=deepcode-scip-node:0.6.2-0.6.8 \
 DEEPCODE_SCIP_PYTHON_IMAGE=deepcode-scip-node:0.6.2-0.6.8 \
