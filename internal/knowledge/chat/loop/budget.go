@@ -78,7 +78,7 @@ func (s *state) group(tool string) *[]retrieval.Hit {
 	switch tool {
 	case "first":
 		return &s.first
-	case "users", "follow":
+	case "users", "users_at", "follow":
 		return &s.users
 	}
 	return &s.results

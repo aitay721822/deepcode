@@ -139,6 +139,50 @@
 | dotnet/eShop | 0.800／0.688 | 0.833／0.748 |
 | tokio-rs/axum | 0.867／0.641 | 0.933／0.804 |
 
+## Go 語意引用（SCIP 試點）
+
+SCIP 是可選的引用索引，不會取代 Tree-sitter、改動呼叫圖或觸發 Wiki 重建。deepcode 不會為了匯入執行 repo 的程式碼，也不需要安裝 `scip-go` 或啟動 LSP。
+
+1. 在可信 CI 用乾淨的 checkout 產生索引。使用與 deepcode 快照相同的完整 commit，把依賴和建置組態固定在 CI；只匯入這個 job 產生的索引和清單。
+2. 在 deepcode 伺服器上，等對應快照索引完成，再匯入這兩個檔案。repo ID 是 deepcode 網址 `/repos/<id>` 中的 ID。
+
+以下在 checkout 的 Go module／repository 根目錄執行（已用 `scip-go` v0.2.10 驗證）。將輸出保存在 checkout 外，再把 `<repo-id>` 換成 deepcode 的 ID：
+
+```sh
+out=$(mktemp -d)
+scip-go index --skip-tests --skip-implementations --output "$out/index.scip" ./...
+python3 - '<repo-id>' "$out/index.scip" > "$out/manifest.json" <<'PY'
+import hashlib, json, pathlib, subprocess, sys
+
+def git(*args):
+    return subprocess.check_output(["git", *args])
+
+commit = git("rev-parse", "HEAD").decode().strip()
+files = {}
+for entry in git("ls-tree", "-rz", commit).split(b"\0"):
+    if not entry:
+        continue
+    header, path = entry.split(b"\t", 1)
+    mode, _, oid = header.split()
+    if mode in (b"100644", b"100755") and path.endswith(b".go"):
+        files[path.decode()] = oid.decode()
+print(json.dumps({
+    "repository": sys.argv[1],
+    "commit": commit,
+    "index_sha256": hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest(),
+    "files": files,
+}))
+PY
+```
+
+```sh
+deepcode import-scip --data /path/to/deepcode-data manifest.json index.scip
+```
+
+匯入會核對 commit、索引檔 SHA-256、每個文件的 Git blob ID 與 UTF-8 位置。雜湊只用來核對輸入是否一致，不能驗證來源。匯入失敗會保留原有索引；重新匯入會完整取代同一快照的 SCIP 資料，新 commit 不會沿用。
+
+只有 SCIP 已涵蓋的檔案與建置組態提供精確引用。未能識別指定宣告時，問答會退回名稱搜尋並標示；找得到宣告但沒有索引內的引用，不代表整個 repo 都沒有引用。試點上限是 16 MiB、5,000 個索引文件及 200,000 筆 occurrences；若超限可選擇較小的一組 Go packages。
+
 ## 升級
 
 1. 先備份資料庫：`./deepcode backup backup.db`，伺服器運作中也可以。

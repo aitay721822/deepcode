@@ -282,3 +282,62 @@ func (s *Store) spans(ctx context.Context, snapshotID int64, p string) ([]span, 
 	}
 	return out, rows.Err()
 }
+
+type SCIPHit struct {
+	Hit
+	ReferenceLine int
+}
+
+func (s *Store) HasSCIP(ctx context.Context, snapshot int64) (bool, error) {
+	var indexed bool
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM scip_occurrences WHERE snapshot_id = ? AND definition_name <> ''
+	)`, snapshot).Scan(&indexed)
+	return indexed, err
+}
+
+// SCIPUsers selects one indexed definition and finds chunks at its references.
+// found distinguishes a covered definition with no references from a missing
+// or ambiguous definition. Never widen an exact query to same-name symbols.
+func (s *Store) SCIPUsers(ctx context.Context, snapshot int64, name, path string, line, limit int) ([]SCIPHit, bool, error) {
+	rows, err := s.DB.QueryContext(ctx, `WITH definition AS (
+		SELECT min(o.symbol) AS symbol FROM scip_occurrences o
+		JOIN snapshots s ON s.id = o.snapshot_id AND s.status = 'ready'
+		WHERE o.snapshot_id = ?1 AND o.path = ?2 AND o.line = ?3 AND o.definition_name = ?4 AND o.definition_name <> ''
+		HAVING count(DISTINCT o.symbol) = 1
+	), refs AS (
+		SELECT c.id, min(r.line) AS line FROM definition d
+		LEFT JOIN scip_occurrences r ON r.snapshot_id = ?1 AND r.symbol = d.symbol AND r.definition_name = ''
+		LEFT JOIN chunks c ON c.snapshot_id = r.snapshot_id AND c.path = r.path AND r.line BETWEEN c.start_line AND c.end_line
+		GROUP BY c.id
+		ORDER BY c.id IS NULL, min(r.path), line, c.id LIMIT ?5
+	)
+	SELECT refs.id, c.path, c.symbol_name, c.start_line, c.end_line, c.content, refs.line
+	FROM refs LEFT JOIN chunks c ON c.id = refs.id
+	ORDER BY refs.id IS NULL, c.path, refs.line, refs.id`, snapshot, path, line, name, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var hits []SCIPHit
+	var found bool
+	for rows.Next() {
+		var id, start, end, ref sql.NullInt64
+		var path, symbol, content sql.NullString
+		if err := rows.Scan(&id, &path, &symbol, &start, &end, &content, &ref); err != nil {
+			return nil, false, err
+		}
+		found = true
+		if id.Valid {
+			hits = append(hits, SCIPHit{
+				Hit: Hit{ChunkID: id.Int64, Path: path.String, Symbol: symbol.String,
+					StartLine: int(start.Int64), EndLine: int(end.Int64), Content: content.String},
+				ReferenceLine: int(ref.Int64),
+			})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return hits, found, nil
+}

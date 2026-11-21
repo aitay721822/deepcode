@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -54,6 +55,7 @@ import (
 	"deepcode/internal/repo/index/graph"
 	graphstore "deepcode/internal/repo/index/graphstore"
 	"deepcode/internal/repo/index/indexer"
+	"deepcode/internal/repo/index/indexer/scipimport"
 	indexstore "deepcode/internal/repo/index/indexer/store"
 	"deepcode/internal/repo/index/indexer/vectorstore"
 )
@@ -65,6 +67,10 @@ type App struct {
 	queue    *jobs.Queue
 	workers  int
 	pipeline pipeline
+}
+
+func ImportSCIP(ctx context.Context, db *sql.DB, manifest, index io.Reader) (int, error) {
+	return scipimport.Import(ctx, &indexstore.Store{DB: db}, manifest, index)
 }
 
 // New wires the application around db and creates the first administrator

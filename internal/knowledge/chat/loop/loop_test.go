@@ -440,6 +440,15 @@ func TestTwins(t *testing.T) {
 	}
 }
 
+func TestUsersAt(t *testing.T) {
+	g, req := seed(t, "", files, `INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name) VALUES
+		(1, 'src/handler.go', 3, 5, 'handler', 'Handler'), (1, 'src/tree.go', 29, 0, 'handler', ''), (1, 'src/mux.go', 3, 23, 'other.handler', '')`)
+	out, grew := start(g, req).run(t.Context(), ai.ToolCall{Name: "users_at", Arguments: `{"name":"Handler","path":"src/handler.go","line":3}`}, func(string, any) {})
+	if !grew || !strings.Contains(out, "src/tree.go:29\n   \treturn nil") || strings.Contains(out, "src/mux.go") {
+		t.Fatalf("SCIP evidence: %s, grew=%t", out, grew)
+	}
+}
+
 // TestFollow: the loop follows the message types the code found names, the
 // first search's too, each once a gathering and three steps from a call: from
 // Worker.cs (OrderPaid) to OrderPaid's users, then OrderShipped's, then

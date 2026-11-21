@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"deepcode/cmd/deepcode/config"
+	"deepcode/internal/app"
 	"deepcode/internal/platform/storage"
 )
 
@@ -32,7 +34,7 @@ See README.md.`,
 		PersistentPreRun: func(cmd *cobra.Command, _ []string) { cmd.SilenceUsage = true },
 		SilenceErrors:    true,
 	}
-	root.AddCommand(serveCmd(), backupCmd(), passwdCmd())
+	root.AddCommand(serveCmd(), backupCmd(), passwdCmd(), importSCIPCmd())
 	if err := root.Execute(); err != nil {
 		log.Fatal(err)
 	}
@@ -59,4 +61,38 @@ func openData(dir string) (*sql.DB, error) {
 		return nil, err
 	}
 	return storage.Open(context.Background(), path)
+}
+
+func importSCIPCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "import-scip <manifest.json> <index.scip>",
+		Short: "Import a trusted Go SCIP artifact into an already indexed snapshot",
+		Args:  cobra.ExactArgs(2),
+	}
+	data := dataFlag(cmd)
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		manifest, err := os.Open(args[0])
+		if err != nil {
+			return err
+		}
+		defer manifest.Close()
+		index, err := os.Open(args[1])
+		if err != nil {
+			return err
+		}
+		defer index.Close()
+
+		db, err := openData(*data)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		count, err := app.ImportSCIP(cmd.Context(), db, manifest, index)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Imported %d Go SCIP occurrences.\n", count)
+		return nil
+	}
+	return cmd
 }

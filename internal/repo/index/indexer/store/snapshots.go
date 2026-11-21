@@ -104,7 +104,7 @@ func (s *Store) MarkPruned(ctx context.Context, id int64) error {
 // cascade); source files go last, which is how Stale tells a snapshot that
 // still holds data.
 func (s *Store) DropRows(ctx context.Context, id int64) error {
-	for _, table := range []string{"chunks", "symbols", "source_files"} {
+	for _, table := range []string{"scip_occurrences", "chunks", "symbols", "source_files"} {
 		if err := s.deleteInBatches(ctx, `DELETE FROM `+table+` WHERE id IN (SELECT id FROM `+table+` WHERE snapshot_id = ? LIMIT 1000)`, id); err != nil {
 			return err
 		}

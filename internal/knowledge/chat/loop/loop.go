@@ -144,7 +144,14 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 		log.Printf("chat: no message types to follow: %v", err)
 	}
 	first.Dynamic += s.follow(ctx, req.First.Hits, follows)
-	ex := g.Model.Exchange(first, tools)
+	available := tools
+	if indexed, err := g.Retriever.Store.HasSCIP(ctx, req.Snapshot.ID); indexed {
+		available = append(slices.Clone(tools), usersAtTool)
+		first.Static += "\n- For a Go identifier with a known declaration path and line, prefer users_at to users."
+	} else if err != nil && ctx.Err() == nil {
+		log.Printf("chat: SCIP references unavailable: %v", err)
+	}
+	ex := g.Model.Exchange(first, available)
 	defer ex.Close()
 	told := slices.ContainsFunc(s.res.Refused, asked) // the model was told of a refusal
 	for stalls := 0; s.res.Stop == ""; {
