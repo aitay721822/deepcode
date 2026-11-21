@@ -62,13 +62,17 @@ exec /usr/local/bin/scip-go index --quiet --skip-tests --skip-implementations --
 		extensions: map[string]string{".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "tsx", ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript"},
 		encoding:   scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart, utf16: true, anchors: true, deepest: true, anchorSuffix: scip.Descriptor_Namespace,
 		roots: nodeProjects, identifier: func(s string) bool { return identifier(s, true) },
-		emptyDocuments: true, parentPaths: true,
+		emptyDocuments: true, parentPaths: true, allowEmpty: true,
 		script: `if [ "$2" = infer ]; then
   printf '%s' '{"compilerOptions":{"allowJs":true,"jsx":"preserve"},"include":["/src/**/*"],"exclude":["/src/**/node_modules/**","/src/**/vendor/**"]}' > /tmp/tsconfig.json
   scip-typescript index /tmp/tsconfig.json --infer-tsconfig --no-progress-bar --output /tmp/index.scip >&2
 else
   config=tsconfig.json
   [ -f "$config" ] || config=jsconfig.json
+  node -e 'const ts = require("/usr/local/lib/node_modules/@sourcegraph/scip-typescript/node_modules/typescript"); const path = require("path"); const file = path.resolve(process.argv[1]); const source = ts.readConfigFile(file, ts.sys.readFile); if (source.error) { console.error(source.error.messageText); process.exit(1); } const parsed = ts.parseJsonConfigFileContent(source.config, ts.sys, path.dirname(file)); const errors = parsed.errors.filter(e => e.code !== 18002 && e.code !== 18003); if (errors.length) { console.error(errors.map(e => e.messageText)); process.exit(1); } process.exit(parsed.fileNames.length ? 0 : 10);' "$config"
+  status=$?
+  [ "$status" -ne 10 ] || exit 0
+  [ "$status" -eq 0 ] || exit "$status"
   scip-typescript index "$config" --no-progress-bar --output /tmp/index.scip >&2
 fi || exit $?
 cat /tmp/index.scip`,

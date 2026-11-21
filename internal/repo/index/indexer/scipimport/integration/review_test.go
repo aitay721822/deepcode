@@ -114,3 +114,24 @@ func TestAutomaticSCIPReviewStubs(t *testing.T) {
 		t.Fatalf("stub rows: %d %v", n, err)
 	}
 }
+
+func TestAutomaticSCIPReviewEmptySolutions(t *testing.T) {
+	image := os.Getenv("DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE")
+	if image == "" {
+		t.Skip("TypeScript image required")
+	}
+	for _, tc := range []struct {
+		name, config string
+		covered      bool
+	}{
+		{"no references", `{"files":[]}`, true},
+		{"empty references", `{"files":[],"references":[]}`, true},
+		{"referenced project", `{"files":[],"references":[{"path":"./lib"}]}`, true},
+		{"invalid option", `{"files":[],"compilerOptions":{"target":"not-a-target"}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, _, _, snap := reviewFixture(t, map[string]string{"tsconfig.json": tc.config, "lib/tsconfig.json": `{"files":["alpha.ts"]}`, "lib/alpha.ts": "export function resolve() {}\nresolve();\n"}, scipimport.Images{TypeScript: image})
+			checkLanguageUsers(t, db, snap, "resolve", "lib/alpha.ts", 1, []string{"lib/alpha.ts:2"}, tc.covered)
+		})
+	}
+}
