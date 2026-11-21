@@ -47,9 +47,7 @@ export function WikiArticle({
     if (target && (scrolled.current?.content !== page.content || scrolled.current.hash !== hash)) {
       const scroll = () => {
         if (cancelled || location.hash !== hash) return
-        ref.current?.querySelectorAll<HTMLElement>('.markdown h2, .markdown h3').forEach((heading) => {
-          if (heading.id === target.id) heading.scrollIntoView({ block: 'start' })
-        })
+        document.getElementById(target.id)?.scrollIntoView({ block: 'start' })
         scrolled.current = { content: page.content, hash }
       }
       requestAnimationFrame(() => {
