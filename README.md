@@ -163,6 +163,8 @@ DEEPCODE_SCIP_CSHARP_IMAGE=deepcode-scip-dotnet:0.2.14 deepcode serve
 
 JS／TS 以 Git tree 的 `tsconfig.json` 或 `jsconfig.json` 所在目錄為專案（排除 node_modules、vendor、點與底線開頭目錄），同一檔案以最深專案的結果為準。沒有設定檔時以 repo 根目錄與 `--infer-tsconfig` 索引；因工具會寫入設定檔，設定產生於容器 `/tmp`，涵蓋唯讀來源的 JS／TS／TSX。Python 在根目錄索引，使用空環境清單跳過 pip。這兩種索引器不執行 npm scripts 或 Python 專案程式；離線缺少的第三方依賴可能無法解析。
 
+JS／TS 專案若編譯自己 `tsconfig.json`／`jsconfig.json` 所在目錄以外的檔案，該次索引的全部 JS／TS 結果會捨棄，僅保留 Tree-sitter；不影響其他語言。
+
 Rust 以最外層 `Cargo.toml` 為專案（排除 target、vendor、點與底線開頭目錄）。必須提交有效的 `Cargo.lock`；先以 `cargo metadata --offline --locked` 驗證所有套件的 source 都是 null，只接受無外部依賴或 path-only workspace，不接受 registry／Git 依賴。為避免設定指定可執行程式或切換專案載入方式，含 `.cargo/config`、`.cargo/config.toml` 或 `rust-project.json` 的 repo 會停用 Rust SCIP。固定工具鏈、覆寫 build scripts 為 `true`、停用 proc macros，並以 null sysroot 避免標準函式庫與巨集伺服器載入；不安裝 rust-src，也不執行 repo 的 build.rs 或巨集。因此 std、外部依賴與巨集產生的符號可能無法解析。Cargo HOME、target、設定與輸出皆在容器 `/tmp`，不寫入 `/src`。無文件的 JS／TS solution 專案會略過，仍保留其子專案結果。
 
 Java 在 repo 根目錄以直接 `javac -proc:none` 編譯 JDK-only 的 `.java` 來源，再由 scip-javac 產生索引。不執行 Maven、Gradle、annotation processors 或 repo 程式；排除點與底線開頭、vendor、node_modules、build、target 目錄。類別檔、shards 與輸出都寫在 `/tmp`。需要外部依賴或產生來源的專案會編譯失敗，只捨棄 Java SCIP，保留 Tree-sitter 與其他語言結果。

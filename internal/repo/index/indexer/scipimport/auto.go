@@ -3,7 +3,6 @@ package scipimport
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -107,9 +106,7 @@ func generateLanguage(ctx context.Context, s *store.Store, snapshot int64, tree 
 			return nil, fmt.Errorf("SCIP project %q returned no index", p.root)
 		}
 		documents := map[string]bool{}
-		projectSpec := spec
-		projectSpec.rejectParentDocuments = spec.skipParentDocuments && !namedNodeProject(src, p.root)
-		projectRows, err := readLanguageIndex(ctx, s, snapshot, p.root, files, raw, nil, projectSpec, documents)
+		projectRows, err := readLanguageIndex(ctx, s, snapshot, p.root, files, raw, nil, spec, documents)
 		if err != nil {
 			return nil, fmt.Errorf("SCIP project %q: %w", p.root, err)
 		}
@@ -133,13 +130,6 @@ func generateLanguage(ctx context.Context, s *store.Store, snapshot int64, tree 
 		}
 	}
 	return rows, nil
-}
-
-func namedNodeProject(src, root string) bool {
-	raw, err := os.ReadFile(filepath.Join(src, filepath.FromSlash(root), "package.json"))
-	var pkg map[string]json.RawMessage
-	var name string
-	return err == nil && json.Unmarshal(raw, &pkg) == nil && json.Unmarshal(pkg["name"], &name) == nil && strings.TrimSpace(name) != ""
 }
 
 func boolDepth(root string) int {
