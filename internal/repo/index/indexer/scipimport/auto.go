@@ -183,9 +183,8 @@ func runSCIP(ctx context.Context, docker, image, src, module, sha, name string) 
 		"--env", "GOENV=off", "--env", "GOWORK=off", "--env", "GOPACKAGESDRIVER=off", "--env", "GOTOOLCHAIN=local", "--env", "GOTELEMETRY=off",
 		"--env", "GOFLAGS=-buildvcs=false", "--env", "GOPROXY=off", "--env", "GOSUMDB=off", "--env", "CGO_ENABLED=0",
 		"--workdir", path.Join("/src", module), "--entrypoint", "/bin/sh", image, "-c",
-		`packages=$(go list ./...) || exit $?
+		`packages=$(go list -export ./...) || exit $?
 [ -n "$packages" ] || exit 0
-go list -deps ./... >/dev/null || exit $?
 exec /usr/local/bin/scip-go index --quiet --skip-tests --skip-implementations --module-version="$1" --output=- ./...`,
 		"index", sha)
 	cmd.WaitDelay = 2 * time.Second

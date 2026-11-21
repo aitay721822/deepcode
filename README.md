@@ -150,7 +150,7 @@ DEEPCODE_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 deepcode serve
 
 也可在 `deepcode.yaml` 設定 `scip_go_image: deepcode-scip-go:0.2.10`。預設留空，維持原本的索引流程。需要 deepcode 服務帳號能使用本機 Docker 的 Linux 容器；既有快照用「重建索引」補上，不必切到新 commit。
 
-索引容器使用唯讀的 Git 檔案、停用網路、CGO、測試與 Go workspace，不會自動拉取映像或下載依賴。依賴須已隨 repo vendoring、是 repo 內的本機模組，或由管理者預先放入可信映像的 `/opt/go-mod` Go 模組快取；不要在 deepcode 的主機上為不可信 repo 安裝依賴。上限為每份快照 16 個模組、20,000 個檔案、128 MiB 與兩分鐘（另有容器資源限制）。任一模組失敗或超限時，不寫入這次產生的 SCIP 資料，快照仍以原本的索引發布，原因可在工作日誌查看。
+索引容器使用唯讀的 Git 檔案、停用網路、CGO、測試與 Go workspace，不會自動拉取映像或下載依賴。依賴須已隨 repo vendoring、是 repo 內的本機模組，或由管理者預先放入可信映像的 `/opt/go-mod` Go 模組快取；不要在 deepcode 的主機上為不可信 repo 安裝依賴。上限為每份快照 16 個模組、20,000 個檔案、128 MiB 與兩分鐘（另有容器資源限制）。沒有可建置套件的模組會略過；若有模組無法編譯、索引失敗或超限，工作日誌會記錄失敗，快照仍以原本的索引發布。
 
 ### 從 CI 手動匯入（備用）
 

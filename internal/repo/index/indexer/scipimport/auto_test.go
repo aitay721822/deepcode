@@ -133,6 +133,28 @@ func TestAutomaticSCIP(t *testing.T) {
 				}
 				assertSnapshot(t, db, fallback, next, false)
 				assertSnapshot(t, db, snapshot, sha, true)
+
+				// go list without -export accepts this package, but scip-go
+				// can silently index a partial program.
+				for name, content := range map[string]string{
+					"services/api/go.mod": "module example.com/api\n\ngo 1.23\n",
+					"services/api/api.go": "package api\n\nfunc Handle() {}\nfunc Call() { Handle(1) }\n",
+				} {
+					if err := os.WriteFile(filepath.Join(remote, filepath.FromSlash(name)), []byte(content), 0644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				run("add", "--", "services/api")
+				run("commit", "-qm", "add an ill-typed call")
+				broken := run("rev-parse", "HEAD")
+				if err := ix.Run(ctx, 1, broken, jobs.Progress{}); err != nil {
+					t.Fatal(err)
+				}
+				withoutSCIP, err := ix.Store.Published(ctx, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertSnapshot(t, db, withoutSCIP, broken, false)
 			}
 		})
 	}
