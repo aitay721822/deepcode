@@ -237,7 +237,6 @@ func TestSCIPRejectsUnknownMetadata(t *testing.T) {
 		{"unknown tool", "other", "TypeScript", ".ts", 1, scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart, "requires UTF-8 indexes"},
 		{"unknown label", "scip-typescript", "typescript", ".ts", 1, scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart, "unsupported"},
 		{"wrong label for extension", "scip-typescript", "JavaScript", ".ts", 1, scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart, "unsupported"},
-		{"unknown extension", "scip-typescript", "TypeScript", ".vue", 1, scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart, "document path"},
 		{"unspecified TS offsets", "scip-typescript", "TypeScript", ".ts", 1, scip.PositionEncoding_UnspecifiedPositionEncoding, "unsupported"},
 		{"UTF-8 TS offsets", "scip-typescript", "TypeScript", ".ts", 1, scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart, "unsupported"},
 		{"Python label not default", "scip-python", "python", ".py", 2, scip.PositionEncoding_UnspecifiedPositionEncoding, "unsupported"},
@@ -259,6 +258,20 @@ func TestSCIPRejectsUnknownMetadata(t *testing.T) {
 	}
 	if _, err := readLanguageIndex(t.Context(), nil, 1, "", nil, []byte{255}, nil, specs[1], nil); err == nil {
 		t.Fatal("malformed index accepted")
+	}
+}
+
+func TestSCIPUnsupportedDocuments(t *testing.T) {
+	for _, name := range []string{"source.vue", "source.pyi", "../outside.ts", "unlisted.ts", "/absolute.ts", ""} {
+		idx := &scip.Index{Metadata: &scip.Metadata{ToolInfo: &scip.ToolInfo{Name: specs[1].tool}, TextDocumentEncoding: scip.TextEncoding_UTF8}, Documents: []*scip.Document{{RelativePath: name}}}
+		raw, err := proto.Marshal(idx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := readLanguageIndex(t.Context(), nil, 1, "", nil, raw, nil, specs[1], nil)
+		if wantError := strings.HasSuffix(name, ".ts"); (err != nil) != wantError || len(rows) != 0 {
+			t.Fatalf("%q: %v %v", name, rows, err)
+		}
 	}
 }
 

@@ -119,18 +119,21 @@ func readLanguageIndex(ctx context.Context, s *store.Store, snapshot int64, modu
 	symbols := make(map[string]bool)
 	for _, doc := range idx.Documents {
 		rel := doc.GetRelativePath()
-		name, valid := documentPath(moduleRoot, rel, spec.parentPaths)
 		lang, known := spec.extensions[path.Ext(rel)]
-		if !valid || !known || paths[name] || !oid(files[name]) {
+		occurrences += len(doc.Occurrences)
+		if occurrences > maxOccurrences {
+			return nil, fmt.Errorf("SCIP index exceeds %d occurrences", maxOccurrences)
+		}
+		if !known {
+			continue
+		}
+		name, valid := documentPath(moduleRoot, rel, spec.parentPaths)
+		if !valid || paths[name] || !oid(files[name]) {
 			return nil, fmt.Errorf("invalid, duplicate, or unlisted SCIP document path %q", rel)
 		}
 		paths[name] = true
 		if documents != nil {
 			documents[name] = true
-		}
-		occurrences += len(doc.Occurrences)
-		if occurrences > maxOccurrences {
-			return nil, fmt.Errorf("SCIP index exceeds %d occurrences", maxOccurrences)
 		}
 		label, known := spec.labels[doc.GetLanguage()]
 		if !known || label != lang || doc.GetPositionEncoding() != spec.encoding {

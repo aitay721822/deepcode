@@ -98,3 +98,19 @@ func TestAutomaticSCIPReviewSiblings(t *testing.T) {
 		t.Fatalf("deepest owner: %d %v", n, err)
 	}
 }
+
+func TestAutomaticSCIPReviewStubs(t *testing.T) {
+	image := os.Getenv("DEEPCODE_TEST_SCIP_PYTHON_IMAGE")
+	if image == "" {
+		t.Skip("Python image required")
+	}
+	db, _, _, snap := reviewFixture(t, map[string]string{
+		"alpha.pyi": "def resolve() -> None: ...\n",
+		"caller.py": "from alpha import resolve\ndef caller(): resolve()\ncaller()\n",
+	}, scipimport.Images{Python: image})
+	checkLanguageUsers(t, db, snap, "caller", "caller.py", 2, []string{"caller.py:3"}, true)
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM scip_occurrences WHERE snapshot_id=? AND path='alpha.pyi'`, snap).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("stub rows: %d %v", n, err)
+	}
+}
