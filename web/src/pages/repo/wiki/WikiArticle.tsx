@@ -3,7 +3,7 @@ import { useLayoutEffect, useRef } from 'react'
 import { Mermaid } from '../../../components/source/diagram/Mermaid'
 import { Markdown } from '../../../components/source/Markdown'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
-import { headingId } from '../../../lib/url'
+import { decode, headingId } from '../../../lib/url'
 import type { Repo } from '../../../types/repo/repo'
 import type { WikiPage } from '../../../types/repo/wiki'
 import type { TocItem } from './Toc'
@@ -26,6 +26,8 @@ export function WikiArticle({
   onCite: (path: string, start?: number, end?: number) => void
 }) {
   const ref = useRef<HTMLElement>(null)
+  const scrolled = useRef<{ content: string; hash: string } | null>(null)
+  const hash = location.hash
   // Headings get their ids from the rendered text, so the outline always matches.
   useLayoutEffect(() => {
     const used = new Set<string>()
@@ -40,8 +42,26 @@ export function WikiArticle({
       h.tabIndex = -1 // a link to it moves focus there, so Tab goes on from the section
       return { id, text, level: h.tagName === 'H3' ? 3 : 2 }
     })
+    let cancelled = false
+    const target = items.find((item) => item.id === decode(hash.slice(1)))
+    if (target && (scrolled.current?.content !== page.content || scrolled.current.hash !== hash)) {
+      const scroll = () => {
+        if (cancelled || location.hash !== hash) return
+        ref.current?.querySelectorAll<HTMLElement>('.markdown h2, .markdown h3').forEach((heading) => {
+          if (heading.id === target.id) heading.scrollIntoView({ block: 'start' })
+        })
+        scrolled.current = { content: page.content, hash }
+      }
+      requestAnimationFrame(() => {
+        if (document.fonts) void document.fonts.ready.then(scroll)
+        else scroll()
+      })
+    }
     onToc(items)
-  }, [page.content, onToc])
+    return () => {
+      cancelled = true
+    }
+  }, [page.content, onToc, hash])
   // Its plan's files first, then any other file it cites (a section's shared sources).
   const files = [...new Set([...(page.files ?? []), ...page.citations.map((c) => c.path)])]
   return (
