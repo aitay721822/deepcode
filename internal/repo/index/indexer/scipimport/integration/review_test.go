@@ -155,3 +155,17 @@ func TestAutomaticSCIPReviewTopLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestAutomaticSCIPReviewKeywordMembers(t *testing.T) {
+	image := os.Getenv("DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE")
+	if image == "" {
+		t.Skip("TypeScript image required")
+	}
+	for _, ext := range []string{"ts", "js"} {
+		t.Run(ext, func(t *testing.T) {
+			name := "source." + ext
+			db, _, _, snap := reviewFixture(t, map[string]string{"tsconfig.json": `{"compilerOptions":{"allowJs":true},"include":["*"]}`, name: "class Store { delete() {} }\nnew Store().delete();\n"}, scipimport.Images{TypeScript: image})
+			checkLanguageUsers(t, db, snap, "delete", name, 1, []string{name + ":2"}, true)
+		})
+	}
+}

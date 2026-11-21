@@ -195,7 +195,7 @@ func TestSCIPAnchorsAndIdentifiers(t *testing.T) {
 	}{
 		{"resolve", true, true, true}, {"$resolve", false, true, false}, {"解決", true, true, true},
 		{"x́", false, true, true}, {"1x", false, false, false}, {"a-b", false, false, false}, {"", false, false, false},
-		{"class", true, false, false}, {"func", false, true, true},
+		{"class", true, true, false}, {"delete", true, true, true}, {"func", false, true, true},
 	} {
 		for i, want := range []bool{tc.goOK, tc.js, tc.py} {
 			if got := specs[i].identifier(tc.s); got != want {

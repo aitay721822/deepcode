@@ -250,10 +250,10 @@ func identifier(s string, js bool) bool {
 	if !identifierChars(s, js) {
 		return false
 	}
-	keywords := "False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield"
 	if js {
-		keywords = "await break case catch class const continue debugger default delete do else enum export extends false finally for function if implements import in instanceof interface let new null package private protected public return static super switch this throw true try typeof var void while with yield"
+		return true
 	}
+	keywords := "False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield"
 	return !slices.Contains(strings.Fields(keywords), s)
 }
 
