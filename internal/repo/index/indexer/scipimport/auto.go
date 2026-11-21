@@ -25,18 +25,15 @@ const (
 
 // Generate indexes the pinned commit, never a live checkout. The image is
 // configured by the administrator, not the repository being indexed.
-func Generate(ctx context.Context, s *store.Store, gitc *git.Client, dir, sha string, snapshot int64, image string) (int, error) {
+func Generate(ctx context.Context, s *store.Store, gitc *git.Client, dir, sha string, snapshot int64, images Images, logf func(string, ...any)) (int, error) {
 	tree, err := gitc.LsTree(ctx, dir, sha)
 	if err != nil {
 		return 0, err
 	}
-	files := goBlobs(tree)
-	modules := moduleRoots(tree)
-	if len(modules) == 0 || len(files) == 0 {
+	if !slices.ContainsFunc(specs, func(spec languageSpec) bool {
+		return spec.image(images) != "" && len(spec.blobs(tree)) > 0 && len(spec.roots(tree)) > 0
+	}) {
 		return 0, nil
-	}
-	if len(modules) > maxModules {
-		return 0, fmt.Errorf("SCIP checkout exceeds %d Go modules", maxModules)
 	}
 	docker, err := exec.LookPath("docker")
 	if err != nil {
@@ -52,32 +49,25 @@ func Generate(ctx context.Context, s *store.Store, gitc *git.Client, dir, sha st
 		return 0, err
 	}
 	var rows []store.SCIPOccurrence
-	definitions := make(map[string]string)
-	for i, module := range modules {
-		name := fmt.Sprintf("%s-%d", filepath.Base(scratch), i)
-		raw, err := runSCIP(ctx, docker, image, src, module, sha, name)
+	for i, spec := range specs {
+		image := spec.image(images)
+		if image == "" {
+			continue
+		}
+		languageCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		languageRows, err := generateLanguage(languageCtx, s, snapshot, tree, docker, image, src, sha, fmt.Sprintf("%s-%d", filepath.Base(scratch), i), spec)
+		cancel()
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
 		if err != nil {
-			return 0, fmt.Errorf("SCIP module %q: %w", module, err)
+			logf("%s SCIP unavailable; kept the base index: %v", spec.name, err)
+			continue
 		}
-		if len(raw) == 0 {
-			continue // The container found no packages for this build.
+		rows = append(rows, languageRows...)
+		if len(languageRows) > 0 {
+			logf("automatically indexed %d %s SCIP occurrences", len(languageRows), spec.name)
 		}
-		moduleRows, err := readIndex(ctx, s, snapshot, module, files, raw, nil)
-		if err != nil {
-			return 0, fmt.Errorf("SCIP module %q: %w", module, err)
-		}
-		if len(rows)+len(moduleRows) > maxOccurrences {
-			return 0, fmt.Errorf("SCIP checkout exceeds %d retained occurrences", maxOccurrences)
-		}
-		for _, row := range moduleRows {
-			if row.DefinitionName != "" {
-				if other, ok := definitions[row.Symbol]; ok && other != module {
-					return 0, fmt.Errorf("SCIP modules %q and %q define the same symbol", other, module)
-				}
-				definitions[row.Symbol] = module
-			}
-		}
-		rows = append(rows, moduleRows...)
 	}
 	if len(rows) == 0 {
 		return 0, nil
@@ -86,6 +76,67 @@ func Generate(ctx context.Context, s *store.Store, gitc *git.Client, dir, sha st
 		return 0, err
 	}
 	return len(rows), nil
+}
+
+func generateLanguage(ctx context.Context, s *store.Store, snapshot int64, tree []git.TreeEntry, docker, image, src, sha, prefix string, spec languageSpec) ([]store.SCIPOccurrence, error) {
+	files, projects := spec.blobs(tree), spec.roots(tree)
+	if len(files) == 0 || len(projects) == 0 {
+		return nil, nil
+	}
+	if len(projects) > maxModules {
+		return nil, fmt.Errorf("SCIP checkout exceeds %d %s projects", maxModules, spec.name)
+	}
+	if spec.deepest {
+		slices.SortStableFunc(projects, func(a, b project) int {
+			return strings.Count(b.root, "/") - strings.Count(a.root, "/") + boolDepth(b.root) - boolDepth(a.root)
+		})
+	}
+	var rows []store.SCIPOccurrence
+	owners := map[string]bool{}
+	definitions := map[string]string{}
+	for i, p := range projects {
+		raw, err := runContainer(ctx, docker, image, src, p, sha, fmt.Sprintf("%s-%d", prefix, i), spec)
+		if err != nil {
+			return nil, fmt.Errorf("SCIP project %q: %w", p.root, err)
+		}
+		if len(raw) == 0 {
+			if spec.allowEmpty {
+				continue
+			}
+			return nil, fmt.Errorf("SCIP project %q returned no index", p.root)
+		}
+		documents := map[string]bool{}
+		projectRows, err := readLanguageIndex(ctx, s, snapshot, p.root, files, raw, nil, spec, documents)
+		if err != nil {
+			return nil, fmt.Errorf("SCIP project %q: %w", p.root, err)
+		}
+		for _, row := range projectRows {
+			if spec.deepest && owners[row.Path] {
+				continue
+			}
+			if row.DefinitionName != "" {
+				if other, ok := definitions[row.Symbol]; ok && other != p.root {
+					return nil, fmt.Errorf("SCIP projects %q and %q define the same symbol", other, p.root)
+				}
+				definitions[row.Symbol] = p.root
+			}
+			rows = append(rows, row)
+			if len(rows) > maxOccurrences {
+				return nil, fmt.Errorf("SCIP exceeds %d retained occurrences", maxOccurrences)
+			}
+		}
+		for name := range documents {
+			owners[name] = true
+		}
+	}
+	return rows, nil
+}
+
+func boolDepth(root string) int {
+	if root != "" {
+		return 1
+	}
+	return 0
 }
 
 func moduleRoots(tree []git.TreeEntry) []string {
@@ -166,6 +217,10 @@ func materialize(ctx context.Context, gitc *git.Client, dir, dst string, tree []
 }
 
 func runSCIP(ctx context.Context, docker, image, src, module, sha, name string) ([]byte, error) {
+	return runContainer(ctx, docker, image, src, project{root: module}, sha, name, specs[0])
+}
+
+func runContainer(ctx context.Context, docker, image, src string, p project, sha, name string, spec languageSpec) ([]byte, error) {
 	if strings.HasPrefix(image, "-") || image == "" {
 		return nil, fmt.Errorf("invalid SCIP image name")
 	}
@@ -174,22 +229,26 @@ func runSCIP(ctx context.Context, docker, image, src, module, sha, name string) 
 	}
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	cmd := exec.CommandContext(runCtx, docker, "run", "--pull=never", "--rm", "--name", name,
+	args := []string{"run", "--pull=never", "--rm", "--name", name,
 		"--network=none", "--read-only", "--user", "65534:65534", "--cap-drop=ALL", "--security-opt=no-new-privileges",
 		"--memory=1g", "--memory-swap=1g", "--cpus=2", "--pids-limit=128", "--log-driver=none",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777",
-		"--mount", "type=bind,source="+src+",target=/src,readonly",
-		"--env", "HOME=/tmp", "--env", "GOCACHE=/tmp/go-cache", "--env", "GOMODCACHE=/opt/go-mod",
-		"--env", "GOENV=off", "--env", "GOWORK=off", "--env", "GOPACKAGESDRIVER=off", "--env", "GOTOOLCHAIN=local", "--env", "GOTELEMETRY=off",
-		"--env", "GOFLAGS=-buildvcs=false", "--env", "GOPROXY=off", "--env", "GOSUMDB=off", "--env", "CGO_ENABLED=0",
-		"--workdir", path.Join("/src", module), "--entrypoint", "/bin/sh", image, "-c",
-		`packages=$(go list -export ./...) || exit $?
-[ -n "$packages" ] || exit 0
-exec /usr/local/bin/scip-go index --quiet --skip-tests --skip-implementations --module-version="$1" --output=- ./...`,
-		"index", sha)
+		"--mount", "type=bind,source=" + src + ",target=/src,readonly",
+		"--env", "HOME=/tmp", "--env", "XDG_CACHE_HOME=/tmp/cache", "--env", "npm_config_cache=/tmp/npm-cache"}
+	for _, env := range spec.env {
+		args = append(args, "--env", env)
+	}
+	infer := ""
+	if p.infer {
+		infer = "infer"
+	}
+	args = append(args, "--workdir", path.Join("/src", p.root), "--entrypoint", "/bin/sh", image, "-c", spec.script, "index", sha, infer)
+	cmd := exec.CommandContext(runCtx, docker, args...)
 	cmd.WaitDelay = 2 * time.Second
 	out := indexOutput{stop: stop}
 	cmd.Stdout = &out
+	var stderr bytes.Buffer
+	cmd.Stderr = &limitedErrors{buf: &stderr}
 	if err := cmd.Run(); err != nil {
 		// Killing a Docker client does not necessarily stop its container.
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -201,9 +260,19 @@ exec /usr/local/bin/scip-go index --quiet --skip-tests --skip-implementations --
 		if out.over {
 			return nil, fmt.Errorf("SCIP output exceeds %d MiB", maxIndex>>20)
 		}
-		return nil, fmt.Errorf("scip-go container failed (verify the local image, Docker permissions and offline dependencies): %w", err)
+		return nil, fmt.Errorf("%s container failed (verify the local image, Docker permissions and offline dependencies): %w: %s", spec.tool, err, stderr.String())
 	}
 	return out.buf.Bytes(), nil
+}
+
+type limitedErrors struct{ buf *bytes.Buffer }
+
+func (w *limitedErrors) Write(p []byte) (int, error) {
+	n := len(p)
+	if left := 4096 - w.buf.Len(); left > 0 {
+		_, _ = w.buf.Write(p[:min(left, n)])
+	}
+	return n, nil
 }
 
 type indexOutput struct {

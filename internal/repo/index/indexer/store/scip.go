@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 type SCIPOccurrence struct {
@@ -21,7 +22,7 @@ func (s *Store) SCIPSnapshot(ctx context.Context, repository, commit string) (sn
 	return snapshot, repoID, err
 }
 
-func (s *Store) SCIPSource(ctx context.Context, snapshot int64, path, hash string) (content string, indexed bool, err error) {
+func (s *Store) SCIPSource(ctx context.Context, snapshot int64, path, hash string, languages ...string) (content string, indexed bool, err error) {
 	var blob, lang string
 	err = s.DB.QueryRowContext(ctx, `SELECT c.content, f.content_hash, f.language FROM source_files f
 		JOIN file_contents c ON c.hash = f.content_hash WHERE f.snapshot_id = ? AND f.path = ?`, snapshot, path).Scan(&content, &blob, &lang)
@@ -30,10 +31,17 @@ func (s *Store) SCIPSource(ctx context.Context, snapshot int64, path, hash strin
 		return "", false, nil
 	case err != nil:
 		return "", false, err
-	case blob != hash || lang != "go":
-		return "", false, fmt.Errorf("SCIP document %q does not match a Go blob in the snapshot", path)
+	case blob != hash || !slices.Contains(languages, lang):
+		return "", false, fmt.Errorf("SCIP document %q does not match a %s blob in the snapshot", path, languageNames(languages))
 	}
 	return content, true, nil
+}
+
+func languageNames(languages []string) string {
+	if len(languages) == 1 && languages[0] == "go" {
+		return "Go"
+	}
+	return fmt.Sprint(languages)
 }
 
 // ReplaceSCIP publishes the entire index or keeps the previous one.

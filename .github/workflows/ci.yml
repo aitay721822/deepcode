@@ -41,10 +41,11 @@ jobs:
       - run: go vet ./...
       - name: go test
         run: go test -count=1 -timeout 10m $(go list ./... | grep -v /test/eval)
-      - name: Automatic Go SCIP smoke test
+      - name: Automatic Go, TypeScript, JavaScript, TSX and Python SCIP smoke tests
         run: |
           docker build -f scripts/scip-go.Dockerfile -t deepcode-scip-go:0.2.10 .
-          DEEPCODE_TEST_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 go test -count=1 -v ./internal/repo/index/indexer/scipimport -run '^TestAutomaticSCIP$'
+          docker build -f scripts/scip-node.Dockerfile -t deepcode-scip-node:0.6.2-0.6.8 .
+          DEEPCODE_TEST_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE=deepcode-scip-node:0.6.2-0.6.8 DEEPCODE_TEST_SCIP_PYTHON_IMAGE=deepcode-scip-node:0.6.2-0.6.8 go test -count=1 -v ./internal/repo/index/indexer/scipimport/... -run '^TestAutomaticSCIP'
       - uses: actions/cache@v6
         with:
           path: ~/eval-git

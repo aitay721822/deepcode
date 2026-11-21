@@ -1,4 +1,4 @@
-// Package scipimport validates and imports Go SCIP artifacts from trusted builds.
+// Package scipimport validates isolated SCIP output and trusted Go artifacts.
 package scipimport
 
 import (
@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go/token"
 	"io"
 	"io/fs"
 	"path"
@@ -100,12 +99,16 @@ func Import(ctx context.Context, s *store.Store, gitc *git.Client, manifestFile,
 // readIndex uses the manifest's blob list for external artifacts and the
 // pinned Git tree directly for locally generated ones.
 func readIndex(ctx context.Context, s *store.Store, snapshot int64, moduleRoot string, files map[string]string, raw []byte, verifySkipped func(string) error) ([]store.SCIPOccurrence, error) {
+	return readLanguageIndex(ctx, s, snapshot, moduleRoot, files, raw, verifySkipped, specs[0], nil)
+}
+
+func readLanguageIndex(ctx context.Context, s *store.Store, snapshot int64, moduleRoot string, files map[string]string, raw []byte, verifySkipped func(string) error, spec languageSpec, documents map[string]bool) ([]store.SCIPOccurrence, error) {
 	var idx scip.Index
 	if err := (proto.UnmarshalOptions{DiscardUnknown: true, RecursionLimit: 32}).Unmarshal(raw, &idx); err != nil {
 		return nil, fmt.Errorf("decode SCIP index: %w", err)
 	}
-	if idx.GetMetadata().GetToolInfo().GetName() != "scip-go" || idx.GetMetadata().GetTextDocumentEncoding() != scip.TextEncoding_UTF8 {
-		return nil, errors.New("SCIP pilot accepts UTF-8 indexes from scip-go only")
+	if idx.GetMetadata().GetToolInfo().GetName() != spec.tool || idx.GetMetadata().GetTextDocumentEncoding() != scip.TextEncoding_UTF8 {
+		return nil, fmt.Errorf("SCIP requires UTF-8 indexes from %s", spec.tool)
 	}
 	if len(idx.Documents) == 0 || len(idx.Documents) > maxDocuments {
 		return nil, fmt.Errorf("SCIP index must contain 1–%d documents", maxDocuments)
@@ -117,18 +120,23 @@ func readIndex(ctx context.Context, s *store.Store, snapshot int64, moduleRoot s
 	for _, doc := range idx.Documents {
 		rel := doc.GetRelativePath()
 		name := path.Join(moduleRoot, rel)
-		if !validPath(rel) || !strings.HasSuffix(rel, ".go") || paths[name] || !oid(files[name]) {
+		lang, known := spec.extensions[path.Ext(rel)]
+		if !validPath(rel) || !known || paths[name] || !oid(files[name]) {
 			return nil, fmt.Errorf("invalid, duplicate, or unlisted SCIP document path %q", rel)
 		}
 		paths[name] = true
+		if documents != nil {
+			documents[name] = true
+		}
 		occurrences += len(doc.Occurrences)
 		if occurrences > maxOccurrences {
 			return nil, fmt.Errorf("SCIP index exceeds %d occurrences", maxOccurrences)
 		}
-		if doc.GetLanguage() != "go" || doc.GetPositionEncoding() != scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart {
-			return nil, fmt.Errorf("SCIP document %q must use Go and UTF-8 byte offsets", name)
+		label, known := spec.labels[doc.GetLanguage()]
+		if !known || label != lang || doc.GetPositionEncoding() != spec.encoding {
+			return nil, fmt.Errorf("SCIP document %q has an unsupported %s language or position encoding", name, spec.tool)
 		}
-		source, indexed, err := s.SCIPSource(ctx, snapshot, name, files[name])
+		source, indexed, err := s.SCIPSource(ctx, snapshot, name, files[name], spec.languages...)
 		if err != nil {
 			return nil, err
 		}
@@ -143,7 +151,7 @@ func readIndex(ctx context.Context, s *store.Store, snapshot int64, moduleRoot s
 		if doc.Text != "" && strings.ReplaceAll(doc.Text, "\r\n", "\n") != source {
 			return nil, fmt.Errorf("SCIP document %q text differs from the snapshot", name)
 		}
-		rows, err = appendDocument(rows, name, doc, strings.Split(source, "\n"), symbols)
+		rows, err = appendDocument(rows, name, doc, strings.Split(source, "\n"), symbols, spec)
 		if err != nil {
 			return nil, err
 		}
@@ -161,12 +169,21 @@ func goBlobs(tree []git.TreeEntry) map[string]string {
 	return blobs
 }
 
-func appendDocument(rows []store.SCIPOccurrence, name string, doc *scip.Document, lines []string, symbols map[string]bool) ([]store.SCIPOccurrence, error) {
+func appendDocument(rows []store.SCIPOccurrence, name string, doc *scip.Document, lines []string, symbols map[string]bool, spec languageSpec) ([]store.SCIPOccurrence, error) {
 	for _, occ := range doc.Occurrences {
 		if occ.GetSymbol() == "" || !scip.IsGlobalSymbol(occ.Symbol) {
 			continue
 		}
 		r, ok := occ.SourceRange()
+		if ok && moduleAnchor(occ, r, spec) {
+			continue
+		}
+		if ok && spec.utf16 {
+			r.Start, ok = bytePosition(lines, r.Start)
+			if ok {
+				r.End, ok = bytePosition(lines, r.End)
+			}
+		}
 		if !ok || !validPosition(lines, r.Start) || !validPosition(lines, r.End) ||
 			r.End.Line < r.Start.Line || r.End.Line == r.Start.Line && r.End.Character <= r.Start.Character {
 			return nil, fmt.Errorf("invalid SCIP source range in %q", name)
@@ -186,13 +203,62 @@ func appendDocument(rows []store.SCIPOccurrence, name string, doc *scip.Document
 				continue // The pilot selects declarations by the identifier token.
 			}
 			row.DefinitionName = lines[r.Start.Line][r.Start.Character:r.End.Character]
-			if !token.IsIdentifier(row.DefinitionName) {
+			if !spec.identifier(row.DefinitionName) {
 				continue
 			}
 		}
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+func moduleAnchor(occ *scip.Occurrence, r scip.Range, spec languageSpec) bool {
+	if !spec.anchors || occ.SymbolRoles != int32(scip.SymbolRole_Definition) || r.Start.Line != 0 || r.Start.Character != 0 || r.End.Line != 0 || r.End.Character != 0 {
+		return false
+	}
+	if len(occ.Symbol) > maxSymbol {
+		return false
+	}
+	symbol, err := scip.ParseSymbol(occ.Symbol)
+	if err != nil || len(symbol.Descriptors) == 0 {
+		return false
+	}
+	last := symbol.Descriptors[len(symbol.Descriptors)-1]
+	if last.Suffix != spec.anchorSuffix || spec.anchorName != "" && last.Name != spec.anchorName {
+		return false
+	}
+	for _, d := range symbol.Descriptors[:len(symbol.Descriptors)-1] {
+		if d.Suffix != scip.Descriptor_Namespace {
+			return false
+		}
+	}
+	return true
+}
+
+func bytePosition(lines []string, p scip.Position) (scip.Position, bool) {
+	if p.Line < 0 || int(p.Line) >= len(lines) || p.Character < 0 {
+		return p, false
+	}
+	line := lines[p.Line]
+	var units int32
+	for offset, r := range line {
+		if units == p.Character {
+			p.Character = int32(offset)
+			return p, true
+		}
+		units++
+		if r > 0xffff {
+			units++
+		}
+		if units > p.Character {
+			return p, false
+		}
+	}
+	if units == p.Character {
+		p.Character = int32(len(line))
+		return p, true
+	}
+	return p, false
 }
 
 func validPath(p string) bool {

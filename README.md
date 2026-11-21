@@ -139,22 +139,27 @@
 | dotnet/eShop | 0.800／0.688 | 0.833／0.748 |
 | tokio-rs/axum | 0.867／0.641 | 0.933／0.804 |
 
-## Go 語意引用（SCIP 試點）
+## 語意引用（SCIP）
 
-SCIP 是可選的精確引用索引，不取代 Tree-sitter、呼叫圖或 Wiki，也不需要 LSP。啟用後，deepcode 在一般索引流程中對同一個 Git commit 自動執行 `scip-go`，不用每次手動匯入。
+SCIP 是可選的精確引用索引，不取代 Tree-sitter、呼叫圖或 Wiki，也不需要 LSP。啟用後，deepcode 對同一個 Git commit 以各自隔離的容器執行 Go、JavaScript／TypeScript／TSX、Python 索引，不用每次手動匯入。Java、C# 仍只使用 Tree-sitter，不執行 Gradle、Maven 或 MSBuild 專案程式。
 
 ```sh
 docker build -f scripts/scip-go.Dockerfile -t deepcode-scip-go:0.2.10 .
-DEEPCODE_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 deepcode serve
+docker build -f scripts/scip-node.Dockerfile -t deepcode-scip-node:0.6.2-0.6.8 .
+DEEPCODE_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 \
+DEEPCODE_SCIP_TYPESCRIPT_IMAGE=deepcode-scip-node:0.6.2-0.6.8 \
+DEEPCODE_SCIP_PYTHON_IMAGE=deepcode-scip-node:0.6.2-0.6.8 deepcode serve
 ```
 
-也可在 `deepcode.yaml` 設定 `scip_go_image: deepcode-scip-go:0.2.10`。預設留空，維持原本的索引流程。需要 deepcode 服務帳號能使用本機 Docker 的 Linux 容器；既有快照用「重建索引」補上，不必切到新 commit。
+也可在 `deepcode.yaml` 設定 `scip_go_image: deepcode-scip-go:0.2.10`、`scip_typescript_image: deepcode-scip-node:0.6.2-0.6.8`、`scip_python_image: deepcode-scip-node:0.6.2-0.6.8`。三者獨立設定，預設留空（停用）。Node 映像固定使用 scip-typescript 0.6.2 與 scip-python 0.6.8。需要 deepcode 服務帳號能使用本機 Docker 的 Linux 容器；既有快照用「重建索引」補上，不必切到新 commit。
 
-索引容器使用唯讀的 Git 檔案、停用網路、CGO、測試與 Go workspace，不會自動拉取映像或下載依賴。依賴須已隨 repo vendoring、是 repo 內的本機模組，或由管理者預先放入可信映像的 `/opt/go-mod` Go 模組快取；不要在 deepcode 的主機上為不可信 repo 安裝依賴。上限為每份快照 16 個模組、20,000 個檔案、128 MiB 與兩分鐘（另有容器資源限制）。沒有可建置套件的模組會略過；若有模組無法編譯、索引失敗或超限，工作日誌會記錄失敗，快照仍以原本的索引發布。
+索引容器使用唯讀的 Git 檔案、停用網路、非特權使用者與 noexec 暫存區，不會自動拉取映像、下載或安裝依賴。Go 另停用 CGO、測試與 workspace；依賴須已 vendoring、是 repo 內的本機模組，或由管理者預先放入可信映像的 `/opt/go-mod` 快取。不要在 deepcode 主機上為不可信 repo 安裝依賴。共用 checkout 上限為 20,000 檔案、128 MiB；每種索引器上限為 16 個專案、兩分鐘，另有容器資源與輸出限制。任一專案失敗會捨棄該索引器的全部結果並記錄原因，不影響其他語言或 Tree-sitter；最後一次發布所有成功語言的 SCIP 結果。
+
+JS／TS 以 Git tree 的 `tsconfig.json` 或 `jsconfig.json` 所在目錄為專案（排除 node_modules、vendor、點與底線開頭目錄），同一檔案以最深專案的結果為準。沒有設定檔時以 repo 根目錄與 `--infer-tsconfig` 索引；因工具會寫入設定檔，設定產生於容器 `/tmp`，涵蓋唯讀來源的 JS／TS／TSX。Python 在根目錄索引，使用空環境清單跳過 pip。這兩種索引器不執行 npm scripts 或 Python 專案程式；離線缺少的第三方依賴可能無法解析。
 
 ### 從 CI 手動匯入（備用）
 
-若不使用本機 Docker，或要採用不同的建置組態，仍可從可信 CI 匯入：
+手動 `import-scip` 仍只接受 Go。若不使用本機 Docker，或要採用不同的 Go 建置組態，仍可從可信 CI 匯入：
 
 1. 在可信 CI 用乾淨的 checkout 產生索引。使用與 deepcode 快照相同的完整 commit，把依賴和建置組態固定在 CI；只匯入這個 job 產生的索引和清單。
 2. 在 deepcode 伺服器上，等對應快照索引完成，再匯入這兩個檔案。repo ID 是 deepcode 網址 `/repos/<id>` 中的 ID。

@@ -37,11 +37,13 @@ type Config struct {
 	CacheMB    int
 	SyncEvery  time.Duration // how often the remotes are checked for new commits; 0 = never
 
-	MaxRepoMB   int // the size the git server reports, checked on import, and what one download may write
-	MaxFiles    int
-	MaxFileKB   int
-	MaxIndexMB  int
-	SCIPGoImage string // local image for isolated Go SCIP indexing; "" disables it
+	MaxRepoMB           int // the size the git server reports, checked on import, and what one download may write
+	MaxFiles            int
+	MaxFileKB           int
+	MaxIndexMB          int
+	SCIPGoImage         string // local image for isolated Go SCIP indexing; "" disables it
+	SCIPTypeScriptImage string
+	SCIPPythonImage     string
 
 	WikiLanguage string
 	WikiParallel int    // pages planned or written at a time
