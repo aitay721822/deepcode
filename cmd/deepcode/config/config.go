@@ -72,6 +72,7 @@ var defaults = map[string]any{
 	"scip_python_image":     "",
 	"scip_rust_image":       "",
 	"scip_java_image":       "",
+	"scip_csharp_image":     "",
 
 	"wiki_language":   "Traditional Chinese (Taiwan)",
 	"wiki_parallel":   1,  // pages planned or written at a time
@@ -188,6 +189,7 @@ func Load() (cfg app.Config, addr string, err error) {
 		SCIPPythonImage:     p.str("scip_python_image"),
 		SCIPRustImage:       p.str("scip_rust_image"),
 		SCIPJavaImage:       p.str("scip_java_image"),
+		SCIPCSharpImage:     p.str("scip_csharp_image"),
 
 		WikiLanguage: p.str("wiki_language"),
 		WikiParallel: p.whole("wiki_parallel"),

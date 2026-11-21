@@ -38,6 +38,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.SCIPJavaImage != "" {
 		t.Fatal(cfg.SCIPJavaImage)
 	}
+	if cfg.SCIPCSharpImage != "" {
+		t.Fatal(cfg.SCIPCSharpImage)
+	}
 	if addr != "127.0.0.1:8080" || cfg.DataDir != "data" || cfg.ChatURL != "https://api.openai.com/v1" ||
 		cfg.EmbedURL != cfg.ChatURL || cfg.EmbedKey != "k" || cfg.ChatModel != "" || cfg.ReasoningEffort != "" ||
 		cfg.Workers != 2 || cfg.LLMTimeout != 5*time.Minute || cfg.JobTimeout != 2*time.Hour || cfg.SyncEvery != 0 ||
@@ -95,6 +98,7 @@ scip_typescript_image: deepcode-scip-node:ts-file
 scip_python_image: deepcode-scip-node:py-file
 scip_rust_image: deepcode-scip-rust:rust-file
 scip_java_image: deepcode-scip-java:java-file
+scip_csharp_image: deepcode-scip-dotnet:csharp-file
 `)
 	t.Setenv("DEEPCODE_CHAT_MODEL", "")
 	cfg, addr, err := Load()
@@ -107,6 +111,9 @@ scip_java_image: deepcode-scip-java:java-file
 	if cfg.SCIPJavaImage != "deepcode-scip-java:java-file" {
 		t.Fatal(cfg.SCIPJavaImage)
 	}
+	if cfg.SCIPCSharpImage != "deepcode-scip-dotnet:csharp-file" {
+		t.Fatal(cfg.SCIPCSharpImage)
+	}
 	t.Setenv("DEEPCODE_WORKERS", "8")
 	t.Setenv("DEEPCODE_CHAT_CONTEXT", "524288")
 	t.Setenv("DEEPCODE_COMPACT_RATIO", "1")
@@ -115,12 +122,16 @@ scip_java_image: deepcode-scip-java:java-file
 	t.Setenv("DEEPCODE_SCIP_PYTHON_IMAGE", "deepcode-scip-node:py-env")
 	t.Setenv("DEEPCODE_SCIP_RUST_IMAGE", "deepcode-scip-rust:rust-env")
 	t.Setenv("DEEPCODE_SCIP_JAVA_IMAGE", "deepcode-scip-java:java-env")
+	t.Setenv("DEEPCODE_SCIP_CSHARP_IMAGE", "deepcode-scip-dotnet:csharp-env")
 	cfg, _, err = Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.SCIPJavaImage != "deepcode-scip-java:java-env" {
 		t.Fatal(cfg.SCIPJavaImage)
+	}
+	if cfg.SCIPCSharpImage != "deepcode-scip-dotnet:csharp-env" {
+		t.Fatal(cfg.SCIPCSharpImage)
 	}
 	if cfg.ChatModel != "file-model" || cfg.ChatAPI != "responses" || cfg.ChatSchema != "prompt" || cfg.EmbedURL != "http://embed:9000/v1" || cfg.ReasoningEffort != "none" ||
 		cfg.Workers != 8 || cfg.LLMTimeout != 90*time.Second || cfg.SyncEvery != 0 || cfg.Temperature == nil || *cfg.Temperature != 0.2 ||

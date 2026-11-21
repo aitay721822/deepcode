@@ -41,13 +41,14 @@ jobs:
       - run: go vet ./...
       - name: go test
         run: go test -count=1 -timeout 10m $(go list ./... | grep -v /test/eval)
-      - name: Automatic Go, TypeScript, JavaScript, TSX, Python, Rust and Java SCIP smoke tests
+      - name: Automatic Go, TypeScript, JavaScript, TSX, Python, Rust, Java and C# SCIP smoke tests
         run: |
           docker build -f scripts/scip-go.Dockerfile -t deepcode-scip-go:0.2.10 .
           docker build -f scripts/scip-node.Dockerfile -t deepcode-scip-node:0.6.2-0.6.8 .
-          docker build -f scripts/scip-rust.Dockerfile -t deepcode-scip-rust:2026-11-16 .
+          docker build -f scripts/scip/scip-rust.Dockerfile -t deepcode-scip-rust:2026-11-16 .
           docker build -f scripts/scip-java.Dockerfile -t deepcode-scip-java:0.14.2 .
-          DEEPCODE_TEST_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE=deepcode-scip-node:0.6.2-0.6.8 DEEPCODE_TEST_SCIP_PYTHON_IMAGE=deepcode-scip-node:0.6.2-0.6.8 DEEPCODE_TEST_SCIP_RUST_IMAGE=deepcode-scip-rust:2026-11-16 DEEPCODE_TEST_SCIP_JAVA_IMAGE=deepcode-scip-java:0.14.2 go test -count=1 -v ./internal/repo/index/indexer/scipimport/... -run '^TestAutomaticSCIP'
+          docker build -f scripts/scip-dotnet.Dockerfile -t deepcode-scip-dotnet:0.2.14 .
+          DEEPCODE_TEST_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE=deepcode-scip-node:0.6.2-0.6.8 DEEPCODE_TEST_SCIP_PYTHON_IMAGE=deepcode-scip-node:0.6.2-0.6.8 DEEPCODE_TEST_SCIP_RUST_IMAGE=deepcode-scip-rust:2026-11-16 DEEPCODE_TEST_SCIP_JAVA_IMAGE=deepcode-scip-java:0.14.2 DEEPCODE_TEST_SCIP_CSHARP_IMAGE=deepcode-scip-dotnet:0.2.14 go test -count=1 -v ./internal/repo/index/indexer/scipimport/... -run '^TestAutomaticSCIP'
       - uses: actions/cache@v6
         with:
           path: ~/eval-git

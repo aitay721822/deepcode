@@ -26,10 +26,10 @@ import (
 )
 
 func TestAutomaticSCIPLanguages(t *testing.T) {
-	images := []string{os.Getenv("DEEPCODE_TEST_SCIP_GO_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_PYTHON_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_RUST_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_JAVA_IMAGE")}
+	images := []string{os.Getenv("DEEPCODE_TEST_SCIP_GO_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_PYTHON_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_RUST_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_JAVA_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_CSHARP_IMAGE")}
 	for _, image := range images {
 		if image == "" {
-			t.Skip("set all DEEPCODE_TEST_SCIP_{GO,TYPESCRIPT,PYTHON,RUST,JAVA}_IMAGE variables")
+			t.Skip("set all DEEPCODE_TEST_SCIP_{GO,TYPESCRIPT,PYTHON,RUST,JAVA,CSHARP}_IMAGE variables")
 		}
 	}
 	remote := t.TempDir()
@@ -82,6 +82,10 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 		"rust/src/main.rs": "mod alpha;\nmod beta;\nfn main() {\n    alpha::resolve();\n    beta::resolve();\n    let _astral = \"𝒳\"; beta::resolve();\n}\n",
 		"java/Alpha.java":  "class Alpha { static void resolve() {} }\n", "java/Beta.java": "class Beta { static void resolve() {} }\n",
 		"java/caller.java": "class Caller {\n  void run() {\n    Alpha.resolve();\n    Beta.resolve();\n    String astral = \"𝒳\"; Beta.resolve();\n  }\n}\n",
+		"csharp/Alpha.cs":  "static class Alpha { public static void Resolve() {} }\n", "csharp/Beta.cs": "static class Beta { public static void Resolve() {} }\n",
+		"csharp/caller.cs":      "class Caller {\n  void Run() {\n    Alpha.Resolve();\n    Beta.Resolve();\n    string astralPrefix = \"𝒳\"; Alpha.Resolve();  Beta.Resolve();\n  }\n}\n",
+		"Directory.Build.props": "<Project><Import Project=\"/missing/untrusted.props\" /></Project>\n",
+		"global.json":           "{\"sdk\":{\"version\":\"0.0.1\"}}\n",
 	}
 	run("init", "-q", "-b", "main")
 	for name, content := range files {
@@ -93,8 +97,13 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 	run("add", "--all")
 	run("commit", "-qm", "pinned multilingual sources")
 	sha := run("rev-parse", "HEAD")
+	write("csharp/caller.cs", "using Missing.External;\n"+files["csharp/caller.cs"])
+	run("add", "--", "csharp/caller.cs")
+	run("commit", "-qm", "Csharp external dependency rejected")
+	brokenCSharp := run("rev-parse", "HEAD")
+	write("csharp/caller.cs", files["csharp/caller.cs"])
 	write("java/caller.java", "import missing.external.Dependency;\n"+files["java/caller.java"])
-	run("add", "--", "java/caller.java")
+	run("add", "--", "java/caller.java", "csharp/caller.cs")
 	run("commit", "-qm", "Java external dependency rejected")
 	brokenJava := run("rev-parse", "HEAD")
 	write("java/caller.java", files["java/caller.java"])
@@ -131,16 +140,17 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 	t.Setenv("GIT_CONFIG_KEY_0", "url."+loc+".insteadOf")
 	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/example/main.git")
 	for _, tc := range []struct {
-		name, sha                                  string
-		brokenImage                                int
-		wantGo, wantTS, wantPy, wantRust, wantJava bool
+		name, sha                                              string
+		brokenImage                                            int
+		wantGo, wantTS, wantPy, wantRust, wantJava, wantCSharp bool
 	}{
-		{"all", sha, -1, true, true, true, true, true}, {"missing Go image", sha, 0, false, true, true, true, true},
-		{"missing TS image", sha, 1, true, false, true, true, true}, {"missing Python image", sha, 2, true, true, false, true, true},
-		{"missing Rust image", sha, 3, true, true, true, false, true}, {"registry Rust dependency", registry, -1, true, true, true, false, true},
-		{"missing Rust lockfile", missingLock, -1, true, true, true, false, true},
-		{"inferred root", inferred, -1, true, true, true, true, true}, {"broken TS project", broken, -1, true, false, true, true, true},
-		{"broken Java compile", brokenJava, -1, true, true, true, true, false},
+		{"all", sha, -1, true, true, true, true, true, true}, {"missing Go image", sha, 0, false, true, true, true, true, true},
+		{"missing TS image", sha, 1, true, false, true, true, true, true}, {"missing Python image", sha, 2, true, true, false, true, true, true},
+		{"missing Rust image", sha, 3, true, true, true, false, true, true}, {"registry Rust dependency", registry, -1, true, true, true, false, true, true},
+		{"missing Rust lockfile", missingLock, -1, true, true, true, false, true, true},
+		{"inferred root", inferred, -1, true, true, true, true, true, true}, {"broken TS project", broken, -1, true, false, true, true, true, true},
+		{"broken Java compile", brokenJava, -1, true, true, true, true, false, true},
+		{"broken Csharp compile", brokenCSharp, -1, true, true, true, true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := t.TempDir()
@@ -164,7 +174,7 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 			if tc.brokenImage >= 0 {
 				chosen[tc.brokenImage] = "deepcode-test-missing-scip-image:never-pull"
 			}
-			ix := &indexer.Indexer{Store: &store.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}, Events: bus, Git: &git.Client{Dir: data, AllowProtocol: "file"}, Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}, Limits: indexer.Limits{MaxFiles: 100, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}, SCIPImages: scipimport.Images{Go: chosen[0], TypeScript: chosen[1], Python: chosen[2], Rust: chosen[3], Java: chosen[4]}}
+			ix := &indexer.Indexer{Store: &store.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}, Events: bus, Git: &git.Client{Dir: data, AllowProtocol: "file"}, Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}, Limits: indexer.Limits{MaxFiles: 100, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}, SCIPImages: scipimport.Images{Go: chosen[0], TypeScript: chosen[1], Python: chosen[2], Rust: chosen[3], Java: chosen[4], CSharp: chosen[5]}}
 			if err := ix.Run(t.Context(), 1, tc.sha, jobs.Progress{}); err != nil {
 				t.Fatal(err)
 			}
@@ -181,6 +191,7 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 				{"JavaScript", "javascript/", "js", "resolve", 1, 5, 3, tc.wantTS}, {"Python", "python/", "py", "resolve", 1, 5, 3, tc.wantPy},
 				{"Rust", "rust/src/", "rs", "resolve", 1, 6, 4, tc.wantRust},
 				{"Java", "java/", "java", "resolve", 1, 5, 3, tc.wantJava},
+				{"Csharp", "csharp/", "cs", "Resolve", 1, 5, 3, tc.wantCSharp},
 			} {
 				t.Run(lang.name, func(t *testing.T) {
 					caller := lang.dir + "caller." + lang.ext
@@ -192,13 +203,16 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 					}
 					for _, which := range []string{"alpha", "beta"} {
 						decl := lang.dir + which + "." + lang.ext
-						if lang.name == "Java" {
-							decl = lang.dir + strings.ToUpper(which[:1]) + which[1:] + ".java"
+						if lang.name == "Java" || lang.name == "Csharp" {
+							decl = lang.dir + strings.ToUpper(which[:1]) + which[1:] + "." + lang.ext
 						}
 						if lang.name == "Go" {
 							decl = which + "/" + decl
 						}
 						want := []string{fmt.Sprintf("%s:%d", caller, lang.ref)}
+						if lang.name == "Csharp" && which == "alpha" {
+							want = append(want, fmt.Sprintf("%s:%d", caller, lang.post))
+						}
 						if which == "beta" {
 							want = append(want, fmt.Sprintf("%s:%d", caller, lang.post))
 							if lang.name != "Go" {
@@ -222,6 +236,14 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 							t.Fatalf("post-astral %s:%d byte %d: %d occurrences, %v", caller, lang.post, col, count, err)
 						}
 						t.Logf("post-astral %s:%d byte column %d", caller, lang.post, col)
+						if lang.name == "Csharp" {
+							col = strings.Index(line, lang.ident)
+							err := db.QueryRow(`SELECT count(*) FROM scip_occurrences WHERE snapshot_id=? AND path=? AND line=? AND byte_column=? AND definition_name=''`, snapshot, caller, lang.post, col).Scan(&count)
+							if err != nil || count != 1 {
+								t.Fatalf("Csharp Alpha byte %d: %d occurrences, %v", col, count, err)
+							}
+							t.Logf("post-astral Csharp Alpha byte column %d", col)
+						}
 					}
 				})
 			}

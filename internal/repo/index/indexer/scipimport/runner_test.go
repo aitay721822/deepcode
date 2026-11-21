@@ -111,6 +111,33 @@ func TestJavaSyntheticConstructors(t *testing.T) {
 	}
 }
 
+func TestCSharpWorkspaceFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX shell")
+	}
+	for _, tc := range []struct {
+		name, log, status string
+		valid             bool
+	}{
+		{"success", "done", "0", true},
+		{"workspace failure", "WorkspaceDiagnosticKind.Failure: missing reference", "0", false},
+		{"failure log", "fail: workspace load", "0", false},
+		{"nonzero", "workspace error", "1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			script := `dotnet() { case "$*" in *scip-dotnet.dll*) printf '%s\n' "$SCIP_TEST_LOG"; printf index > "$SCIP_TEST_INDEX"; return "$SCIP_TEST_STATUS";; esac; }
+` + strings.ReplaceAll(specs[5].script, "/tmp", dir)
+			cmd := exec.CommandContext(t.Context(), "sh", "-c", script)
+			cmd.Env = append(os.Environ(), "SCIP_TEST_LOG="+tc.log, "SCIP_TEST_STATUS="+tc.status, "SCIP_TEST_INDEX="+filepath.Join(dir, "index.scip"))
+			out, err := cmd.CombinedOutput()
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, error=%v: %s", tc.valid, err, out)
+			}
+		})
+	}
+}
+
 func TestSCIPAnchorsAndIdentifiers(t *testing.T) {
 	for _, tc := range []struct {
 		name, symbol          string

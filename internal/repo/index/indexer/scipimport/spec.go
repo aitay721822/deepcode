@@ -12,7 +12,7 @@ import (
 	"deepcode/internal/repo/git"
 )
 
-type Images struct{ Go, TypeScript, Python, Rust, Java string }
+type Images struct{ Go, TypeScript, Python, Rust, Java, CSharp string }
 
 type project struct {
 	root  string
@@ -113,6 +113,32 @@ mkdir /tmp/classes /tmp/shards
 find /src -mindepth 1 -type d \( -name '.*' -o -name '_*' -o -name vendor -o -name node_modules -o -name build -o -name target \) -prune -o -type f -name '*.java' -print0 | xargs -0 -r /bin/sh -c 'for source do escaped=$(printf "%s" "$source" | sed '\''s/"/\\"/g'\''); printf '\''"%s"\n'\'' "$escaped"; done' sh > /tmp/sources
 javac -proc:none -encoding UTF-8 -classpath /opt/scip-javac.jar:/opt/scip-java -J--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED -J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED -J--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED -J--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED -J--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED '-Xplugin:scip -sourceroot:/src -targetroot:/tmp/shards' -d /tmp/classes @/tmp/sources >&2
 /bin/sh /opt/scip-java aggregate --output=/tmp/index.scip /tmp/shards >&2
+cat /tmp/index.scip`,
+	},
+	{
+		name: "C#", tool: "scip-dotnet", image: func(i Images) string { return i.CSharp },
+		languages: []string{"csharp"}, labels: map[string]string{"C#": "csharp"}, extensions: map[string]string{".cs": "csharp"},
+		encoding: scip.PositionEncoding_UnspecifiedPositionEncoding, utf16: true,
+		roots: func(tree []git.TreeEntry) []project {
+			for _, e := range tree {
+				if strings.HasSuffix(e.Path, ".cs") {
+					return []project{{}}
+				}
+			}
+			return nil
+		},
+		identifier: func(s string) bool { return identifierChars(s, false) },
+		env:        []string{"DOTNET_CLI_HOME=/tmp", "DOTNET_NOLOGO=1", "DOTNET_CLI_TELEMETRY_OPTOUT=1", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1", "NUGET_PACKAGES=/tmp/nuget"},
+		script: `set -eu
+mkdir /tmp/project
+printf '%s' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableDefaultItems>false</EnableDefaultItems><RunAnalyzersDuringBuild>false</RunAnalyzersDuringBuild><EnableNETAnalyzers>false</EnableNETAnalyzers><UseSharedCompilation>false</UseSharedCompilation><ImportDirectoryBuildProps>false</ImportDirectoryBuildProps><ImportDirectoryBuildTargets>false</ImportDirectoryBuildTargets><ImportDirectoryPackagesProps>false</ImportDirectoryPackagesProps><GenerateAssemblyInfo>false</GenerateAssemblyInfo><GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute><GenerateDependencyFile>false</GenerateDependencyFile></PropertyGroup><ItemGroup><Compile Include="/src/**/*.cs" Exclude="/src/**/obj/**;/src/**/bin/**;/src/**/.*/**;/src/**/_*/**;/src/**/vendor/**;/src/**/node_modules/**;/src/**/build/**;/src/**/target/**" /></ItemGroup></Project>' > /tmp/project/Index.csproj
+printf '%s' '<configuration><packageSources><clear /></packageSources></configuration>' > /tmp/project/NuGet.Config
+cd /tmp/project
+dotnet restore --configfile NuGet.Config Index.csproj >&2
+dotnet build --no-restore Index.csproj >&2
+if ! dotnet --roll-forward Major /opt/scip/scip-dotnet.dll index Index.csproj --skip-dotnet-restore --working-directory /src --output /tmp/index.scip > /tmp/scip.log 2>&1; then cat /tmp/scip.log >&2; exit 1; fi
+cat /tmp/scip.log >&2
+if grep -Ei 'WorkspaceDiagnosticKind[.]Failure|fail:' /tmp/scip.log >&2; then exit 1; fi
 cat /tmp/index.scip`,
 	},
 }

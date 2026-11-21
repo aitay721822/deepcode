@@ -46,6 +46,7 @@ type Config struct {
 	SCIPPythonImage     string
 	SCIPRustImage       string
 	SCIPJavaImage       string
+	SCIPCSharpImage     string
 
 	WikiLanguage string
 	WikiParallel int    // pages planned or written at a time
