@@ -44,7 +44,7 @@ func languageNames(languages []string) string {
 	return fmt.Sprint(languages)
 }
 
-// ReplaceSCIP publishes the entire index or keeps the previous one.
+// ReplaceSCIP replaces Go occurrences on a ready snapshot atomically.
 func (s *Store) ReplaceSCIP(ctx context.Context, snapshot int64, rows []SCIPOccurrence) error {
 	return s.replaceSCIP(ctx, snapshot, rows, false)
 }
@@ -68,7 +68,15 @@ func (s *Store) replaceSCIP(ctx context.Context, snapshot int64, rows []SCIPOccu
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM scip_occurrences WHERE snapshot_id = ?`, snapshot); err != nil {
+	deleteSQL := `DELETE FROM scip_occurrences WHERE snapshot_id = ?`
+	if !building {
+		deleteSQL += ` AND path IN (SELECT path FROM source_files WHERE snapshot_id = ? AND language = 'go')`
+	}
+	args := []any{snapshot}
+	if !building {
+		args = append(args, snapshot)
+	}
+	if _, err := tx.ExecContext(ctx, deleteSQL, args...); err != nil {
 		return err
 	}
 	insert, err := tx.PrepareContext(ctx, `INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name)
