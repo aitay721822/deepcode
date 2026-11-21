@@ -18,12 +18,13 @@ import (
 )
 
 const (
-	searchHits   = 8   // chunks a search_code call returns
-	prefixPool   = 25  // chunks searched for one under a folder, which it keeps searchHits of
-	previewLines = 12  // lines of each chunk a search_code or users result shows
-	maxRead      = 200 // lines one read_file call reads
-	userHits     = 4   // chunks a users call returns
-	maxLine      = 400 // bytes of a line a tool result shows
+	searchHits    = 8   // chunks a search_code call returns
+	prefixPool    = 25  // chunks searched for one under a folder, which it keeps searchHits of
+	previewLines  = 12  // lines of each chunk a search_code or users result shows
+	maxRead       = 200 // lines one read_file call reads
+	userHits      = 4   // chunks a users call returns
+	maxLine       = 400 // bytes of a line a tool result shows
+	scipLanguages = "Go, JavaScript, TypeScript, TSX, Python, Rust, Java and C#"
 )
 
 type (
@@ -41,7 +42,7 @@ type (
 	}
 	usersAtArgs struct {
 		Name string `json:"name" jsonschema_description:"the declaration's identifier, as the code spells it"`
-		Path string `json:"path" jsonschema_description:"repository-relative path of the Go declaration"`
+		Path string `json:"path" jsonschema_description:"repository-relative path of the SCIP-indexed declaration"`
 		Line int    `json:"line" jsonschema_description:"1-based line of the declaration identifier"`
 	}
 )
@@ -51,7 +52,7 @@ var (
 	readFormat    = ai.Schema[readArgs]("read_file")
 	usersFormat   = ai.Schema[usersArgs]("users")
 	usersAtFormat = ai.Schema[usersAtArgs]("users_at")
-	usersAtTool   = usersAtFormat.Tool(fmt.Sprintf("Find a sample of up to %d exact reference lines for a specific Go declaration. Prefer this to users when its path and line are known, especially for shared names. If no exact index match is available, results are labeled as name-based.", userHits))
+	usersAtTool   = usersAtFormat.Tool(fmt.Sprintf("Find a sample of up to %d exact reference lines for a specific SCIP-indexed declaration in %s. Prefer this to users when its path and line are known, especially for shared names. If no exact index match is available, results are labeled as name-based.", userHits, scipLanguages))
 	tools         = []ai.Tool{
 		searchFormat.Tool(fmt.Sprintf("Search the repository's code by words and identifiers. Returns up to %d chunks: their path, lines and symbol, and their first %d lines.", searchHits, previewLines)),
 		readFormat.Tool(fmt.Sprintf("Read lines of one of the repository's files, numbered: at most %d a call.", maxRead)),

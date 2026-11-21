@@ -207,7 +207,7 @@ func (g Gatherer) Gather(ctx context.Context, req Request, emit Emit) Result {
 	available := tools
 	if indexed, err := g.Retriever.Store.HasSCIP(ctx, req.Snapshot.ID); indexed {
 		available = append(slices.Clone(tools), usersAtTool)
-		first.Static += "\n- For a Go identifier with a known declaration path and line, prefer users_at to users."
+		first.Static += "\n- For a SCIP-indexed identifier in " + scipLanguages + " with a known declaration path and line, prefer users_at to users."
 	} else if err != nil && ctx.Err() == nil {
 		log.Printf("chat: SCIP references unavailable: %v", err)
 	}
