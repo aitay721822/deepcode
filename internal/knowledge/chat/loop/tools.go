@@ -51,7 +51,7 @@ var (
 	readFormat    = ai.Schema[readArgs]("read_file")
 	usersFormat   = ai.Schema[usersArgs]("users")
 	usersAtFormat = ai.Schema[usersAtArgs]("users_at")
-	usersAtTool   = usersAtFormat.Tool(fmt.Sprintf("Find up to %d exact reference lines for a specific Go declaration. Prefer this to users when its path and line are known, especially for shared names. If no exact index match is available, results are labeled as name-based.", userHits))
+	usersAtTool   = usersAtFormat.Tool(fmt.Sprintf("Find a sample of up to %d exact reference lines for a specific Go declaration. Prefer this to users when its path and line are known, especially for shared names. If no exact index match is available, results are labeled as name-based.", userHits))
 	tools         = []ai.Tool{
 		searchFormat.Tool(fmt.Sprintf("Search the repository's code by words and identifiers. Returns up to %d chunks: their path, lines and symbol, and their first %d lines.", searchHits, previewLines)),
 		readFormat.Tool(fmt.Sprintf("Read lines of one of the repository's files, numbered: at most %d a call.", maxRead)),
@@ -281,38 +281,51 @@ func (s *state) usersOf(ctx context.Context, a usersArgs) (string, []retrieval.H
 
 func (s *state) usersAt(ctx context.Context, a usersAtArgs) (string, []retrieval.Hit, error) {
 	at := retrieval.Anchor{Path: a.Path, Line: a.Line}
-	refs, found, err := s.g.Retriever.SCIPUsers(ctx, s.req.Snapshot.ID, a.Name, at, userHits)
+	refs, found, err := s.g.Retriever.SCIPUsers(ctx, s.req.Snapshot.ID, a.Name, at, userHits+1)
 	if err != nil {
 		return "", nil, err
 	}
-	anchor := fmt.Sprintf("For %q at %q:%d: ", a.Name, a.Path, a.Line)
+	note := scipLookup{anchor: fmt.Sprintf("For %q at %q:%d: ", a.Name, a.Path, a.Line)}
 	if !found {
 		text, hits, err := s.usersOf(ctx, usersArgs{Name: a.Name})
 		if err == nil {
-			s.res.scip = append(s.res.scip, anchor+"No exact SCIP declaration match; name-based search results are not verified references to this declaration.\n")
+			note.verdict = "No exact SCIP declaration match; name-based search results are not verified references to this declaration."
+			s.res.scip = append(s.res.scip, note)
 		}
 		return "No exact SCIP declaration match; results use the name, not the selected declaration.\n" + text, hits, err
 	}
-	s.res.Graph += len(refs)
 	if len(refs) == 0 {
-		const none = "No SCIP-indexed references to that declaration. The index may not cover the whole repository.\n"
-		s.res.scip = append(s.res.scip, anchor+none)
-		return none, nil, nil
+		note.verdict = "No SCIP-indexed references to that declaration. The index may not cover the whole repository."
+		s.res.scip = append(s.res.scip, note)
+		return note.verdict + "\n", nil, nil
 	}
 	var b strings.Builder
+	note.verdict = "Verified SCIP reference lines found."
+	if len(refs) > userHits {
+		refs = refs[:userHits]
+		const sample = "More indexed references exist; this is a sample."
+		b.WriteString(sample + "\n")
+		note.verdict += " " + sample
+	}
+	s.res.Graph += len(refs)
 	b.WriteString("References to that declaration in SCIP-indexed files:\n")
 	hits := make([]retrieval.Hit, 0, len(refs))
-	locations := make([]string, 0, len(refs))
+	byPath := make(map[string]int, len(refs))
 	for _, ref := range refs {
 		hits = append(hits, ref.Hit)
-		locations = append(locations, fmt.Sprintf("%q:%d", ref.Path, ref.ReferenceLine))
+		if i, ok := byPath[ref.Path]; ok {
+			note.locations[i] += fmt.Sprintf(", %d", ref.ReferenceLine)
+		} else {
+			byPath[ref.Path] = len(note.locations)
+			note.locations = append(note.locations, fmt.Sprintf("%q:%d", ref.Path, ref.ReferenceLine))
+		}
 		lines := strings.Split(ref.Content, "\n")
 		fmt.Fprintf(&b, "%s:%d\n", ref.Path, ref.ReferenceLine)
 		if i := ref.ReferenceLine - ref.StartLine; i >= 0 && i < len(lines) {
 			fmt.Fprintf(&b, "   %s\n", clip(lines[i]))
 		}
 	}
-	s.res.scip = append(s.res.scip, anchor+"Verified SCIP reference lines found: "+strings.Join(locations, ", ")+".\n")
+	s.res.scip = append(s.res.scip, note)
 	return b.String(), hits, nil
 }
 

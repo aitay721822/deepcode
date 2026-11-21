@@ -204,18 +204,22 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	for retried := false; ; retried = true {
 		final := a
 		var scip string
+		budget := 0
 		if !req.Codemap {
-			budget := 2048
+			budget = 2048
 			if window := a.fit.Context(); window > 0 {
 				budget = min(budget, window/8)
 			}
-			scip = got.SCIPContext(budget)
-			final.fixed += a.fit.Count(scip)
 		}
-		parts, err := s.fit(ctx, final, gathered)
-		if scip != "" && errors.As(err, new(*harness.ErrSmall)) {
-			final, scip = a, ""
+		var parts fitted
+		for {
+			scip = got.SCIPContext(budget)
+			final.fixed = a.fixed + a.fit.Count(scip)
 			parts, err = s.fit(ctx, final, gathered)
+			if scip == "" || !errors.As(err, new(*harness.ErrSmall)) {
+				break
+			}
+			budget /= 2
 		}
 		if err != nil {
 			return err

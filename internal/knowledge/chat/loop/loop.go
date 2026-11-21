@@ -56,23 +56,66 @@ type Result struct {
 	Rounds  int            // the model's replies
 	Calls   map[string]int // calls answered, by tool, invalid and repeated ones too, a tool that does not exist as "unknown"; none past maxCalls; the message types followed as "follow"
 	Stop    string         // the rule that ended the gathering
-	scip    []string
+	scip    []scipLookup
+}
+
+type scipLookup struct {
+	anchor, verdict string
+	locations       []string // lines grouped by path
 }
 
 // SCIPContext carries verified locations and coverage to the separate answer request.
 func (r Result) SCIPContext(maxBytes int) string {
-	const heading = "SCIP reference lookups:\n"
-	const guide = "SCIP covers only the imported build and files. Cite only lines present in the source blocks below.\n\n"
-	var b strings.Builder
-	for _, note := range r.scip {
-		if len(heading)+b.Len()+len(note)+len(guide) <= maxBytes {
-			b.WriteString(note)
-		}
-	}
-	if b.Len() == 0 {
+	if len(r.scip) == 0 {
 		return ""
 	}
-	return heading + b.String() + guide
+	const heading = "SCIP reference lookups:\n"
+	const guide = "SCIP covers only the imported build and files. Cite only lines present in the source blocks below.\n"
+	const omitted = "Some SCIP lookups or locations were omitted. Do not treat other lines as SCIP-verified.\n"
+	full := len(heading) + len(guide) + 1
+	for _, lookup := range r.scip {
+		full += len(lookup.anchor) + len(lookup.verdict) + 1
+		for _, group := range lookup.locations {
+			full += len(group) + 2
+		}
+	}
+	footer := guide + "\n"
+	if full > maxBytes {
+		footer = omitted + footer
+	}
+	budget := maxBytes - len(heading) - len(footer)
+	if budget < 0 {
+		if maxBytes >= len(omitted)+1 {
+			return omitted + "\n"
+		}
+		return ""
+	}
+	lines := make([]string, len(r.scip))
+	for i, lookup := range r.scip {
+		summary := lookup.anchor + lookup.verdict
+		if len(summary)+1 <= budget {
+			lines[i] = summary
+			budget -= len(summary) + 1
+		}
+	}
+	var b strings.Builder
+	b.WriteString(heading)
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		b.WriteString(line)
+		for _, group := range r.scip[i].locations {
+			if len(group)+2 <= budget {
+				b.WriteString("  ")
+				b.WriteString(group)
+				budget -= len(group) + 2
+			}
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteString(footer)
+	return b.String()
 }
 
 // Origin is where a hit of the evidence came from: the round of the call

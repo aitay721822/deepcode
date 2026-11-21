@@ -42,16 +42,41 @@ func TestAskSCIPContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for i := range 3 {
+		path := fmt.Sprintf("pkg/%s/%d/main.go", strings.Repeat("long-directory/", 15), i)
+		_, err := db.Exec(`
+			INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash)
+				VALUES (1, ?1, 1, 4, 'Busy()' || char(10) || 'Busy()' || char(10) || 'Busy()' || char(10) || 'Busy()', 'h');
+			INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name) VALUES
+				(1, ?1, 1, 0, 'alpha.Busy', ''), (1, ?1, 2, 0, 'alpha.Busy', ''),
+				(1, ?1, 3, 0, 'alpha.Busy', ''), (1, ?1, 4, 0, 'alpha.Busy', '');`, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name) VALUES
+		(1, 'alpha.go', 5, 5, 'alpha.Busy', 'Busy');`); err != nil {
+		t.Fatal(err)
+	}
+	exact := `{"name":"Resolve","path":"alpha.go","line":3}`
+	empty := `{"name":"Unused","path":"alpha.go","line":4}`
+	fallback := `{"name":"Resolve","path":"alpha.go","line":99}`
+	busy := `{"name":"Busy","path":"alpha.go","line":5}`
 	for _, tc := range []struct {
-		name, args, question string
-		want                 []string
+		name, question string
+		args, want     []string
+		context        int
 	}{
-		{"two exact lines in one source chunk", `{"name":"Resolve","path":"alpha.go","line":3}`, "where is Resolve called?",
-			[]string{`"alpha.go":3`, `"main.go":9`, `"main.go":11`}},
-		{"no indexed references", `{"name":"Unused","path":"alpha.go","line":4}`, "zzzz qqqq",
-			[]string{`"alpha.go":4`, "No SCIP-indexed references", "may not cover"}},
-		{"fallback", `{"name":"Resolve","path":"alpha.go","line":99}`, "where is Resolve called?",
-			[]string{`"alpha.go":99`, "name-based search", "not verified"}},
+		{"two exact lines in one source chunk", "where is Resolve called?", []string{exact},
+			[]string{`"alpha.go":3`, `"main.go":9, 11`}, 0},
+		{"no indexed references", "zzzz qqqq", []string{empty},
+			[]string{`"alpha.go":4`, "No SCIP-indexed references", "may not cover"}, 0},
+		{"fallback", "where is Resolve called?", []string{fallback},
+			[]string{`"alpha.go":99`, "name-based search", "not verified"}, 0},
+		{"sample spans multiple chunks", "where is Busy called?", []string{busy},
+			[]string{`"alpha.go":5`, `/0/main.go":1, 2`, `/1/main.go":1`, `/2/main.go":1`, "More indexed references exist"}, 0},
+		{"bounded context preserves verdicts", "where are Busy and Resolve called?", []string{busy, empty, exact, fallback},
+			[]string{`"alpha.go":5`, `"alpha.go":4`, `"alpha.go":3`, `"alpha.go":99`, "not verified", "Some SCIP lookups or locations were omitted"}, 8192},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			final := make(chan string, 1)
@@ -67,7 +92,11 @@ func TestAskSCIPContext(t *testing.T) {
 						return
 					}
 					w.Header().Set("Content-Type", "application/json")
-					fmt.Fprintf(w, `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"users_at","arguments":%s}}]}}]}`, fmt.Sprintf("%q", tc.args))
+					var calls []string
+					for i, arg := range tc.args {
+						calls = append(calls, fmt.Sprintf(`{"id":"c%d","type":"function","function":{"name":"users_at","arguments":%q}}`, i, arg))
+					}
+					fmt.Fprintf(w, `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[%s]}}]}`, strings.Join(calls, ","))
 					return
 				}
 				if strings.HasPrefix(body.Messages[0].Content, "You are deepcode") {
@@ -76,7 +105,7 @@ func TestAskSCIPContext(t *testing.T) {
 				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 			}))
 			defer model.Close()
-			s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m"})
+			s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m", Context: tc.context, MaxTokens: 512})
 			if err := s.Ask(t.Context(), Request{RepoID: 1, Question: tc.question, UserID: 1}, func(string, any) {}); err != nil {
 				t.Fatal(err)
 			}
