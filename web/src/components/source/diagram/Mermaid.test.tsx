@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitForElementToBeRemoved, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Mermaid } from './Mermaid'
 
@@ -27,19 +27,30 @@ it.each(['click', 'Enter', ' '])('opens source with %s inline, fullscreen and af
   }
   await activate(document.body)
   expect(onNode).toHaveBeenCalledWith('source')
+  expect(screen.queryByRole('dialog')).toBeNull()
   onNode.mockClear()
   fireEvent.click(screen.getByRole('button', { name: /全/ }))
   const dialog = await screen.findByRole('dialog')
   await activate(dialog)
+  await waitFor(() => expect(dialog.getAttribute('data-state')).toBe('closed'))
   expect(onNode).toHaveBeenCalledWith('source')
+  await waitForElementToBeRemoved(dialog)
+  onNode.mockClear()
+  await activate(screen.getByRole('group'))
+  expect(onNode).toHaveBeenCalledWith('source')
+})
+
+it('lets a focused fullscreen node open source with Enter', async () => {
+  const onNode = vi.fn()
+  render(<Mermaid code="graph TD; source" onNode={onNode} />)
+  fireEvent.click(await screen.findByRole('button', { name: /全/ }))
+  const dialog = await screen.findByRole('dialog')
   const node = within(dialog).getByRole('button', { name: 'Source file' })
   expect(node.getAttribute('tabindex')).toBe('0')
   node.focus()
   expect(document.activeElement).toBe(node)
-  onNode.mockClear()
-  fireEvent.click(within(dialog).getByRole('button', { name: '關閉' }))
+  fireEvent.keyDown(node, { key: 'Enter' })
   await waitForElementToBeRemoved(dialog)
-  await activate(screen.getByRole('group'))
   expect(onNode).toHaveBeenCalledWith('source')
 })
 

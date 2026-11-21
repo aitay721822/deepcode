@@ -162,7 +162,9 @@ export function Mermaid({
   const reset = () => setView({ s: 1, x: 0, y: 0 })
   const press = (target: EventTarget) => {
     const id = nodeId(target)
-    if (id) onNode?.(id)
+    if (!id || !onNode) return
+    if (open) setOpen(false)
+    onNode(id)
   }
   const diagramProps: ComponentProps<'div'> = {
     ref: (el) => {
@@ -190,6 +192,7 @@ export function Mermaid({
           }
         }
       : undefined,
+    // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
     dangerouslySetInnerHTML: { __html: svg },
   }
   const diagram = onNode ? (
