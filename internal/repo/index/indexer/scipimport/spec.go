@@ -27,6 +27,7 @@ type languageSpec struct {
 	encoding                            scip.PositionEncoding
 	utf16, anchors, deepest, allowEmpty bool
 	emptyDocuments                      bool
+	parentPaths                         bool
 	syntheticConstructors               bool
 	anchorSuffix                        scip.Descriptor_Suffix
 	anchorName                          string
@@ -61,7 +62,7 @@ exec /usr/local/bin/scip-go index --quiet --skip-tests --skip-implementations --
 		extensions: map[string]string{".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "tsx", ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript"},
 		encoding:   scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart, utf16: true, anchors: true, deepest: true, anchorSuffix: scip.Descriptor_Namespace,
 		roots: nodeProjects, identifier: func(s string) bool { return identifier(s, true) },
-		emptyDocuments: true,
+		emptyDocuments: true, parentPaths: true,
 		script: `if [ "$2" = infer ]; then
   printf '%s' '{"compilerOptions":{"allowJs":true,"jsx":"preserve"},"include":["/src/**/*"],"exclude":["/src/**/node_modules/**","/src/**/vendor/**"]}' > /tmp/tsconfig.json
   scip-typescript index /tmp/tsconfig.json --infer-tsconfig --no-progress-bar --output /tmp/index.scip >&2
