@@ -28,6 +28,7 @@ type languageSpec struct {
 	utf16, anchors, deepest, allowEmpty bool
 	emptyDocuments                      bool
 	skipParentDocuments                 bool
+	rejectParentDocuments               bool
 	syntheticConstructors               bool
 	anchorSuffix                        scip.Descriptor_Suffix
 	anchorName                          string

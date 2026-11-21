@@ -255,6 +255,42 @@ func TestSCIPUnsupportedDocuments(t *testing.T) {
 	}
 }
 
+func TestNodeProjectPackage(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "package.json"), []byte(`{"name":"ancestor"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(src, "child"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if namedNodeProject(src, "child") {
+		t.Fatal("ancestor package must not name the project")
+	}
+	for raw, want := range map[string]bool{`{}`: false, `{"name":""}`: false, `{"name":" "}`: false, `{"Name":"wrong-case"}`: false, `{"name":1}`: false, `invalid`: false, `{"name":"project"}`: true, `{"name":"project","version":"1.0.0"}`: true} {
+		if err := os.WriteFile(filepath.Join(src, "child", "package.json"), []byte(raw), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if got := namedNodeProject(src, "child"); got != want {
+			t.Fatalf("%s: %t, want %t", raw, got, want)
+		}
+	}
+}
+
+func TestSCIPPackagelessEscapes(t *testing.T) {
+	for _, name := range []string{"../source.ts", "nested/../../source.ts", "../source.svelte"} {
+		idx := &scip.Index{Metadata: &scip.Metadata{ToolInfo: &scip.ToolInfo{Name: specs[1].tool}, TextDocumentEncoding: scip.TextEncoding_UTF8}, Documents: []*scip.Document{{RelativePath: name}}}
+		raw, err := proto.Marshal(idx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec := specs[1]
+		spec.rejectParentDocuments = true
+		if _, err := readLanguageIndex(t.Context(), nil, 1, "", nil, raw, nil, spec, nil); err == nil || !strings.Contains(err.Error(), "packageless") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
 func TestSCIPUTF16DocumentRanges(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

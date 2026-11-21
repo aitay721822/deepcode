@@ -124,10 +124,13 @@ func readLanguageIndex(ctx context.Context, s *store.Store, snapshot int64, modu
 		if occurrences > maxOccurrences {
 			return nil, fmt.Errorf("SCIP index exceeds %d occurrences", maxOccurrences)
 		}
-		if !known {
+		if spec.skipParentDocuments && strings.HasPrefix(path.Clean(rel), "../") {
+			if spec.rejectParentDocuments {
+				return nil, fmt.Errorf("packageless TypeScript/JavaScript project emitted document outside its root: %q", rel)
+			}
 			continue
 		}
-		if spec.skipParentDocuments && strings.HasPrefix(path.Clean(rel), "../") {
+		if !known {
 			continue
 		}
 		name := path.Join(moduleRoot, rel)
