@@ -59,6 +59,9 @@ func Generate(ctx context.Context, s *store.Store, gitc *git.Client, dir, sha st
 		if err != nil {
 			return 0, fmt.Errorf("SCIP module %q: %w", module, err)
 		}
+		if len(raw) == 0 {
+			continue // The container found no packages for this build.
+		}
 		moduleRows, err := readIndex(ctx, s, snapshot, module, files, raw, nil)
 		if err != nil {
 			return 0, fmt.Errorf("SCIP module %q: %w", module, err)
@@ -180,7 +183,10 @@ func runSCIP(ctx context.Context, docker, image, src, module, sha, name string) 
 		"--env", "GOENV=off", "--env", "GOWORK=off", "--env", "GOPACKAGESDRIVER=off", "--env", "GOTOOLCHAIN=local", "--env", "GOTELEMETRY=off",
 		"--env", "GOFLAGS=-buildvcs=false", "--env", "GOPROXY=off", "--env", "GOSUMDB=off", "--env", "CGO_ENABLED=0",
 		"--workdir", path.Join("/src", module), "--entrypoint", "/bin/sh", image, "-c",
-		`go list -deps ./... >/dev/null && exec /usr/local/bin/scip-go index --quiet --skip-tests --skip-implementations --module-version="$1" --output=- ./...`,
+		`packages=$(go list ./...) || exit $?
+[ -n "$packages" ] || exit 0
+go list -deps ./... >/dev/null || exit $?
+exec /usr/local/bin/scip-go index --quiet --skip-tests --skip-implementations --module-version="$1" --output=- ./...`,
 		"index", sha)
 	cmd.WaitDelay = 2 * time.Second
 	out := indexOutput{stop: stop}

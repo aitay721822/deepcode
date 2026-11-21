@@ -43,6 +43,7 @@ func TestAutomaticSCIP(t *testing.T) {
 		"beta/beta.go":        "package beta\n\nfunc Resolve() {}\n",
 		"services/api/go.mod": "module example.com/api\n\ngo 1.23\n",
 		"services/api/api.go": "package api\n\nfunc Handle() {}\nfunc Call() { Handle() }\n",
+		"tools/go.mod":        "module example.com/tools\n\ngo 1.23\n",
 	} {
 		file := filepath.Join(remote, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(file), 0755); err != nil {
@@ -52,7 +53,7 @@ func TestAutomaticSCIP(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	run("add", "--", "go.mod", "main.go", "alpha", "beta", "services")
+	run("add", "--", "go.mod", "main.go", "alpha", "beta", "services", "tools")
 	run("commit", "-qm", "pinned files")
 	sha := run("rev-parse", "HEAD")
 	if err := os.WriteFile(filepath.Join(remote, "main.go"), []byte("package wrong\n"), 0644); err != nil {
