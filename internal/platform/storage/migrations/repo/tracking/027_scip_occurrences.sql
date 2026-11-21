@@ -7,7 +7,7 @@ CREATE TABLE scip_occurrences (
     symbol TEXT NOT NULL,
     definition_name TEXT NOT NULL
 );
-CREATE INDEX scip_snapshot ON scip_occurrences(snapshot_id);
+CREATE INDEX scip_snapshot ON scip_occurrences(snapshot_id, path);
 CREATE INDEX scip_definitions ON scip_occurrences(snapshot_id, path, line, definition_name, symbol)
     WHERE definition_name <> '';
 CREATE INDEX scip_references ON scip_occurrences(snapshot_id, symbol, path, line)

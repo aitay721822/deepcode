@@ -232,7 +232,7 @@ func (g *Client) ValidBranch(ctx context.Context, name string) bool {
 // ErrTooLarge: it is stopped once seen (its size is looked at four times a
 // second, and once more at the end), and the clone is removed.
 func (g *Client) Fetch(ctx context.Context, repoID int64, remote Remote, sha string) (string, error) {
-	dir, err := filepath.Abs(filepath.Join(g.Dir, strconv.FormatInt(repoID, 10)+".git"))
+	dir, err := g.repoDir(repoID)
 	if err != nil {
 		return "", err
 	}
@@ -274,10 +274,27 @@ func (g *Client) Fetch(ctx context.Context, repoID int64, remote Remote, sha str
 	return dir, err
 }
 
+func (g *Client) repoDir(repoID int64) (string, error) {
+	return filepath.Abs(filepath.Join(g.Dir, strconv.FormatInt(repoID, 10)+".git"))
+}
+
+// CachedTree lists the pinned commit's regular files without fetching or checking anything out.
+func (g *Client) CachedTree(ctx context.Context, repoID int64, commit string) ([]TreeEntry, error) {
+	dir, err := g.repoDir(repoID)
+	if err != nil {
+		return nil, err
+	}
+	return g.lsTree(ctx, []string{"--no-replace-objects", "--git-dir=" + dir}, commit+"^{commit}")
+}
+
 // LsTree lists the regular files at sha with their blob SHA and size.
 // Symlinks and submodules are skipped.
 func (g *Client) LsTree(ctx context.Context, dir, sha string) ([]TreeEntry, error) {
-	out, err := g.run(ctx, Remote{}, "-C", dir, "ls-tree", "-r", "-l", "-z", sha)
+	return g.lsTree(ctx, []string{"-C", dir}, sha)
+}
+
+func (g *Client) lsTree(ctx context.Context, location []string, sha string) ([]TreeEntry, error) {
+	out, err := g.run(ctx, Remote{}, append(location, "ls-tree", "-r", "-l", "-z", sha)...)
 	if err != nil {
 		return nil, err
 	}

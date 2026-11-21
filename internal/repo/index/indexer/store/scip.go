@@ -12,24 +12,28 @@ type SCIPOccurrence struct {
 	Line, ByteColumn             int
 }
 
-func (s *Store) SCIPSnapshot(ctx context.Context, repository, commit string) (int64, error) {
-	var id int64
-	err := s.DB.QueryRowContext(ctx, `SELECT s.id FROM snapshots s JOIN repositories r ON r.id = s.repository_id
-		WHERE r.public_id = ? AND s.commit_sha = ? AND s.status = 'ready'`, repository, commit).Scan(&id)
+func (s *Store) SCIPSnapshot(ctx context.Context, repository, commit string) (snapshot, repoID int64, err error) {
+	err = s.DB.QueryRowContext(ctx, `SELECT s.id, r.id FROM snapshots s JOIN repositories r ON r.id = s.repository_id
+		WHERE r.public_id = ? AND s.commit_sha = ? AND s.status = 'ready'`, repository, commit).Scan(&snapshot, &repoID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, errors.New("SCIP manifest does not name a ready snapshot")
+		return 0, 0, errors.New("SCIP manifest does not name a ready snapshot")
 	}
-	return id, err
+	return snapshot, repoID, err
 }
 
-func (s *Store) SCIPSource(ctx context.Context, snapshot int64, path, hash string) (string, error) {
-	var content string
-	err := s.DB.QueryRowContext(ctx, `SELECT c.content FROM source_files f JOIN file_contents c ON c.hash = f.content_hash
-		WHERE f.snapshot_id = ? AND f.path = ? AND f.content_hash = ? AND f.language = 'go'`, snapshot, path, hash).Scan(&content)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("SCIP document %q does not match a Go blob in the snapshot", path)
+func (s *Store) SCIPSource(ctx context.Context, snapshot int64, path, hash string) (content string, indexed bool, err error) {
+	var blob, lang string
+	err = s.DB.QueryRowContext(ctx, `SELECT c.content, f.content_hash, f.language FROM source_files f
+		JOIN file_contents c ON c.hash = f.content_hash WHERE f.snapshot_id = ? AND f.path = ?`, snapshot, path).Scan(&content, &blob, &lang)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	case blob != hash || lang != "go":
+		return "", false, fmt.Errorf("SCIP document %q does not match a Go blob in the snapshot", path)
 	}
-	return content, err
+	return content, true, nil
 }
 
 // ReplaceSCIP publishes the entire index or keeps the previous one.
@@ -56,7 +60,20 @@ func (s *Store) ReplaceSCIP(ctx context.Context, snapshot int64, rows []SCIPOccu
 		return err
 	}
 	defer insert.Close()
+	checked := make(map[string]bool)
 	for _, row := range rows {
+		// A rebuild can drop a file after validation. Never publish orphaned occurrences.
+		if !checked[row.Path] {
+			var exists bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM source_files WHERE snapshot_id = ? AND path = ?)`,
+				snapshot, row.Path).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return fmt.Errorf("SCIP document %q is no longer indexed", row.Path)
+			}
+			checked[row.Path] = true
+		}
 		if _, err := insert.ExecContext(ctx, snapshot, row.Path, row.Line, row.ByteColumn, row.Symbol, row.DefinitionName); err != nil {
 			return err
 		}

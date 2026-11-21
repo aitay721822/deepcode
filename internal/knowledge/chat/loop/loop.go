@@ -56,6 +56,23 @@ type Result struct {
 	Rounds  int            // the model's replies
 	Calls   map[string]int // calls answered, by tool, invalid and repeated ones too, a tool that does not exist as "unknown"; none past maxCalls; the message types followed as "follow"
 	Stop    string         // the rule that ended the gathering
+	scip    []string
+}
+
+// SCIPContext carries verified locations and coverage to the separate answer request.
+func (r Result) SCIPContext(maxBytes int) string {
+	const heading = "SCIP reference lookups:\n"
+	const guide = "SCIP covers only the imported build and files. Cite only lines present in the source blocks below.\n\n"
+	var b strings.Builder
+	for _, note := range r.scip {
+		if len(heading)+b.Len()+len(note)+len(guide) <= maxBytes {
+			b.WriteString(note)
+		}
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return heading + b.String() + guide
 }
 
 // Origin is where a hit of the evidence came from: the round of the call

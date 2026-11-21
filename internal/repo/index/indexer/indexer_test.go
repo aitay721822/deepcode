@@ -174,7 +174,6 @@ func TestParseResumes(t *testing.T) {
 	if f, c := count(); files != 2 || f != files || c != chunks {
 		t.Fatalf("after the resume: %d files and %d chunks, want 2 and %d", f, c, chunks)
 	}
-	// Snapshot 1 was stored without an analyzer version, as before this one.
 	if _, err := db.Exec(`UPDATE symbols SET name = 'stale' WHERE snapshot_id = 1;
 		INSERT INTO snapshots(id, repository_id, commit_sha) VALUES (2, 1, 'b'), (3, 1, 'c')`); err != nil {
 		t.Fatal(err)
@@ -207,9 +206,9 @@ func TestParseResumes(t *testing.T) {
 			t.Fatalf("%.7s: status %q, %d files, analyzer %d (%v)", c.sha, status, n, version, err)
 		}
 	}
-	// Published by an older analyzer, snapshot 1 is read again in place, its unchanged chunks keeping their vectors; a file the commit lacks is dropped.
 	if _, err := db.Exec(`UPDATE snapshots SET status = 'ready', analyzer = 0 WHERE id = 1; UPDATE symbols SET name = 'stale' WHERE snapshot_id = 1;
 		INSERT INTO chunk_embeddings(chunk_id, model, dimension, embedding) SELECT id, 'm', 1, x'0000803f' FROM chunks WHERE snapshot_id = 1;
+		INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name) VALUES (1, 'gone.go', 3, 5, 'gone.Gone', 'Gone'), (1, 'a.go', 3, 5, 'a.A', 'A'), (2, 'gone.go', 3, 5, 'gone.Gone', 'Gone');
 		INSERT INTO source_files(snapshot_id, path, language, content_hash, size, line_count) SELECT 1, 'gone.go', language, content_hash, size, line_count FROM source_files WHERE snapshot_id = 1 LIMIT 1`); err != nil {
 		t.Fatal(err)
 	}
@@ -220,9 +219,10 @@ func TestParseResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stale, vectors int
-	db.QueryRow(`SELECT (SELECT count(*) FROM symbols WHERE snapshot_id = 1 AND name = 'stale'), (SELECT count(*) FROM chunk_embeddings e JOIN chunks c ON c.id = e.chunk_id WHERE c.snapshot_id = 1)`).Scan(&stale, &vectors)
-	if f, c := count(); f != 2 || c != chunks || stale != 0 || vectors != chunks {
-		t.Fatalf("read again: %d files, %d chunks, %d stale symbols, %d vectors; want 2, %d, 0, %[5]d", f, c, stale, vectors, chunks)
+	var scip string
+	db.QueryRow(`SELECT (SELECT count(*) FROM symbols WHERE snapshot_id = 1 AND name = 'stale'), (SELECT count(*) FROM chunk_embeddings e JOIN chunks c ON c.id = e.chunk_id WHERE c.snapshot_id = 1), (SELECT group_concat(path ORDER BY snapshot_id, path) FROM scip_occurrences)`).Scan(&stale, &vectors, &scip)
+	if f, c := count(); f != 2 || c != chunks || stale != 0 || vectors != chunks || scip != "a.go,gone.go" {
+		t.Fatalf("read again: %d files, %d chunks, %d stale symbols, %d vectors, SCIP %q; want 2, %d, 0, %[6]d, a.go,gone.go", f, c, stale, vectors, scip, chunks)
 	}
 }
 

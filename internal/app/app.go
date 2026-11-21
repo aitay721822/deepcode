@@ -69,8 +69,9 @@ type App struct {
 	pipeline pipeline
 }
 
-func ImportSCIP(ctx context.Context, db *sql.DB, manifest, index io.Reader) (int, error) {
-	return scipimport.Import(ctx, &indexstore.Store{DB: db}, manifest, index)
+func ImportSCIP(ctx context.Context, db *sql.DB, dataDir string, manifest, index io.Reader) (int, error) {
+	gitc := &git.Client{Dir: filepath.Join(dataDir, "repos")}
+	return scipimport.Import(ctx, &indexstore.Store{DB: db}, gitc, manifest, index)
 }
 
 // New wires the application around db and creates the first administrator

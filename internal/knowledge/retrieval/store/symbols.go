@@ -306,15 +306,15 @@ func (s *Store) SCIPUsers(ctx context.Context, snapshot int64, name, path string
 		WHERE o.snapshot_id = ?1 AND o.path = ?2 AND o.line = ?3 AND o.definition_name = ?4 AND o.definition_name <> ''
 		HAVING count(DISTINCT o.symbol) = 1
 	), refs AS (
-		SELECT c.id, min(r.line) AS line FROM definition d
-		LEFT JOIN scip_occurrences r ON r.snapshot_id = ?1 AND r.symbol = d.symbol AND r.definition_name = ''
-		LEFT JOIN chunks c ON c.snapshot_id = r.snapshot_id AND c.path = r.path AND r.line BETWEEN c.start_line AND c.end_line
-		GROUP BY c.id
-		ORDER BY c.id IS NULL, min(r.path), line, c.id LIMIT ?5
+		SELECT min(c.id) AS id, r.path, r.line FROM definition d
+		JOIN scip_occurrences r ON r.snapshot_id = ?1 AND r.symbol = d.symbol AND r.definition_name = ''
+		JOIN chunks c ON c.snapshot_id = r.snapshot_id AND c.path = r.path AND r.line BETWEEN c.start_line AND c.end_line
+		GROUP BY r.path, r.line
+		ORDER BY r.path, r.line LIMIT ?5
 	)
 	SELECT refs.id, c.path, c.symbol_name, c.start_line, c.end_line, c.content, refs.line
-	FROM refs LEFT JOIN chunks c ON c.id = refs.id
-	ORDER BY refs.id IS NULL, c.path, refs.line, refs.id`, snapshot, path, line, name, limit)
+	FROM definition LEFT JOIN refs ON true LEFT JOIN chunks c ON c.id = refs.id
+	ORDER BY refs.path, refs.line`, snapshot, path, line, name, limit)
 	if err != nil {
 		return nil, false, err
 	}

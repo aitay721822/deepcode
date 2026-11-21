@@ -82,12 +82,19 @@ func importSCIPCmd() *cobra.Command {
 		}
 		defer index.Close()
 
-		db, err := openData(*data)
+		dir := *data
+		if dir == "" {
+			dir, err = config.DataDir()
+			if err != nil {
+				return err
+			}
+		}
+		db, err := openData(dir)
 		if err != nil {
 			return err
 		}
 		defer db.Close()
-		count, err := app.ImportSCIP(cmd.Context(), db, manifest, index)
+		count, err := app.ImportSCIP(cmd.Context(), db, dir, manifest, index)
 		if err != nil {
 			return err
 		}

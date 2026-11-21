@@ -12,6 +12,7 @@ import (
 	"go/token"
 	"io"
 	"io/fs"
+	"path"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -19,6 +20,7 @@ import (
 	"github.com/scip-code/scip/bindings/go/scip"
 	"google.golang.org/protobuf/proto"
 
+	"deepcode/internal/repo/git"
 	"deepcode/internal/repo/index/indexer/store"
 )
 
@@ -33,6 +35,7 @@ const (
 type manifest struct {
 	Repository string            `json:"repository"`
 	Commit     string            `json:"commit"`
+	ModuleRoot string            `json:"module_root"`
 	IndexSHA   string            `json:"index_sha256"`
 	Files      map[string]string `json:"files"`
 }
@@ -40,7 +43,7 @@ type manifest struct {
 // Import checks an artifact against a ready snapshot and publishes it without
 // changing the snapshot's base index. The input must come from a trusted CI
 // job: hashes detect inconsistent inputs but cannot attest to their origin.
-func Import(ctx context.Context, s *store.Store, manifestFile, indexFile io.Reader) (int, error) {
+func Import(ctx context.Context, s *store.Store, gitc *git.Client, manifestFile, indexFile io.Reader) (int, error) {
 	raw, err := bounded(manifestFile, maxManifest)
 	if err != nil {
 		return 0, fmt.Errorf("read SCIP manifest: %w", err)
@@ -52,7 +55,10 @@ func Import(ctx context.Context, s *store.Store, manifestFile, indexFile io.Read
 	if m.Repository == "" || !oid(m.Commit) || len(m.Files) == 0 {
 		return 0, errors.New("SCIP manifest requires repository, full commit SHA, and Git blob hashes")
 	}
-	snapshot, err := s.SCIPSnapshot(ctx, m.Repository, m.Commit)
+	if m.ModuleRoot != "" && !validPath(m.ModuleRoot) {
+		return 0, errors.New("SCIP module_root must be a repository-relative directory")
+	}
+	snapshot, repoID, err := s.SCIPSnapshot(ctx, m.Repository, m.Commit)
 	if err != nil {
 		return 0, err
 	}
@@ -78,33 +84,51 @@ func Import(ctx context.Context, s *store.Store, manifestFile, indexFile io.Read
 	var rows []store.SCIPOccurrence
 	var occurrences int
 	symbols := make(map[string]bool)
+	var blobs map[string]string
 	for _, doc := range idx.Documents {
-		path := doc.GetRelativePath()
-		if !validPath(path) || paths[path] || !oid(m.Files[path]) {
-			return 0, fmt.Errorf("invalid, duplicate, or unlisted SCIP document path %q", path)
+		rel := doc.GetRelativePath()
+		name := path.Join(m.ModuleRoot, rel)
+		if !validPath(rel) || !strings.HasSuffix(rel, ".go") || paths[name] || !oid(m.Files[name]) {
+			return 0, fmt.Errorf("invalid, duplicate, or unlisted SCIP document path %q", rel)
 		}
-		paths[path] = true
+		paths[name] = true
 		occurrences += len(doc.Occurrences)
 		if occurrences > maxOccurrences {
 			return 0, fmt.Errorf("SCIP index exceeds %d occurrences", maxOccurrences)
 		}
 		if doc.GetLanguage() != "go" || doc.GetPositionEncoding() != scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart {
-			return 0, fmt.Errorf("SCIP document %q must use Go and UTF-8 byte offsets", path)
+			return 0, fmt.Errorf("SCIP document %q must use Go and UTF-8 byte offsets", name)
 		}
-		source, err := s.SCIPSource(ctx, snapshot, path, m.Files[path])
+		source, indexed, err := s.SCIPSource(ctx, snapshot, name, m.Files[name])
 		if err != nil {
 			return 0, err
 		}
-		if doc.Text != "" && strings.ReplaceAll(doc.Text, "\r\n", "\n") != source {
-			return 0, fmt.Errorf("SCIP document %q text differs from the snapshot", path)
+		if !indexed {
+			if blobs == nil {
+				tree, err := gitc.CachedTree(ctx, repoID, m.Commit)
+				if err != nil {
+					return 0, fmt.Errorf("cannot verify unindexed SCIP documents against the cached commit: %w", err)
+				}
+				blobs = make(map[string]string, len(tree))
+				for _, entry := range tree {
+					blobs[entry.Path] = entry.SHA
+				}
+			}
+			if blobs[name] != m.Files[name] {
+				return 0, fmt.Errorf("SCIP document %q does not match a Go blob in the commit", name)
+			}
+			continue // The commit matches, but there is no base evidence for this file.
 		}
-		rows, err = appendDocument(rows, doc, strings.Split(source, "\n"), symbols)
+		if doc.Text != "" && strings.ReplaceAll(doc.Text, "\r\n", "\n") != source {
+			return 0, fmt.Errorf("SCIP document %q text differs from the snapshot", name)
+		}
+		rows, err = appendDocument(rows, name, doc, strings.Split(source, "\n"), symbols)
 		if err != nil {
 			return 0, err
 		}
 	}
 	if len(rows) == 0 {
-		return 0, errors.New("SCIP index contains no global symbol occurrences")
+		return 0, errors.New("SCIP index contains no global symbol occurrences in snapshot files")
 	}
 	if err := s.ReplaceSCIP(ctx, snapshot, rows); err != nil {
 		return 0, err
@@ -112,7 +136,7 @@ func Import(ctx context.Context, s *store.Store, manifestFile, indexFile io.Read
 	return len(rows), nil
 }
 
-func appendDocument(rows []store.SCIPOccurrence, doc *scip.Document, lines []string, symbols map[string]bool) ([]store.SCIPOccurrence, error) {
+func appendDocument(rows []store.SCIPOccurrence, name string, doc *scip.Document, lines []string, symbols map[string]bool) ([]store.SCIPOccurrence, error) {
 	for _, occ := range doc.Occurrences {
 		if occ.GetSymbol() == "" || !scip.IsGlobalSymbol(occ.Symbol) {
 			continue
@@ -120,18 +144,18 @@ func appendDocument(rows []store.SCIPOccurrence, doc *scip.Document, lines []str
 		r, ok := occ.SourceRange()
 		if !ok || !validPosition(lines, r.Start) || !validPosition(lines, r.End) ||
 			r.End.Line < r.Start.Line || r.End.Line == r.Start.Line && r.End.Character <= r.Start.Character {
-			return nil, fmt.Errorf("invalid SCIP source range in %q", doc.RelativePath)
+			return nil, fmt.Errorf("invalid SCIP source range in %q", name)
 		}
 		if !symbols[occ.Symbol] {
 			if len(occ.Symbol) > maxSymbol {
-				return nil, fmt.Errorf("oversized SCIP symbol in %q", doc.RelativePath)
+				return nil, fmt.Errorf("oversized SCIP symbol in %q", name)
 			}
 			if _, err := scip.ParseSymbol(occ.Symbol); err != nil {
-				return nil, fmt.Errorf("invalid SCIP symbol in %q: %w", doc.RelativePath, err)
+				return nil, fmt.Errorf("invalid SCIP symbol in %q: %w", name, err)
 			}
 			symbols[occ.Symbol] = true
 		}
-		row := store.SCIPOccurrence{Path: doc.RelativePath, Line: int(r.Start.Line) + 1, ByteColumn: int(r.Start.Character), Symbol: occ.Symbol}
+		row := store.SCIPOccurrence{Path: name, Line: int(r.Start.Line) + 1, ByteColumn: int(r.Start.Character), Symbol: occ.Symbol}
 		if occ.SymbolRoles&int32(scip.SymbolRole_Definition) != 0 {
 			if r.Start.Line != r.End.Line {
 				continue // The pilot selects declarations by the identifier token.
@@ -147,7 +171,7 @@ func appendDocument(rows []store.SCIPOccurrence, doc *scip.Document, lines []str
 }
 
 func validPath(p string) bool {
-	return p != "." && fs.ValidPath(p) && strings.HasSuffix(p, ".go") && !strings.ContainsAny(p, "\\:") &&
+	return p != "." && fs.ValidPath(p) && !strings.ContainsAny(p, "\\:") &&
 		!strings.ContainsFunc(p, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) })
 }
 

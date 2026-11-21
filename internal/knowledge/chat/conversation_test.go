@@ -22,6 +22,84 @@ import (
 	"deepcode/internal/repo/catalog"
 )
 
+func TestAskSCIPContext(t *testing.T) {
+	db, err := storage.Open(t.Context(), filepath.Join(t.TempDir(), "chat.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`
+		INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x');
+		INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r');
+		INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready');
+		UPDATE repositories SET ready_snapshot_id = 1;
+		INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash)
+			VALUES (1, 'main.go', 9, 11, 'alpha.Resolve()' || char(10) || 'beta.Resolve()' || char(10) || 'alpha.Resolve()', 'h');
+		INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name) VALUES
+			(1, 'alpha.go', 3, 5, 'alpha.Resolve', 'Resolve'), (1, 'main.go', 9, 6, 'alpha.Resolve', ''),
+			(1, 'main.go', 10, 5, 'beta.Resolve', ''), (1, 'main.go', 11, 6, 'alpha.Resolve', ''),
+			(1, 'alpha.go', 4, 5, 'alpha.Unused', 'Unused');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, args, question string
+		want                 []string
+	}{
+		{"two exact lines in one source chunk", `{"name":"Resolve","path":"alpha.go","line":3}`, "where is Resolve called?",
+			[]string{`"alpha.go":3`, `"main.go":9`, `"main.go":11`}},
+		{"no indexed references", `{"name":"Unused","path":"alpha.go","line":4}`, "zzzz qqqq",
+			[]string{`"alpha.go":4`, "No SCIP-indexed references", "may not cover"}},
+		{"fallback", `{"name":"Resolve","path":"alpha.go","line":99}`, "where is Resolve called?",
+			[]string{`"alpha.go":99`, "name-based search", "not verified"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			final := make(chan string, 1)
+			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Messages []ai.Message `json:"messages"`
+					Tools    []any        `json:"tools"`
+				}
+				json.NewDecoder(r.Body).Decode(&body)
+				if len(body.Tools) > 0 {
+					if slices.ContainsFunc(body.Messages, func(m ai.Message) bool { return m.Role == "tool" }) {
+						gathered(w, "")
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprintf(w, `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"users_at","arguments":%s}}]}}]}`, fmt.Sprintf("%q", tc.args))
+					return
+				}
+				if strings.HasPrefix(body.Messages[0].Content, "You are deepcode") {
+					final <- body.Messages[len(body.Messages)-1].Content
+				}
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			}))
+			defer model.Close()
+			s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m"})
+			if err := s.Ask(t.Context(), Request{RepoID: 1, Question: tc.question, UserID: 1}, func(string, any) {}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case prompt := <-final:
+				_, notes, _ := strings.Cut(prompt, "SCIP reference lookups:\n")
+				notes, _, _ = strings.Cut(notes, "\n\n")
+				for _, want := range tc.want {
+					if !strings.Contains(notes, want) {
+						t.Errorf("SCIP context missing %q: %q", want, notes)
+					}
+				}
+				if strings.Contains(notes, `"main.go":10`) {
+					t.Errorf("unrelated reference in SCIP context: %q", notes)
+				}
+				t.Logf("final answer received: %s", notes)
+			default:
+				t.Fatal("final model request missing")
+			}
+		})
+	}
+}
+
 // TestOpenOwnConversation: a conversation is continued only by its owner and only in its repository;
 // to anyone else it does not exist. Its history, and the summary of what does not fit the model's context.
 func TestOpenOwnConversation(t *testing.T) {
