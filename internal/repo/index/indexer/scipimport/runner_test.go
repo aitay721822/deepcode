@@ -79,6 +79,38 @@ func TestBytePosition(t *testing.T) {
 	}
 }
 
+func TestJavaSyntheticConstructors(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		symbol         string
+		start, end     int32
+		typeDefinition bool
+		want           int
+	}{
+		{"implicit", "Alpha#`<init>`().", 6, 11, true, 1},
+		{"explicit", "Alpha#`<init>`().", 14, 19, true, 2},
+		{"no type", "Alpha#`<init>`().", 6, 11, false, 1},
+		{"other method", "Alpha#other().", 6, 11, true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := &scip.Document{Occurrences: []*scip.Occurrence{{Symbol: "scip-java maven . . " + tc.symbol, SymbolRoles: 1, Range: []int32{0, tc.start, tc.end}}}}
+			if tc.typeDefinition {
+				doc.Occurrences = append(doc.Occurrences, &scip.Occurrence{Symbol: "scip-java maven . . Alpha#", SymbolRoles: 1, Range: []int32{0, 6, 11}})
+			}
+			rows, err := appendDocument(nil, "Alpha.java", doc, []string{"class Alpha { Alpha() {} }"}, map[string]bool{}, specs[4])
+			if err != nil || len(rows) != tc.want {
+				t.Fatalf("got %v, %v; want %d rows", rows, err, tc.want)
+			}
+		})
+	}
+	if rows, err := appendDocument(nil, "Alpha.java", &scip.Document{}, nil, map[string]bool{}, specs[4]); err != nil || len(rows) != 0 {
+		t.Fatalf("empty: %v %v", rows, err)
+	}
+	if _, err := appendDocument(nil, "Alpha.java", &scip.Document{Occurrences: []*scip.Occurrence{{Symbol: "scip-java maven . . Alpha#`<init>`().", SymbolRoles: 1, Range: []int32{0, 6, 6}}}}, []string{"class Alpha {}"}, map[string]bool{}, specs[4]); err == nil {
+		t.Fatal("invalid constructor range accepted")
+	}
+}
+
 func TestSCIPAnchorsAndIdentifiers(t *testing.T) {
 	for _, tc := range []struct {
 		name, symbol          string

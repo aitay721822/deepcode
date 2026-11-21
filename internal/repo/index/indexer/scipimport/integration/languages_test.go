@@ -26,10 +26,10 @@ import (
 )
 
 func TestAutomaticSCIPLanguages(t *testing.T) {
-	images := []string{os.Getenv("DEEPCODE_TEST_SCIP_GO_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_PYTHON_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_RUST_IMAGE")}
+	images := []string{os.Getenv("DEEPCODE_TEST_SCIP_GO_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_PYTHON_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_RUST_IMAGE"), os.Getenv("DEEPCODE_TEST_SCIP_JAVA_IMAGE")}
 	for _, image := range images {
 		if image == "" {
-			t.Skip("set DEEPCODE_TEST_SCIP_GO_IMAGE, DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE, DEEPCODE_TEST_SCIP_PYTHON_IMAGE and DEEPCODE_TEST_SCIP_RUST_IMAGE")
+			t.Skip("set all DEEPCODE_TEST_SCIP_{GO,TYPESCRIPT,PYTHON,RUST,JAVA}_IMAGE variables")
 		}
 	}
 	remote := t.TempDir()
@@ -80,6 +80,8 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 		"rust/build.rs":     "fn main() { std::fs::write(\"/tmp/deepcode-build-ran\", b\"ran\").unwrap(); panic!(\"build.rs must not run\"); }\n",
 		"rust/src/alpha.rs": "pub fn resolve() {}\n", "rust/src/beta.rs": "pub fn resolve() {}\n",
 		"rust/src/main.rs": "mod alpha;\nmod beta;\nfn main() {\n    alpha::resolve();\n    beta::resolve();\n    let _astral = \"𝒳\"; beta::resolve();\n}\n",
+		"java/Alpha.java":  "class Alpha { static void resolve() {} }\n", "java/Beta.java": "class Beta { static void resolve() {} }\n",
+		"java/caller.java": "class Caller {\n  void run() {\n    Alpha.resolve();\n    Beta.resolve();\n    String astral = \"𝒳\"; Beta.resolve();\n  }\n}\n",
 	}
 	run("init", "-q", "-b", "main")
 	for name, content := range files {
@@ -91,8 +93,13 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 	run("add", "--all")
 	run("commit", "-qm", "pinned multilingual sources")
 	sha := run("rev-parse", "HEAD")
+	write("java/caller.java", "import missing.external.Dependency;\n"+files["java/caller.java"])
+	run("add", "--", "java/caller.java")
+	run("commit", "-qm", "Java external dependency rejected")
+	brokenJava := run("rev-parse", "HEAD")
+	write("java/caller.java", files["java/caller.java"])
 	write("rust/Cargo.toml", files["rust/Cargo.toml"]+"\n[dependencies]\nserde = \"1\"\n")
-	run("add", "--", "rust/Cargo.toml")
+	run("add", "--", "rust/Cargo.toml", "java/caller.java")
 	run("commit", "-qm", "registry dependency rejected offline")
 	registry := run("rev-parse", "HEAD")
 	write("rust/Cargo.toml", files["rust/Cargo.toml"])
@@ -124,15 +131,16 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 	t.Setenv("GIT_CONFIG_KEY_0", "url."+loc+".insteadOf")
 	t.Setenv("GIT_CONFIG_VALUE_0", "https://github.com/example/main.git")
 	for _, tc := range []struct {
-		name, sha                        string
-		brokenImage                      int
-		wantGo, wantTS, wantPy, wantRust bool
+		name, sha                                  string
+		brokenImage                                int
+		wantGo, wantTS, wantPy, wantRust, wantJava bool
 	}{
-		{"all", sha, -1, true, true, true, true}, {"missing Go image", sha, 0, false, true, true, true},
-		{"missing TS image", sha, 1, true, false, true, true}, {"missing Python image", sha, 2, true, true, false, true},
-		{"missing Rust image", sha, 3, true, true, true, false}, {"registry Rust dependency", registry, -1, true, true, true, false},
-		{"missing Rust lockfile", missingLock, -1, true, true, true, false},
-		{"inferred root", inferred, -1, true, true, true, true}, {"broken TS project", broken, -1, true, false, true, true},
+		{"all", sha, -1, true, true, true, true, true}, {"missing Go image", sha, 0, false, true, true, true, true},
+		{"missing TS image", sha, 1, true, false, true, true, true}, {"missing Python image", sha, 2, true, true, false, true, true},
+		{"missing Rust image", sha, 3, true, true, true, false, true}, {"registry Rust dependency", registry, -1, true, true, true, false, true},
+		{"missing Rust lockfile", missingLock, -1, true, true, true, false, true},
+		{"inferred root", inferred, -1, true, true, true, true, true}, {"broken TS project", broken, -1, true, false, true, true, true},
+		{"broken Java compile", brokenJava, -1, true, true, true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := t.TempDir()
@@ -156,7 +164,7 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 			if tc.brokenImage >= 0 {
 				chosen[tc.brokenImage] = "deepcode-test-missing-scip-image:never-pull"
 			}
-			ix := &indexer.Indexer{Store: &store.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}, Events: bus, Git: &git.Client{Dir: data, AllowProtocol: "file"}, Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}, Limits: indexer.Limits{MaxFiles: 100, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}, SCIPImages: scipimport.Images{Go: chosen[0], TypeScript: chosen[1], Python: chosen[2], Rust: chosen[3]}}
+			ix := &indexer.Indexer{Store: &store.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}, Events: bus, Git: &git.Client{Dir: data, AllowProtocol: "file"}, Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box}, Limits: indexer.Limits{MaxFiles: 100, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}, SCIPImages: scipimport.Images{Go: chosen[0], TypeScript: chosen[1], Python: chosen[2], Rust: chosen[3], Java: chosen[4]}}
 			if err := ix.Run(t.Context(), 1, tc.sha, jobs.Progress{}); err != nil {
 				t.Fatal(err)
 			}
@@ -172,6 +180,7 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 				{"Go", "", "go", "Resolve", 3, 4, 3, tc.wantGo}, {"TypeScript", "typescript/", "ts", "resolve", 1, 5, 3, tc.wantTS},
 				{"JavaScript", "javascript/", "js", "resolve", 1, 5, 3, tc.wantTS}, {"Python", "python/", "py", "resolve", 1, 5, 3, tc.wantPy},
 				{"Rust", "rust/src/", "rs", "resolve", 1, 6, 4, tc.wantRust},
+				{"Java", "java/", "java", "resolve", 1, 5, 3, tc.wantJava},
 			} {
 				t.Run(lang.name, func(t *testing.T) {
 					caller := lang.dir + "caller." + lang.ext
@@ -183,6 +192,9 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 					}
 					for _, which := range []string{"alpha", "beta"} {
 						decl := lang.dir + which + "." + lang.ext
+						if lang.name == "Java" {
+							decl = lang.dir + strings.ToUpper(which[:1]) + which[1:] + ".java"
+						}
 						if lang.name == "Go" {
 							decl = which + "/" + decl
 						}
@@ -213,6 +225,8 @@ func TestAutomaticSCIPLanguages(t *testing.T) {
 					}
 				})
 			}
+			checkLanguageUsers(t, db, snapshot, "Alpha", "java/Alpha.java", 1, []string{"java/caller.java:3"}, tc.wantJava)
+			checkLanguageUsers(t, db, snapshot, "Beta", "java/Beta.java", 1, []string{"java/caller.java:4", "java/caller.java:5"}, tc.wantJava)
 			t.Run("TSX", func(t *testing.T) {
 				checkLanguageUsers(t, db, snapshot, "resolve", "typescript/beta.ts", 1, []string{"typescript/caller.ts:4", "typescript/caller.ts:5", "typescript/view.tsx:2"}, tc.wantTS)
 			})

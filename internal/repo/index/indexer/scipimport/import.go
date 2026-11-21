@@ -170,11 +170,37 @@ func goBlobs(tree []git.TreeEntry) map[string]string {
 }
 
 func appendDocument(rows []store.SCIPOccurrence, name string, doc *scip.Document, lines []string, symbols map[string]bool, spec languageSpec) ([]store.SCIPOccurrence, error) {
+	typeSpans := map[scip.Range]bool{}
+	if spec.syntheticConstructors {
+		for _, occ := range doc.Occurrences {
+			if occ.GetSymbolRoles()&int32(scip.SymbolRole_Definition) == 0 {
+				continue
+			}
+			symbol, err := scip.ParseSymbol(occ.GetSymbol())
+			if err != nil || len(symbol.Descriptors) == 0 {
+				continue
+			}
+			if symbol.Descriptors[len(symbol.Descriptors)-1].Suffix == scip.Descriptor_Type {
+				if r, ok := occ.SourceRange(); ok {
+					typeSpans[r] = true
+				}
+			}
+		}
+	}
 	for _, occ := range doc.Occurrences {
 		if occ.GetSymbol() == "" || !scip.IsGlobalSymbol(occ.Symbol) {
 			continue
 		}
 		r, ok := occ.SourceRange()
+		if spec.syntheticConstructors && ok && typeSpans[r] && occ.GetSymbolRoles()&int32(scip.SymbolRole_Definition) != 0 {
+			symbol, err := scip.ParseSymbol(occ.Symbol)
+			if err == nil && len(symbol.Descriptors) > 0 {
+				last := symbol.Descriptors[len(symbol.Descriptors)-1]
+				if last.Suffix == scip.Descriptor_Method && last.Name == "<init>" {
+					continue
+				}
+			}
+		}
 		if ok && moduleAnchor(occ, r, spec) {
 			continue
 		}

@@ -12,7 +12,7 @@ import (
 	"deepcode/internal/repo/git"
 )
 
-type Images struct{ Go, TypeScript, Python, Rust string }
+type Images struct{ Go, TypeScript, Python, Rust, Java string }
 
 type project struct {
 	root  string
@@ -27,6 +27,7 @@ type languageSpec struct {
 	encoding                            scip.PositionEncoding
 	utf16, anchors, deepest, allowEmpty bool
 	emptyDocuments                      bool
+	syntheticConstructors               bool
 	anchorSuffix                        scip.Descriptor_Suffix
 	anchorName                          string
 	roots                               func([]git.TreeEntry) []project
@@ -91,6 +92,27 @@ cargo metadata --offline --locked --format-version 1 > /tmp/metadata.json
 jq -e '.packages | length > 0 and all(.[]; .source == null)' /tmp/metadata.json > /dev/null || { echo 'Rust requires path-only packages' >&2; exit 1; }
 printf '%s' '{"cargo":{"buildScripts":{"enable":false,"overrideCommand":["true"]},"sysroot":null,"extraArgs":["--locked","--offline"]},"procMacro":{"enable":false}}' > /tmp/ra.json
 /usr/local/bin/rust-analyzer scip "$PWD" --config-path /tmp/ra.json --num-threads 2 --output /tmp/index.scip >&2
+cat /tmp/index.scip`,
+	},
+	{
+		name: "Java", tool: "scip-java", image: func(i Images) string { return i.Java },
+		languages: []string{"java"}, labels: map[string]string{"java": "java"}, extensions: map[string]string{".java": "java"},
+		encoding: scip.PositionEncoding_UnspecifiedPositionEncoding, utf16: true, syntheticConstructors: true,
+		roots: func(tree []git.TreeEntry) []project {
+			for _, e := range tree {
+				if strings.HasSuffix(e.Path, ".java") {
+					return []project{{}}
+				}
+			}
+			return nil
+		},
+		identifier: func(s string) bool { return identifierChars(s, true) },
+		env:        []string{"JAVA_TOOL_OPTIONS=-Duser.home=/tmp -Djava.io.tmpdir=/tmp"},
+		script: `set -eu
+mkdir /tmp/classes /tmp/shards
+find /src -mindepth 1 -type d \( -name '.*' -o -name '_*' -o -name vendor -o -name node_modules -o -name build -o -name target \) -prune -o -type f -name '*.java' -print0 | xargs -0 -r /bin/sh -c 'for source do escaped=$(printf "%s" "$source" | sed '\''s/"/\\"/g'\''); printf '\''"%s"\n'\'' "$escaped"; done' sh > /tmp/sources
+javac -proc:none -encoding UTF-8 -classpath /opt/scip-javac.jar:/opt/scip-java -J--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED -J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED -J--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED -J--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED -J--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED '-Xplugin:scip -sourceroot:/src -targetroot:/tmp/shards' -d /tmp/classes @/tmp/sources >&2
+/bin/sh /opt/scip-java aggregate --output=/tmp/index.scip /tmp/shards >&2
 cat /tmp/index.scip`,
 	},
 }
