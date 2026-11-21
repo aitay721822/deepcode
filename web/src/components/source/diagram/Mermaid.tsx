@@ -1,5 +1,5 @@
 import { Maximize2Icon, RotateCcwIcon, ZoomInIcon, ZoomOutIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { type ComponentProps, useEffect, useRef, useState } from 'react'
 import { highlight, splitHidden } from '../../../lib/style/highlight'
 import { Button } from '../../ui/controls/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../ui/overlay/dialog'
@@ -99,7 +99,6 @@ export function Mermaid({
   label?: string
   onNode?: (id: string) => void
 }) {
-  const box = useRef<HTMLDivElement>(null)
   const hides = splitHidden(code).length > 1
   const [svg, setSvg] = useState('')
   const [failed, setFailed] = useState(false)
@@ -141,20 +140,6 @@ export function Mermaid({
       clearTimeout(wait)
     }
   }, [code, theme, hides])
-  const pressable = !!onNode
-  useEffect(() => {
-    if (!pressable || !svg) return
-    for (const node of box.current?.querySelectorAll('g.node') ?? []) {
-      node.setAttribute('tabindex', '0')
-      node.setAttribute('role', 'button')
-      // Each text node apart: textContent would run a label's lines (split by <br/>) together.
-      const parts: string[] = []
-      for (const walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT); walk.nextNode(); ) {
-        parts.push(walk.currentNode.textContent ?? '')
-      }
-      node.setAttribute('aria-label', parts.join(' ').replace(/\s+/g, ' ').trim())
-    }
-  }, [svg, pressable, open])
   // A wheel listener with preventDefault must not be passive; React's onWheel is.
   useEffect(() => {
     const el = viewport.current
@@ -175,6 +160,47 @@ export function Mermaid({
   }, [open])
   const zoom = (k: number) => setView((v) => ({ ...v, s: Math.min(6, Math.max(0.3, v.s * k)) }))
   const reset = () => setView({ s: 1, x: 0, y: 0 })
+  const press = (target: EventTarget) => {
+    const id = nodeId(target)
+    if (!id || !onNode) return
+    if (open) setOpen(false)
+    onNode(id)
+  }
+  const diagramProps: ComponentProps<'div'> = {
+    ref: (el) => {
+      if (!onNode) return
+      for (const node of el?.querySelectorAll('g.node') ?? []) {
+        node.setAttribute('tabindex', '0')
+        node.setAttribute('role', 'button')
+        // Each text node apart: textContent would run a label's lines (split by <br/>) together.
+        const parts: string[] = []
+        for (const walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT); walk.nextNode(); ) {
+          parts.push(walk.currentNode.textContent ?? '')
+        }
+        node.setAttribute('aria-label', parts.join(' ').replace(/\s+/g, ' ').trim())
+      }
+    },
+    'aria-label': label,
+    className: `${open ? 'w-full origin-top-left [&_svg]:!h-auto [&_svg]:!max-w-none' : 'diagram'} ${onNode ? '[&_g.node]:cursor-pointer [&_g.node:focus-visible]:outline-2 [&_g.node:focus-visible]:outline-ring' : ''}`,
+    style: open ? { transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` } : undefined,
+    onClick: onNode ? (e) => press(e.target) : undefined,
+    onKeyDown: onNode
+      ? (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            press(e.target)
+          }
+        }
+      : undefined,
+    // draw() renders at Mermaid's strict security level, which sanitises the SVG
+    dangerouslySetInnerHTML: { __html: svg },
+  }
+  const diagram = onNode ? (
+    // biome-ignore lint/a11y/useSemanticElements: a group of buttons (the diagram's nodes), not of a form's fields
+    <div role="group" {...diagramProps} />
+  ) : (
+    <div role="img" {...diagramProps} />
+  )
   // The inline SVG goes while the dialog shows: two copies would share Mermaid's element ids.
   const expand = (
     <div className="mb-2 flex justify-end print:hidden">
@@ -218,11 +244,10 @@ export function Mermaid({
         </DialogHeader>
         <div
           ref={viewport}
-          role="img"
-          aria-label={label}
           className="relative min-h-0 flex-1 cursor-grab touch-none overflow-hidden select-none active:cursor-grabbing"
           onPointerDown={(e) => {
             if (e.button !== 0) return
+            if (onNode && nodeId(e.target)) return
             e.preventDefault()
             e.currentTarget.setPointerCapture(e.pointerId)
             drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY }
@@ -245,12 +270,7 @@ export function Mermaid({
             drag.current = null
           }}
         >
-          <div
-            className="w-full origin-top-left [&_svg]:!h-auto [&_svg]:!max-w-none"
-            style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }}
-            // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
-            dangerouslySetInnerHTML={{ __html: svg }}
-          />
+          {diagram}
         </div>
       </DialogContent>
     </Dialog>
@@ -264,43 +284,10 @@ export function Mermaid({
     )
   }
   if (!svg) return <div role="status" aria-label="正在繪製關係圖" className="diagram min-h-40 animate-pulse" />
-  if (onNode) {
-    const press = (target: EventTarget) => {
-      const id = nodeId(target)
-      if (id) onNode(id)
-    }
-    return (
-      <>
-        {expand}
-        {!open && (
-          // biome-ignore lint/a11y/useSemanticElements: a group of buttons (the diagram's nodes), not of a form's fields
-          <div
-            ref={box}
-            role="group"
-            aria-label={label}
-            className="diagram [&_g.node]:cursor-pointer [&_g.node:focus-visible]:outline-2 [&_g.node:focus-visible]:outline-ring"
-            onClick={(e) => press(e.target)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                press(e.target)
-              }
-            }}
-            // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
-            dangerouslySetInnerHTML={{ __html: svg }}
-          />
-        )}
-        {full}
-      </>
-    )
-  }
   return (
     <>
       {expand}
-      {!open && (
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
-        <div role="img" aria-label={label} className="diagram" dangerouslySetInnerHTML={{ __html: svg }} />
-      )}
+      {!open && diagram}
       {full}
     </>
   )
