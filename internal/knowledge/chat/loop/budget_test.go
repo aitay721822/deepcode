@@ -489,3 +489,12 @@ func chunkAt(t *testing.T, g Gatherer, p string) retrieval.Hit {
 	}
 	return hits[0]
 }
+
+func TestSCIPGuidanceLanguages(t *testing.T) {
+	srv, asked := model(t)
+	g, req := seed(t, srv.URL, files, `INSERT INTO scip_occurrences(snapshot_id,path,line,byte_column,symbol,definition_name) VALUES(1,'src/handler.go',3,5,'handler','Handler')`)
+	g.Gather(t.Context(), req, func(string, any) {})
+	if got := asked()[0][0]["content"].(string); !strings.Contains(got, "Go, JavaScript, TypeScript, TSX, Python, Rust, Java and C#") || !strings.Contains(usersAtTool.Description, "Go, JavaScript, TypeScript, TSX, Python, Rust, Java and C#") {
+		t.Fatal(got, usersAtTool.Description)
+	}
+}

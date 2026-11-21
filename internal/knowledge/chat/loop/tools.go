@@ -18,12 +18,13 @@ import (
 )
 
 const (
-	searchHits   = 8   // chunks a search_code call returns
-	prefixPool   = 25  // chunks searched for one under a folder, which it keeps searchHits of
-	previewLines = 12  // lines of each chunk a search_code or users result shows
-	maxRead      = 200 // lines one read_file call reads
-	userHits     = 4   // chunks a users call returns
-	maxLine      = 400 // bytes of a line a tool result shows
+	searchHits    = 8   // chunks a search_code call returns
+	prefixPool    = 25  // chunks searched for one under a folder, which it keeps searchHits of
+	previewLines  = 12  // lines of each chunk a search_code or users result shows
+	maxRead       = 200 // lines one read_file call reads
+	userHits      = 4   // chunks a users call returns
+	maxLine       = 400 // bytes of a line a tool result shows
+	scipLanguages = "Go, JavaScript, TypeScript, TSX, Python, Rust, Java and C#"
 )
 
 type (
@@ -39,13 +40,20 @@ type (
 	usersArgs struct {
 		Name string `json:"name" jsonschema_description:"a type, function or event, as the code spells it"`
 	}
+	usersAtArgs struct {
+		Name string `json:"name" jsonschema_description:"the declaration's identifier, as the code spells it"`
+		Path string `json:"path" jsonschema_description:"repository-relative path of the SCIP-indexed declaration"`
+		Line int    `json:"line" jsonschema_description:"1-based line of the declaration identifier"`
+	}
 )
 
 var (
-	searchFormat = ai.Schema[searchArgs]("search_code")
-	readFormat   = ai.Schema[readArgs]("read_file")
-	usersFormat  = ai.Schema[usersArgs]("users")
-	tools        = []ai.Tool{
+	searchFormat  = ai.Schema[searchArgs]("search_code")
+	readFormat    = ai.Schema[readArgs]("read_file")
+	usersFormat   = ai.Schema[usersArgs]("users")
+	usersAtFormat = ai.Schema[usersAtArgs]("users_at")
+	usersAtTool   = usersAtFormat.Tool(fmt.Sprintf("Find a sample of up to %d exact reference lines for a specific SCIP-indexed declaration in %s. Prefer this to users when its path and line are known, especially for shared names. If no exact index match is available, results are labeled as name-based.", userHits, scipLanguages))
+	tools         = []ai.Tool{
 		searchFormat.Tool(fmt.Sprintf("Search the repository's code by words and identifiers. Returns up to %d chunks: their path, lines and symbol, and their first %d lines.", searchHits, previewLines)),
 		readFormat.Tool(fmt.Sprintf("Read lines of one of the repository's files, numbered: at most %d a call.", maxRead)),
 		usersFormat.Tool(fmt.Sprintf("Find the code that uses a type, function or event: up to %d chunks of the files that import its definition and name it, such as its callers, handlers or publishers.", userHits)),
@@ -77,9 +85,13 @@ func (s *state) run(ctx context.Context, call ai.ToolCall, emit Emit) (string, b
 		var a usersArgs
 		a, err = ai.Decode(usersFormat, call.Arguments)
 		args, do = a, func() (string, []retrieval.Hit, error) { return s.usersOf(ctx, a) }
+	case usersAtFormat.Name:
+		var a usersAtArgs
+		a, err = ai.Decode(usersAtFormat, call.Arguments)
+		args, do = a, func() (string, []retrieval.Hit, error) { return s.usersAt(ctx, a) }
 	default:
 		s.res.Calls["unknown"]++ // the model's word, which no report should carry
-		return fmt.Sprintf("Error: there is no tool %q. The tools are search_code, read_file, users and done.", call.Name), false
+		return fmt.Sprintf("Error: there is no tool %q. Use a tool from the request.", call.Name), false
 	}
 	s.res.Calls[call.Name]++
 	if err != nil {
@@ -266,6 +278,56 @@ func (s *state) usersOf(ctx context.Context, a usersArgs) (string, []retrieval.H
 			a.Name, twin[0].Base, strings.Join(where, ", "))
 	}
 	return text, hits, nil
+}
+
+func (s *state) usersAt(ctx context.Context, a usersAtArgs) (string, []retrieval.Hit, error) {
+	at := retrieval.Anchor{Path: a.Path, Line: a.Line}
+	refs, found, err := s.g.Retriever.SCIPUsers(ctx, s.req.Snapshot.ID, a.Name, at, userHits+1)
+	if err != nil {
+		return "", nil, err
+	}
+	note := scipLookup{anchor: fmt.Sprintf("For %q at %q:%d: ", a.Name, a.Path, a.Line)}
+	if !found {
+		text, hits, err := s.usersOf(ctx, usersArgs{Name: a.Name})
+		if err == nil {
+			note.verdict = "No exact SCIP declaration match; name-based search results are not verified references to this declaration."
+			s.res.scip = append(s.res.scip, note)
+		}
+		return "No exact SCIP declaration match; results use the name, not the selected declaration.\n" + text, hits, err
+	}
+	if len(refs) == 0 {
+		note.verdict = "No SCIP-indexed references to that declaration. The index may not cover the whole repository."
+		s.res.scip = append(s.res.scip, note)
+		return note.verdict + "\n", nil, nil
+	}
+	var b strings.Builder
+	note.verdict = "Verified SCIP reference lines found."
+	if len(refs) > userHits {
+		refs = refs[:userHits]
+		const sample = "More indexed references exist; this is a sample."
+		b.WriteString(sample + "\n")
+		note.verdict += " " + sample
+	}
+	s.res.Graph += len(refs)
+	b.WriteString("References to that declaration in SCIP-indexed files:\n")
+	hits := make([]retrieval.Hit, 0, len(refs))
+	byPath := make(map[string]int, len(refs))
+	for _, ref := range refs {
+		hits = append(hits, ref.Hit)
+		if i, ok := byPath[ref.Path]; ok {
+			note.locations[i] += fmt.Sprintf(", %d", ref.ReferenceLine)
+		} else {
+			byPath[ref.Path] = len(note.locations)
+			note.locations = append(note.locations, fmt.Sprintf("%q:%d", ref.Path, ref.ReferenceLine))
+		}
+		lines := strings.Split(ref.Content, "\n")
+		fmt.Fprintf(&b, "%s:%d\n", ref.Path, ref.ReferenceLine)
+		if i := ref.ReferenceLine - ref.StartLine; i >= 0 && i < len(lines) {
+			fmt.Fprintf(&b, "   %s\n", clip(lines[i]))
+		}
+	}
+	s.res.scip = append(s.res.scip, note)
+	return b.String(), hits, nil
 }
 
 // list shows hits as a search result: each one's path, lines and symbol,

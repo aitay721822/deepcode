@@ -51,6 +51,7 @@ export type SearchStep =
   | { round: number; tool: 'search_code'; args: { query: string; path_prefix: string } }
   | { round: number; tool: 'read_file'; args: { path: string; start_line: number; end_line: number } }
   | { round: number; tool: 'users'; args: { name: string } }
+  | { round: number; tool: 'users_at'; args: { name: string; path: string; line: number } }
 
 /** What made a request smaller to fit the model's context: earlier search results masked, or earlier turns summed up. */
 export type CompactStep = { masked: number } | { summarized: number }

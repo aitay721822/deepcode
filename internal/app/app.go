@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -54,6 +55,7 @@ import (
 	"deepcode/internal/repo/index/graph"
 	graphstore "deepcode/internal/repo/index/graphstore"
 	"deepcode/internal/repo/index/indexer"
+	"deepcode/internal/repo/index/indexer/scipimport"
 	indexstore "deepcode/internal/repo/index/indexer/store"
 	"deepcode/internal/repo/index/indexer/vectorstore"
 )
@@ -65,6 +67,11 @@ type App struct {
 	queue    *jobs.Queue
 	workers  int
 	pipeline pipeline
+}
+
+func ImportSCIP(ctx context.Context, db *sql.DB, dataDir string, manifest, index io.Reader) (int, error) {
+	gitc := &git.Client{Dir: filepath.Join(dataDir, "repos")}
+	return scipimport.Import(ctx, &indexstore.Store{DB: db}, gitc, manifest, index)
 }
 
 // New wires the application around db and creates the first administrator
@@ -117,6 +124,7 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	p := pipeline{queue: queue, catalog: cat, syncEvery: cfg.SyncEvery, indexer: &indexer.Indexer{
 		Store: &indexstore.Store{DB: db}, Graph: graphs,
 		Git: gitc, Servers: servers, Embed: embedP, Vectors: vectors, Events: bus,
+		SCIPImages: scipimport.Images{Go: cfg.SCIPGoImage, TypeScript: cfg.SCIPTypeScriptImage, Python: cfg.SCIPPythonImage, Rust: cfg.SCIPRustImage, Java: cfg.SCIPJavaImage, CSharp: cfg.SCIPCSharpImage},
 		Limits: indexer.Limits{
 			MaxFiles:      cfg.MaxFiles,
 			MaxFileBytes:  int64(cfg.MaxFileKB) << 10,

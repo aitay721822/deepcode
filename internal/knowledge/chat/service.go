@@ -202,7 +202,25 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	// Fitted, and once more after a refusal as too long that said by how much
 	// (harness.Learn).
 	for retried := false; ; retried = true {
-		parts, err := s.fit(ctx, a, gathered)
+		final := a
+		var scip string
+		budget := 0
+		if !req.Codemap {
+			budget = 2048
+			if window := a.fit.Context(); window > 0 {
+				budget = min(budget, window/8)
+			}
+		}
+		var parts fitted
+		for {
+			scip = got.SCIPContext(budget)
+			final.fixed = a.fixed + a.fit.Count(scip)
+			parts, err = s.fit(ctx, final, gathered)
+			if scip == "" || !errors.As(err, new(*harness.ErrSmall)) {
+				break
+			}
+			budget /= 2
+		}
 		if err != nil {
 			return err
 		}
@@ -213,19 +231,19 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 			m.History, m.Background, m.Sources, m.Hits = parts.history, parts.background, sources, used
 			err = s.drawMap(ctx, conv.id, m, link, emit)
 		} else {
-			err = s.answer(ctx, conv.id, prompt(repo, sha, parts.history, parts.background, sources, q, lang), used, lang, link, emit)
+			err = s.answer(ctx, conv.id, prompt(repo, sha, parts.history, parts.background+scip, sources, q, lang), used, scip != "", lang, link, emit)
 		}
-		if err == nil || retried || !a.fit.Learn(err, a.tokens(parts, tokens)) {
+		if err == nil || retried || !a.fit.Learn(err, final.tokens(parts, tokens)) {
 			return err
 		}
 	}
 }
 
 // answer streams the model's answer to p, written from used, and stores it
-// with its citations linked; with no evidence it says so without the model.
-func (s *Service) answer(ctx context.Context, conv int64, p ai.Prompt, used []retrieval.Hit, lang string, link func(evidence.Citation) string, emit Emit) error {
+// with its citations linked; with neither code nor a SCIP result it says so without the model.
+func (s *Service) answer(ctx context.Context, conv int64, p ai.Prompt, used []retrieval.Hit, hasLookup bool, lang string, link func(evidence.Citation) string, emit Emit) error {
 	answer := noEvidence(lang)
-	if len(used) == 0 {
+	if len(used) == 0 && !hasLookup {
 		emit("delta", answer)
 	} else if reply, err := ai.Stream(ctx, s.Chat, p, func(d string) { emit("delta", d) }); err != nil {
 		return fmt.Errorf("%w: %w", errModel, err)

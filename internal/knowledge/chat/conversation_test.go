@@ -22,6 +22,118 @@ import (
 	"deepcode/internal/repo/catalog"
 )
 
+func TestAskSCIPContext(t *testing.T) {
+	db, err := storage.Open(t.Context(), filepath.Join(t.TempDir(), "chat.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`
+		INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x');
+		INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r');
+		INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready');
+		UPDATE repositories SET ready_snapshot_id = 1;
+		INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash)
+			VALUES (1, 'main.go', 9, 11, 'alpha.Resolve()' || char(10) || 'beta.Resolve()' || char(10) || 'alpha.Resolve()', 'h');
+		INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name) VALUES
+			(1, 'alpha.go', 3, 5, 'alpha.Resolve', 'Resolve'), (1, 'main.go', 9, 6, 'alpha.Resolve', ''),
+			(1, 'main.go', 10, 5, 'beta.Resolve', ''), (1, 'main.go', 11, 6, 'alpha.Resolve', ''),
+			(1, 'alpha.go', 4, 5, 'alpha.Unused', 'Unused');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		path := fmt.Sprintf("pkg/%s/%d/main.go", strings.Repeat("long-directory/", 15), i)
+		_, err := db.Exec(`
+			INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash)
+				VALUES (1, ?1, 1, 4, 'Busy()' || char(10) || 'Busy()' || char(10) || 'Busy()' || char(10) || 'Busy()', 'h');
+			INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name) VALUES
+				(1, ?1, 1, 0, 'alpha.Busy', ''), (1, ?1, 2, 0, 'alpha.Busy', ''),
+				(1, ?1, 3, 0, 'alpha.Busy', ''), (1, ?1, 4, 0, 'alpha.Busy', '');`, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name) VALUES
+		(1, 'alpha.go', 5, 5, 'alpha.Busy', 'Busy');`); err != nil {
+		t.Fatal(err)
+	}
+	exact := `{"name":"Resolve","path":"alpha.go","line":3}`
+	empty := `{"name":"Unused","path":"alpha.go","line":4}`
+	fallback := `{"name":"Resolve","path":"alpha.go","line":99}`
+	busy := `{"name":"Busy","path":"alpha.go","line":5}`
+	for _, tc := range []struct {
+		name, question string
+		args, want     []string
+		context        int
+	}{
+		{"two exact lines in one source chunk", "where is Resolve called?", []string{exact},
+			[]string{`"alpha.go":3`, `"main.go":9, 11`}, 0},
+		{"no indexed references", "zzzz qqqq", []string{empty},
+			[]string{`"alpha.go":4`, "No SCIP-indexed references", "may not cover"}, 0},
+		{"fallback", "where is Resolve called?", []string{fallback},
+			[]string{`"alpha.go":99`, "name-based search", "not verified"}, 0},
+		{"sample spans multiple chunks", "where is Busy called?", []string{busy},
+			[]string{`"alpha.go":5`, `/0/main.go":1, 2`, `/1/main.go":1`, `/2/main.go":1`, "More indexed references exist"}, 0},
+		{"bounded context preserves verdicts", "where are Busy and Resolve called?", []string{busy, empty, exact, fallback},
+			[]string{`"alpha.go":5`, `"alpha.go":4`, `"alpha.go":3`, `"alpha.go":99`, "not verified", "Some SCIP lookups or locations were omitted"}, 8192},
+		{"retry with smaller lookup budget", "where is Resolve called?", []string{exact},
+			[]string{"Some SCIP lookups or locations were omitted", "Do not treat other lines as SCIP-verified"}, 4000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			final := make(chan string, 1)
+			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Messages []ai.Message `json:"messages"`
+					Tools    []any        `json:"tools"`
+				}
+				json.NewDecoder(r.Body).Decode(&body)
+				if len(body.Tools) > 0 {
+					if slices.ContainsFunc(body.Messages, func(m ai.Message) bool { return m.Role == "tool" }) {
+						gathered(w, "")
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					var calls []string
+					for i, arg := range tc.args {
+						calls = append(calls, fmt.Sprintf(`{"id":"c%d","type":"function","function":{"name":"users_at","arguments":%q}}`, i, arg))
+					}
+					fmt.Fprintf(w, `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[%s]}}]}`, strings.Join(calls, ","))
+					return
+				}
+				if strings.HasPrefix(body.Messages[0].Content, "You are deepcode") {
+					final <- body.Messages[len(body.Messages)-1].Content
+				}
+				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			}))
+			defer model.Close()
+			s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m", Context: tc.context, MaxTokens: 512})
+			if err := s.Ask(t.Context(), Request{RepoID: 1, Question: tc.question, UserID: 1}, func(string, any) {}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case prompt := <-final:
+				_, notes, ok := strings.Cut(prompt, "SCIP reference lookups:\n")
+				if !ok {
+					_, notes, _ = strings.Cut(prompt, "\n\n")
+				}
+				notes, _, _ = strings.Cut(notes, "\n\n")
+				for _, want := range tc.want {
+					if !strings.Contains(notes, want) {
+						t.Errorf("SCIP context missing %q: %q", want, notes)
+					}
+				}
+				if strings.Contains(notes, `"main.go":10`) {
+					t.Errorf("unrelated reference in SCIP context: %q", notes)
+				}
+				t.Logf("final answer received: %s", notes)
+			default:
+				t.Fatal("final model request missing")
+			}
+		})
+	}
+}
+
 // TestOpenOwnConversation: a conversation is continued only by its owner and only in its repository;
 // to anyone else it does not exist. Its history, and the summary of what does not fit the model's context.
 func TestOpenOwnConversation(t *testing.T) {
