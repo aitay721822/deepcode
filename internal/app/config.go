@@ -44,6 +44,7 @@ type Config struct {
 	SCIPGoImage         string // local image for isolated Go SCIP indexing; "" disables it
 	SCIPTypeScriptImage string
 	SCIPPythonImage     string
+	SCIPRustImage       string
 
 	WikiLanguage string
 	WikiParallel int    // pages planned or written at a time

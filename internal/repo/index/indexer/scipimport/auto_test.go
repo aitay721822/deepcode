@@ -20,6 +20,7 @@ import (
 	"deepcode/internal/repo/index/graph"
 	graphstore "deepcode/internal/repo/index/graphstore"
 	"deepcode/internal/repo/index/indexer"
+	"deepcode/internal/repo/index/indexer/scipimport"
 	"deepcode/internal/repo/index/indexer/store"
 )
 
@@ -100,7 +101,7 @@ func TestAutomaticSCIP(t *testing.T) {
 			ix := &indexer.Indexer{
 				Store: &store.Store{DB: db}, Graph: &graph.Graph{Store: &graphstore.Store{DB: db}}, Events: bus,
 				Git: &git.Client{Dir: data, AllowProtocol: "file"}, Servers: &gitserver.Service{Store: &serverstore.Store{DB: db}, Box: box},
-				Limits: indexer.Limits{MaxFiles: 100, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}, SCIPGoImage: tc.image,
+				Limits: indexer.Limits{MaxFiles: 100, MaxFileBytes: 1 << 20, MaxTotalBytes: 1 << 20}, SCIPImages: scipimport.Images{Go: tc.image},
 			}
 			if err := ix.Run(ctx, 1, sha, jobs.Progress{}); err != nil {
 				t.Fatal(err)

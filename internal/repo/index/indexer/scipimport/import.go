@@ -110,7 +110,7 @@ func readLanguageIndex(ctx context.Context, s *store.Store, snapshot int64, modu
 	if idx.GetMetadata().GetToolInfo().GetName() != spec.tool || idx.GetMetadata().GetTextDocumentEncoding() != scip.TextEncoding_UTF8 {
 		return nil, fmt.Errorf("SCIP requires UTF-8 indexes from %s", spec.tool)
 	}
-	if len(idx.Documents) == 0 || len(idx.Documents) > maxDocuments {
+	if len(idx.Documents) == 0 && !spec.emptyDocuments || len(idx.Documents) > maxDocuments {
 		return nil, fmt.Errorf("SCIP index must contain 1–%d documents", maxDocuments)
 	}
 	paths := make(map[string]bool, len(idx.Documents))

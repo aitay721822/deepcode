@@ -27,17 +27,15 @@ type Limits struct {
 }
 
 type Indexer struct {
-	Store               *store.Store
-	Graph               *graph.Graph // the snapshots' imports
-	Git                 *git.Client
-	Servers             *gitserver.Service // where each repository is fetched from
-	Embed               *compat.Client     // nil: FTS5 and symbol search only
-	Vectors             *vectorstore.SQLite
-	Events              *events.Bus // receives snapshot.published
-	Limits              Limits
-	SCIPGoImage         string // empty: no automatic SCIP generation
-	SCIPTypeScriptImage string
-	SCIPPythonImage     string
+	Store      *store.Store
+	Graph      *graph.Graph // the snapshots' imports
+	Git        *git.Client
+	Servers    *gitserver.Service // where each repository is fetched from
+	Embed      *compat.Client     // nil: FTS5 and symbol search only
+	Vectors    *vectorstore.SQLite
+	Events     *events.Bus // receives snapshot.published
+	Limits     Limits
+	SCIPImages scipimport.Images
 }
 
 // Run indexes repoID at sha, publishes the snapshot and announces it with
@@ -104,8 +102,8 @@ func (ix *Indexer) run(ctx context.Context, repoID int64, sha string, full bool,
 			return err
 		}
 		progress.Logf("linked the files by %d imports", n)
-		if ix.SCIPGoImage != "" || ix.SCIPTypeScriptImage != "" || ix.SCIPPythonImage != "" {
-			_, err := scipimport.Generate(ctx, ix.Store, ix.Git, dir, sha, snap, scipimport.Images{Go: ix.SCIPGoImage, TypeScript: ix.SCIPTypeScriptImage, Python: ix.SCIPPythonImage}, progress.Logf)
+		if ix.SCIPImages != (scipimport.Images{}) {
+			_, err := scipimport.Generate(ctx, ix.Store, ix.Git, dir, sha, snap, ix.SCIPImages, progress.Logf)
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}

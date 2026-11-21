@@ -141,21 +141,25 @@
 
 ## 語意引用（SCIP）
 
-SCIP 是可選的精確引用索引，不取代 Tree-sitter、呼叫圖或 Wiki，也不需要 LSP。啟用後，deepcode 對同一個 Git commit 以各自隔離的容器執行 Go、JavaScript／TypeScript／TSX、Python 索引，不用每次手動匯入。Java、C# 仍只使用 Tree-sitter，不執行 Gradle、Maven 或 MSBuild 專案程式。
+SCIP 是可選的精確引用索引，不取代 Tree-sitter、呼叫圖或 Wiki，也不需要 LSP。啟用後，deepcode 對同一個 Git commit 以各自隔離的容器執行 Go、JavaScript／TypeScript／TSX、Python、Rust 索引，不用每次手動匯入。Java、C# 仍只使用 Tree-sitter：其索引器需要執行 Gradle、Maven 或 MSBuild 專案程式與離線依賴，且 .NET 可能在失敗後仍以成功狀態回傳不完整索引。
 
 ```sh
 docker build -f scripts/scip-go.Dockerfile -t deepcode-scip-go:0.2.10 .
 docker build -f scripts/scip-node.Dockerfile -t deepcode-scip-node:0.6.2-0.6.8 .
+docker build -f scripts/scip-rust.Dockerfile -t deepcode-scip-rust:2026-11-16 .
 DEEPCODE_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 \
 DEEPCODE_SCIP_TYPESCRIPT_IMAGE=deepcode-scip-node:0.6.2-0.6.8 \
-DEEPCODE_SCIP_PYTHON_IMAGE=deepcode-scip-node:0.6.2-0.6.8 deepcode serve
+DEEPCODE_SCIP_PYTHON_IMAGE=deepcode-scip-node:0.6.2-0.6.8 \
+DEEPCODE_SCIP_RUST_IMAGE=deepcode-scip-rust:2026-11-16 deepcode serve
 ```
 
-也可在 `deepcode.yaml` 設定 `scip_go_image: deepcode-scip-go:0.2.10`、`scip_typescript_image: deepcode-scip-node:0.6.2-0.6.8`、`scip_python_image: deepcode-scip-node:0.6.2-0.6.8`。三者獨立設定，預設留空（停用）。Node 映像固定使用 scip-typescript 0.6.2 與 scip-python 0.6.8。需要 deepcode 服務帳號能使用本機 Docker 的 Linux 容器；既有快照用「重建索引」補上，不必切到新 commit。
+也可在 `deepcode.yaml` 設定 `scip_go_image: deepcode-scip-go:0.2.10`、`scip_typescript_image: deepcode-scip-node:0.6.2-0.6.8`、`scip_python_image: deepcode-scip-node:0.6.2-0.6.8`、`scip_rust_image: deepcode-scip-rust:2026-11-16`。四者獨立設定，預設留空（停用）。Node 映像固定使用 scip-typescript 0.6.2 與 scip-python 0.6.8；Rust 使用 Rust 1.91.1 與校驗 SHA-256 的 rust-analyzer 2026-11-16（目前映像為 x86-64）。需要 deepcode 服務帳號能使用本機 Docker 的 Linux 容器；既有快照用「重建索引」補上，不必切到新 commit。
 
 索引容器使用唯讀的 Git 檔案、停用網路、非特權使用者與 noexec 暫存區，不會自動拉取映像、下載或安裝依賴。Go 另停用 CGO、測試與 workspace；依賴須已 vendoring、是 repo 內的本機模組，或由管理者預先放入可信映像的 `/opt/go-mod` 快取。不要在 deepcode 主機上為不可信 repo 安裝依賴。共用 checkout 上限為 20,000 檔案、128 MiB；每種索引器上限為 16 個專案、兩分鐘，另有容器資源與輸出限制。任一專案失敗會捨棄該索引器的全部結果並記錄原因，不影響其他語言或 Tree-sitter；最後一次發布所有成功語言的 SCIP 結果。
 
 JS／TS 以 Git tree 的 `tsconfig.json` 或 `jsconfig.json` 所在目錄為專案（排除 node_modules、vendor、點與底線開頭目錄），同一檔案以最深專案的結果為準。沒有設定檔時以 repo 根目錄與 `--infer-tsconfig` 索引；因工具會寫入設定檔，設定產生於容器 `/tmp`，涵蓋唯讀來源的 JS／TS／TSX。Python 在根目錄索引，使用空環境清單跳過 pip。這兩種索引器不執行 npm scripts 或 Python 專案程式；離線缺少的第三方依賴可能無法解析。
+
+Rust 以最外層 `Cargo.toml` 為專案（排除 target、vendor、點與底線開頭目錄）。必須提交有效的 `Cargo.lock`；先以 `cargo metadata --offline --locked` 驗證所有套件的 source 都是 null，只接受無外部依賴或 path-only workspace，不接受 registry／Git 依賴。為避免設定指定可執行程式或切換專案載入方式，含 `.cargo/config`、`.cargo/config.toml` 或 `rust-project.json` 的 repo 會停用 Rust SCIP。固定工具鏈、覆寫 build scripts 為 `true`、停用 proc macros，並以 null sysroot 避免標準函式庫與巨集伺服器載入；不安裝 rust-src，也不執行 repo 的 build.rs 或巨集。因此 std、外部依賴與巨集產生的符號可能無法解析。Cargo HOME、target、設定與輸出皆在容器 `/tmp`，不寫入 `/src`。無文件的 JS／TS solution 專案會略過，仍保留其子專案結果。
 
 ### 從 CI 手動匯入（備用）
 

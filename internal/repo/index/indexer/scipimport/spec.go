@@ -12,7 +12,7 @@ import (
 	"deepcode/internal/repo/git"
 )
 
-type Images struct{ Go, TypeScript, Python string }
+type Images struct{ Go, TypeScript, Python, Rust string }
 
 type project struct {
 	root  string
@@ -26,6 +26,7 @@ type languageSpec struct {
 	labels, extensions                  map[string]string
 	encoding                            scip.PositionEncoding
 	utf16, anchors, deepest, allowEmpty bool
+	emptyDocuments                      bool
 	anchorSuffix                        scip.Descriptor_Suffix
 	anchorName                          string
 	roots                               func([]git.TreeEntry) []project
@@ -59,6 +60,7 @@ exec /usr/local/bin/scip-go index --quiet --skip-tests --skip-implementations --
 		extensions: map[string]string{".ts": "typescript", ".mts": "typescript", ".cts": "typescript", ".tsx": "tsx", ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript"},
 		encoding:   scip.PositionEncoding_UTF16CodeUnitOffsetFromLineStart, utf16: true, anchors: true, deepest: true, anchorSuffix: scip.Descriptor_Namespace,
 		roots: nodeProjects, identifier: func(s string) bool { return identifier(s, true) },
+		emptyDocuments: true,
 		script: `if [ "$2" = infer ]; then
   printf '%s' '{"compilerOptions":{"allowJs":true,"jsx":"preserve"},"include":["/src/**/*"],"exclude":["/src/**/node_modules/**","/src/**/vendor/**"]}' > /tmp/tsconfig.json
   scip-typescript index /tmp/tsconfig.json --infer-tsconfig --no-progress-bar --output /tmp/index.scip >&2
@@ -78,6 +80,53 @@ cat /tmp/index.scip`,
 scip-python index --project-name repository --project-version "$1" --environment /tmp/environment.json --output /tmp/index.scip >&2 || exit $?
 cat /tmp/index.scip`,
 	},
+	{
+		name: "Rust", tool: "rust-analyzer", image: func(i Images) string { return i.Rust },
+		languages: []string{"rust"}, labels: map[string]string{"rust": "rust"}, extensions: map[string]string{".rs": "rust"},
+		encoding: scip.PositionEncoding_UTF8CodeUnitOffsetFromLineStart, roots: rustProjects, identifier: rustIdentifier,
+		env: []string{"CARGO_HOME=/tmp/cargo", "CARGO_TARGET_DIR=/tmp/target", "CARGO_NET_OFFLINE=true", "RUSTUP_TOOLCHAIN=1.91.1"},
+		script: `set -eu
+[ -z "$(find /src -type f \( -path '*/.cargo/config' -o -path '*/.cargo/config.toml' -o -name rust-project.json \))" ] || { echo 'repository Cargo configuration or rust-project.json is not supported' >&2; exit 1; }
+cargo metadata --offline --locked --format-version 1 > /tmp/metadata.json
+jq -e '.packages | length > 0 and all(.[]; .source == null)' /tmp/metadata.json > /dev/null || { echo 'Rust requires path-only packages' >&2; exit 1; }
+printf '%s' '{"cargo":{"buildScripts":{"enable":false,"overrideCommand":["true"]},"sysroot":null,"extraArgs":["--locked","--offline"]},"procMacro":{"enable":false}}' > /tmp/ra.json
+/usr/local/bin/rust-analyzer scip "$PWD" --config-path /tmp/ra.json --num-threads 2 --output /tmp/index.scip >&2
+cat /tmp/index.scip`,
+	},
+}
+
+func rustProjects(tree []git.TreeEntry) []project {
+	var candidates []string
+	for _, e := range tree {
+		if validPath(e.Path) && path.Base(e.Path) == "Cargo.toml" && !excludedRoot(path.Dir(e.Path)) && !slices.Contains(strings.Split(path.Dir(e.Path), "/"), "target") {
+			root := path.Dir(e.Path)
+			if root == "." {
+				root = ""
+			}
+			candidates = append(candidates, root)
+		}
+	}
+	slices.Sort(candidates)
+	var roots []project
+	for _, root := range candidates {
+		if !slices.ContainsFunc(roots, func(p project) bool { return p.root == "" || root == p.root || strings.HasPrefix(root, p.root+"/") }) {
+			roots = append(roots, project{root: root})
+		}
+	}
+	return roots
+}
+
+func rustIdentifier(s string) bool {
+	raw := strings.HasPrefix(s, "r#")
+	s = strings.TrimPrefix(s, "r#")
+	if s == "_" || !identifierChars(s, false) {
+		return false
+	}
+	keywords := "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while abstract become box do final gen macro override priv try typeof unsized virtual yield"
+	if raw {
+		return !slices.Contains([]string{"crate", "self", "Self", "super"}, s)
+	}
+	return !slices.Contains(strings.Fields(keywords), s)
 }
 
 func (spec languageSpec) blobs(tree []git.TreeEntry) map[string]string {
@@ -137,6 +186,17 @@ func excludedRoot(dir string) bool {
 }
 
 func identifier(s string, js bool) bool {
+	if !identifierChars(s, js) {
+		return false
+	}
+	keywords := "False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield"
+	if js {
+		keywords = "await break case catch class const continue debugger default delete do else enum export extends false finally for function if implements import in instanceof interface let new null package private protected public return static super switch this throw true try typeof var void while with yield"
+	}
+	return !slices.Contains(strings.Fields(keywords), s)
+}
+
+func identifierChars(s string, js bool) bool {
 	if s == "" {
 		return false
 	}
@@ -147,9 +207,5 @@ func identifier(s string, js bool) bool {
 			return false
 		}
 	}
-	keywords := "False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield"
-	if js {
-		keywords = "await break case catch class const continue debugger default delete do else enum export extends false finally for function if implements import in instanceof interface let new null package private protected public return static super switch this throw true try typeof var void while with yield"
-	}
-	return !slices.Contains(strings.Fields(keywords), s)
+	return true
 }

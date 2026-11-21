@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -207,5 +208,129 @@ func TestSCIPUTF16DocumentRanges(t *testing.T) {
 				t.Fatal(rows)
 			}
 		})
+	}
+}
+
+func TestSCIPEmptyDocuments(t *testing.T) {
+	for _, spec := range specs {
+		raw, err := proto.Marshal(&scip.Index{Metadata: &scip.Metadata{ToolInfo: &scip.ToolInfo{Name: spec.tool}, TextDocumentEncoding: scip.TextEncoding_UTF8}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := readLanguageIndex(t.Context(), nil, 1, "", nil, raw, nil, spec, nil)
+		if len(rows) != 0 || (err == nil) != spec.emptyDocuments {
+			t.Fatalf("%s empty documents: %v, %v", spec.name, rows, err)
+		}
+	}
+}
+
+func TestSCIPRustProjectsAndIdentifiers(t *testing.T) {
+	var tree []git.TreeEntry
+	for _, name := range []string{"a/Cargo.toml", "a/member/Cargo.toml", "ab/Cargo.toml", "target/Cargo.toml", "x/target/Cargo.toml", "vendor/Cargo.toml", ".hidden/Cargo.toml", "x/_private/Cargo.toml"} {
+		tree = append(tree, git.TreeEntry{Path: name})
+	}
+	if got := rustProjects(tree); !reflect.DeepEqual(got, []project{{root: "a"}, {root: "ab"}}) {
+		t.Fatal(got)
+	}
+	if got := rustProjects(append(tree, git.TreeEntry{Path: "Cargo.toml"})); !reflect.DeepEqual(got, []project{{}}) {
+		t.Fatal(got)
+	}
+	if len(rustProjects(nil)) != 0 {
+		t.Fatal("empty tree has Rust projects")
+	}
+	for _, s := range []string{"resolve", "解決", "x́", "r#type", "r#async", "r#resolve"} {
+		if !rustIdentifier(s) {
+			t.Errorf("Rust identifier %q rejected", s)
+		}
+	}
+	for _, s := range []string{"", "_", "fn", "type", "self", "r#self", "r#", "1x", "$resolve", "a-b"} {
+		if rustIdentifier(s) {
+			t.Errorf("Rust non-identifier %q accepted", s)
+		}
+	}
+}
+
+func TestAutomaticSCIPRustNoCodeExecution(t *testing.T) {
+	image := os.Getenv("DEEPCODE_TEST_SCIP_RUST_IMAGE")
+	if image == "" {
+		t.Skip("set DEEPCODE_TEST_SCIP_RUST_IMAGE")
+	}
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	if err := os.Chmod(src, 0755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"Cargo.toml":        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\nmembers = [\"macros\"]\n[dependencies]\nsentinel = { path = \"macros\" }\n",
+		"Cargo.lock":        "version = 4\n[[package]]\nname = \"probe\"\nversion = \"0.1.0\"\ndependencies = [\"sentinel\"]\n[[package]]\nname = \"sentinel\"\nversion = \"0.1.0\"\n",
+		"build.rs":          "fn main() { std::fs::write(\"/tmp/deepcode-build-ran\", b\"ran\").unwrap(); panic!(\"build.rs executed\"); }\n",
+		"src/main.rs":       "fn r#type() {}\nfn main() { r#type(); sentinel::sentinel!(); }\n",
+		"macros/Cargo.toml": "[package]\nname = \"sentinel\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[lib]\nproc-macro = true\n",
+		"macros/src/lib.rs": "extern crate proc_macro;\n#[proc_macro]\npub fn sentinel(_: proc_macro::TokenStream) -> proc_macro::TokenStream { std::fs::write(\"/tmp/deepcode-macro-ran\", b\"ran\").unwrap(); panic!(\"proc macro executed\"); }\n",
+	}
+	for name, content := range files {
+		p := filepath.Join(src, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spec := specs[3]
+	proof := `test ! -e /tmp/deepcode-build-ran && test ! -e /tmp/deepcode-macro-ran
+test -z "$(find /tmp/target -type f \( -name '*.so' -o -name 'build-script-*' \) -print 2>/dev/null)"
+cat /tmp/index.scip`
+	spec.script = strings.Replace(spec.script, "cat /tmp/index.scip", proof, 1)
+	raw, err := runContainer(t.Context(), docker, image, src, project{}, "commit", "deepcode-rust-proof-"+filepath.Base(src), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx scip.Index
+	if err := proto.Unmarshal(raw, &idx); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, doc := range idx.Documents {
+		if doc.RelativePath != "src/main.rs" {
+			continue
+		}
+		rows, err := appendDocument(nil, doc.RelativePath, doc, strings.Split(files[doc.RelativePath], "\n"), map[string]bool{}, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.DefinitionName == "r#type" {
+				found = true
+				t.Logf("raw identifier range covers r#type: line %d byte column %d", row.Line, row.ByteColumn)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing raw identifier definition")
+	}
+	t.Log("build.rs marker absent; proc-macro marker absent; no build-script executable or proc-macro .so; path-only workspace indexed")
+	if err := os.Remove(filepath.Join(src, "Cargo.lock")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runContainer(t.Context(), docker, image, src, project{}, "commit", "deepcode-rust-lock-"+filepath.Base(src), specs[3]); err == nil || !strings.Contains(err.Error(), "lock") {
+		t.Fatalf("missing lockfile should fail metadata: %v", err)
+	} else {
+		t.Logf("read-only missing-lockfile rejection: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(src, "Cargo.lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lockfile written to /src: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, ".cargo"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, ".cargo/config.toml"), []byte("[build]\nrustc = '/src/untrusted-rustc'\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runContainer(t.Context(), docker, image, src, project{}, "commit", "deepcode-rust-config-"+filepath.Base(src), specs[3]); err == nil || !strings.Contains(err.Error(), "Cargo configuration") {
+		t.Fatalf("repository Cargo config accepted: %v", err)
 	}
 }

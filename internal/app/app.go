@@ -124,9 +124,7 @@ func New(ctx context.Context, cfg Config, db *sql.DB, ui http.Handler, loopback 
 	p := pipeline{queue: queue, catalog: cat, syncEvery: cfg.SyncEvery, indexer: &indexer.Indexer{
 		Store: &indexstore.Store{DB: db}, Graph: graphs,
 		Git: gitc, Servers: servers, Embed: embedP, Vectors: vectors, Events: bus,
-		SCIPGoImage:         cfg.SCIPGoImage,
-		SCIPTypeScriptImage: cfg.SCIPTypeScriptImage,
-		SCIPPythonImage:     cfg.SCIPPythonImage,
+		SCIPImages: scipimport.Images{Go: cfg.SCIPGoImage, TypeScript: cfg.SCIPTypeScriptImage, Python: cfg.SCIPPythonImage, Rust: cfg.SCIPRustImage},
 		Limits: indexer.Limits{
 			MaxFiles:      cfg.MaxFiles,
 			MaxFileBytes:  int64(cfg.MaxFileKB) << 10,
