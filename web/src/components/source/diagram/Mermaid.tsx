@@ -192,7 +192,7 @@ export function Mermaid({
           }
         }
       : undefined,
-    // biome-ignore lint/security/noDangerouslySetInnerHtml: draw() renders at Mermaid's strict security level, which sanitises the SVG
+    // draw() renders at Mermaid's strict security level, which sanitises the SVG
     dangerouslySetInnerHTML: { __html: svg },
   }
   const diagram = onNode ? (
