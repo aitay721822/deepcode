@@ -127,8 +127,11 @@ func readLanguageIndex(ctx context.Context, s *store.Store, snapshot int64, modu
 		if !known {
 			continue
 		}
-		name, valid := documentPath(moduleRoot, rel, spec.parentPaths)
-		if !valid || paths[name] || !oid(files[name]) {
+		if spec.skipParentDocuments && strings.HasPrefix(path.Clean(rel), "../") {
+			continue
+		}
+		name := path.Join(moduleRoot, rel)
+		if !validPath(rel) || paths[name] || !oid(files[name]) {
 			return nil, fmt.Errorf("invalid, duplicate, or unlisted SCIP document path %q", rel)
 		}
 		paths[name] = true
@@ -288,20 +291,6 @@ func bytePosition(lines []string, p scip.Position) (scip.Position, bool) {
 		return p, true
 	}
 	return p, false
-}
-
-func documentPath(root, rel string, parents bool) (string, bool) {
-	name := path.Join(root, rel)
-	if parents {
-		parts := strings.Split(rel, "/")
-		for i, part := range parts {
-			if part == ".." || part == "." {
-				parts[i] = "_"
-			}
-		}
-		rel = strings.Join(parts, "/")
-	}
-	return name, validPath(rel) && validPath(name)
 }
 
 func validPath(p string) bool {

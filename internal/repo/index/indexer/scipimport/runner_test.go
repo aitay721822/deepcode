@@ -79,26 +79,6 @@ func TestBytePosition(t *testing.T) {
 	}
 }
 
-func TestDocumentPath(t *testing.T) {
-	for _, tc := range []struct {
-		root, rel, want string
-		parents, valid  bool
-	}{
-		{"app", "../lib/alpha.ts", "lib/alpha.ts", true, true},
-		{"app", "./caller.ts", "app/caller.ts", true, true},
-		{"app", "../lib/alpha.ts", "lib/alpha.ts", false, false},
-		{"app", "../../outside.ts", "../outside.ts", true, false},
-		{"app", "/outside.ts", "app/outside.ts", true, false},
-		{"app", "bad\\name/../caller.ts", "app/caller.ts", true, false},
-		{"", "", "", true, false},
-	} {
-		got, ok := documentPath(tc.root, tc.rel, tc.parents)
-		if got != tc.want || ok != tc.valid {
-			t.Fatalf("%q + %q: %q %v", tc.root, tc.rel, got, ok)
-		}
-	}
-}
-
 func TestJavaSyntheticConstructors(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
@@ -262,14 +242,14 @@ func TestSCIPRejectsUnknownMetadata(t *testing.T) {
 }
 
 func TestSCIPUnsupportedDocuments(t *testing.T) {
-	for _, name := range []string{"source.vue", "source.pyi", "../outside.ts", "unlisted.ts", "/absolute.ts", ""} {
+	for name, wantError := range map[string]bool{"source.vue": false, "source.pyi": false, "../outside.ts": false, "nested/../../outside.ts": false, "unlisted.ts": true, "/absolute.ts": true, "./source.ts": true, "nested/../source.ts": true, "bad\\name.ts": true, "": false} {
 		idx := &scip.Index{Metadata: &scip.Metadata{ToolInfo: &scip.ToolInfo{Name: specs[1].tool}, TextDocumentEncoding: scip.TextEncoding_UTF8}, Documents: []*scip.Document{{RelativePath: name}}}
 		raw, err := proto.Marshal(idx)
 		if err != nil {
 			t.Fatal(err)
 		}
 		rows, err := readLanguageIndex(t.Context(), nil, 1, "", nil, raw, nil, specs[1], nil)
-		if wantError := strings.HasSuffix(name, ".ts"); (err != nil) != wantError || len(rows) != 0 {
+		if (err != nil) != wantError || len(rows) != 0 {
 			t.Fatalf("%q: %v %v", name, rows, err)
 		}
 	}

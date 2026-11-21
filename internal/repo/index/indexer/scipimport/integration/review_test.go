@@ -2,6 +2,7 @@ package scipimport_test
 
 import (
 	"database/sql"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
@@ -88,15 +89,81 @@ func TestAutomaticSCIPReviewSiblings(t *testing.T) {
 	}
 	db, _, _, snap := reviewFixture(t, map[string]string{
 		"app/tsconfig.json": `{"files":["caller.ts"],"references":[{"path":"../lib"}]}`,
-		"app/caller.ts":     "import {resolve} from '../lib/alpha';\nresolve();\n",
+		"app/caller.ts":     "import {resolve} from '../lib/alpha';\nresolve();\nexport function caller() {}\ncaller();\n",
 		"lib/tsconfig.json": `{"compilerOptions":{"composite":true},"files":["alpha.ts"]}`,
-		"lib/alpha.ts":      "export function resolve() {}\n",
+		"lib/alpha.ts":      "export function resolve() {}\nresolve();\n",
 	}, scipimport.Images{TypeScript: image})
-	checkLanguageUsers(t, db, snap, "resolve", "lib/alpha.ts", 1, []string{"app/caller.ts:1", "app/caller.ts:2"}, true)
+	checkLanguageUsers(t, db, snap, "resolve", "lib/alpha.ts", 1, []string{"app/caller.ts:1", "app/caller.ts:2", "lib/alpha.ts:2"}, true)
+	checkLanguageUsers(t, db, snap, "caller", "app/caller.ts", 3, []string{"app/caller.ts:4"}, true)
 	var n int
 	if err := db.QueryRow(`SELECT count(*) FROM scip_occurrences WHERE snapshot_id=? AND definition_name='resolve'`, snap).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("deepest owner: %d %v", n, err)
 	}
+}
+
+func TestAutomaticSCIPReviewSiblingCollision(t *testing.T) {
+	images := scipimport.Images{TypeScript: os.Getenv("DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE"), Python: os.Getenv("DEEPCODE_TEST_SCIP_PYTHON_IMAGE")}
+	if images.TypeScript == "" || images.Python == "" {
+		t.Skip("TypeScript and Python images required")
+	}
+	db, ix, sha, snap := reviewFixture(t, map[string]string{
+		"app/tsconfig.json": `{"files":["alpha.ts","caller.ts"],"references":[{"path":"../lib"}]}`,
+		"app/alpha.ts":      "export function resolve() {}\n",
+		"app/caller.ts":     "import {resolve as own} from './alpha';\nimport {resolve} from '../lib/alpha';\nown();\nresolve();\n",
+		"lib/tsconfig.json": `{"compilerOptions":{"composite":true},"files":["alpha.ts","caller.ts"]}`,
+		"lib/alpha.ts":      "export function resolve() {}\n",
+		"lib/caller.ts":     "import {resolve} from './alpha';\nresolve();\n",
+		"source.py":         "def resolve(): pass\nresolve()\n",
+	}, scipimport.Images{})
+	remote, err := ix.Servers.Remote(t.Context(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := ix.Git.Fetch(t.Context(), 1, remote, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs []string
+	if _, err := scipimport.Generate(t.Context(), ix.Store, ix.Git, dir, sha, snap, images, func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }); err != nil {
+		t.Fatal(err)
+	}
+	log := strings.Join(logs, "\n")
+	if !strings.Contains(log, `SCIP projects "app" and "lib" define the same symbol`) {
+		t.Fatalf("missing collision rejection: %s", log)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM scip_occurrences WHERE snapshot_id=? AND path LIKE '%.ts'`, snap).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("TypeScript rows: %d %v", n, err)
+	}
+	checkLanguageUsers(t, db, snap, "resolve", "source.py", 1, []string{"source.py:2"}, true)
+	t.Log(log)
+}
+
+func TestAutomaticSCIPReviewSiblingOwnership(t *testing.T) {
+	image := os.Getenv("DEEPCODE_TEST_SCIP_TYPESCRIPT_IMAGE")
+	if image == "" {
+		t.Skip("TypeScript image required")
+	}
+	db, _, _, snap := reviewFixture(t, map[string]string{
+		"app/nested/tsconfig.json": `{"include":["*.ts","../../lib/src/alpha.ts"]}`,
+		"app/nested/caller.ts":     "import {resolve} from '../../lib/src/alpha';\nresolve();\nexport function caller() {}\ncaller();\n",
+		"lib/tsconfig.json":        `{"files":["src/alpha.ts","src/caller.ts"]}`,
+		"lib/src/alpha.ts":         "export function resolve() {}\n",
+		"lib/src/caller.ts":        "import {resolve} from './alpha';\nresolve();\n",
+	}, scipimport.Images{TypeScript: image})
+	checkLanguageUsers(t, db, snap, "resolve", "lib/src/alpha.ts", 1, []string{"lib/src/caller.ts:1", "lib/src/caller.ts:2"}, true)
+	checkLanguageUsers(t, db, snap, "caller", "app/nested/caller.ts", 3, []string{"app/nested/caller.ts:4"}, true)
+	var declaration, reference string
+	if err := db.QueryRow(`SELECT symbol FROM scip_occurrences WHERE snapshot_id=? AND path='lib/src/alpha.ts' AND definition_name='resolve'`, snap).Scan(&declaration); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT symbol FROM scip_occurrences WHERE snapshot_id=? AND path='app/nested/caller.ts' AND line=2 AND definition_name=''`, snap).Scan(&reference); err != nil {
+		t.Fatal(err)
+	}
+	if declaration == reference {
+		t.Fatal("expected the producer's packageless cross-project symbol mismatch")
+	}
+	t.Logf("own declaration: %s; cross-project reference: %s", declaration, reference)
 }
 
 func TestAutomaticSCIPReviewStubs(t *testing.T) {
