@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { getWebhook, setWebhook } from '../../../api/repo/repos'
+import { clearWebhook, getWebhook, setWebhook } from '../../../api/repo/repos'
 import type { Repo } from '../../../types/repo/repo'
 import { WebhookCard } from '../WebhookCard'
 
@@ -33,17 +33,24 @@ it('keeps a generated secret when the initial status arrives after generation', 
   expect(screen.getByRole('button', { name: '移除' }).textContent).toBe('移除')
 })
 
-it('keeps a removed secret cleared when the initial status arrives after removal', async () => {
+it('keeps a removed secret cleared when a new repo status arrives after removal', async () => {
   let resolveStatus!: (value: { hasSecret: boolean }) => void
-  vi.mocked(getWebhook).mockReturnValueOnce(
-    new Promise((resolve) => {
-      resolveStatus = resolve
-    }),
-  )
-  render(<WebhookCard repo={repo} />)
-  fireEvent.click(screen.getByRole('button', { name: '產生密鑰' }))
+  vi.mocked(getWebhook)
+    .mockResolvedValueOnce({ hasSecret: true })
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveStatus = resolve
+      }),
+    )
+  const { rerender } = render(<WebhookCard repo={repo} />)
+  await screen.findByRole('button', { name: '移除' })
+  const nextRepo = { ...repo, id: 'next-repo-id' }
+  rerender(<WebhookCard repo={nextRepo} />)
+  expect(getWebhook).toHaveBeenLastCalledWith(nextRepo.id)
   fireEvent.click(await screen.findByRole('button', { name: '移除' }))
   await screen.findByRole('button', { name: '產生密鑰' })
+  expect(clearWebhook).toHaveBeenCalledWith(nextRepo.id)
+  expect(setWebhook).not.toHaveBeenCalled()
   await act(async () => resolveStatus({ hasSecret: true }))
   expect(screen.queryByRole('button', { name: '移除' })).toBeNull()
   expect(screen.getByRole('button', { name: '產生密鑰' }).textContent).toContain('產生密鑰')
