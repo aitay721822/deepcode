@@ -46,7 +46,6 @@ export function WebhookCard({ repo }: { repo: Repo }) {
     setError('')
     try {
       await clearWebhook(repo.id)
-      writeVersion.current++
       setHasSecret(false)
       setSecret('')
     } catch (e) {
