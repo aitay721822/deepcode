@@ -15,9 +15,14 @@ export function CopyField({ value, label, className }: { value: string; label: s
   }, [copied])
   return (
     <div className={cn('flex items-start gap-2 rounded-lg border bg-code py-1.5 pr-1.5 pl-3', className)}>
-      <code className="min-w-0 flex-1 py-1 font-mono text-[12.5px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap">
+      <section
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: the value takes focus for manual copying when clipboard access is denied
+        tabIndex={0}
+        aria-label={label}
+        className="min-w-0 flex-1 py-1 font-mono text-[12.5px] leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      >
         {value}
-      </code>
+      </section>
       <Button
         variant="ghost"
         size="icon-sm"
