@@ -102,7 +102,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       )
   }
   return (
-    <SessionContext value={session}>
+    <SessionContext key={user?.id ?? 'anonymous'} value={session}>
       {user && logoutError && (
         <div
           className="fixed top-20 right-4 left-4 z-50 flex items-center gap-3 rounded-xl border bg-popover p-4 text-sm text-destructive shadow-modal sm:left-auto sm:max-w-md"

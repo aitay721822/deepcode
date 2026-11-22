@@ -120,5 +120,5 @@ it('clears a failed logout error when the signed-in user changes', async () => {
   fetch.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'other', username: 'other', permissions: [] })))
   fireEvent.click(screen.getByRole('button', { name: '重新整理工作階段' }))
   await screen.findByRole('button', { name: '登出 other' })
-  expect(screen.queryByRole('alert')).toBeNull()
+  await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
 })
