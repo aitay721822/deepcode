@@ -12,7 +12,11 @@ export function queryParams<K extends string>(search: Record<string, unknown>, .
 }
 
 /** Percent-encodes each segment of a repository path, keeping the slashes. */
-export const encodePath = (p: string) => p.split('/').map(encodeURIComponent).join('/')
+export const encodePath = (p: string) =>
+  p
+    .split('/')
+    .map((segment) => encodeURIComponent(segment).replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16)}`))
+    .join('/')
 
 /** decodeURIComponent that leaves malformed input (a stray %) as it is instead of throwing. */
 export function decode(s: string) {
