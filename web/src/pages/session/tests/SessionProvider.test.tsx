@@ -1,15 +1,15 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { getMe } from '../../api/auth'
-import { useApi } from '../../lib/useApi'
-import type { Me } from '../../types/auth'
-import { SessionProvider } from './SessionProvider'
+import { getMe } from '../../../api/auth'
+import { useApi } from '../../../lib/useApi'
+import type { Me } from '../../../types/auth'
+import { SessionProvider } from '../SessionProvider'
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
   useLocation: () => ({ pathname: '/repo/private', searchStr: '' }),
 }))
-vi.mock('../../api/auth', () => ({ getMe: vi.fn(), logout: vi.fn() }))
+vi.mock('../../../api/auth', () => ({ getMe: vi.fn(), logout: vi.fn() }))
 const navigate = vi.fn()
 const admin: Me = { id: 'admin', username: 'admin', displayName: 'Admin', permissions: [], allRepositories: true }
 const member: Me = { ...admin, id: 'member', username: 'member' }
