@@ -45,7 +45,7 @@ it('keeps a generated then removed secret cleared when the initial status arrive
   fireEvent.click(await screen.findByRole('button', { name: '移除' }))
   await screen.findByRole('button', { name: '產生密鑰' })
   expect(clearWebhook).toHaveBeenCalledWith(repo.id)
-  await act(async () => resolveStatus({ hasSecret: false }))
+  await act(async () => resolveStatus({ hasSecret: true }))
   expect(screen.queryByRole('button', { name: '移除' })).toBeNull()
   expect(screen.getByRole('button', { name: '產生密鑰' }).textContent).toContain('產生密鑰')
   expect(screen.queryByText('one-time-secret')).toBeNull()
