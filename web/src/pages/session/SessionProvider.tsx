@@ -92,5 +92,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         </main>
       )
   }
-  return <SessionContext value={session}>{body}</SessionContext>
+  return (
+    <SessionContext key={user?.id ?? 'anonymous'} value={session}>
+      {body}
+    </SessionContext>
+  )
 }
