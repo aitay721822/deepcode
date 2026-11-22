@@ -5,10 +5,12 @@ import { api, httpError, unreachable } from '../client'
 export const getWiki = (repoId: string) => api<Wiki>(`/api/repos/${repoId}/wiki`)
 
 /** The shown wiki as a zip of Markdown pages and a README index, at its commit. */
-export async function exportWiki(repoId: string): Promise<Blob> {
+export async function exportWiki(repoId: string): Promise<{ blob: Blob; filename: string }> {
   const res = await fetch(`/api/repos/${repoId}/wiki/export`, { signal: AbortSignal.timeout(60_000) }).catch(
     unreachable,
   )
   if (!res.ok) throw await httpError(res)
-  return res.blob()
+  const disposition = res.headers.get('Content-Disposition') ?? ''
+  const filename = /(?:^|;)\s*filename="([a-z0-9._-]+)"\s*(?:;|$)/i.exec(disposition)?.[1]
+  return { blob: await res.blob(), filename: filename ?? `wiki-${repoId}.zip` }
 }
