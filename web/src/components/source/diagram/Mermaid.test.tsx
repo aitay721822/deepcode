@@ -17,6 +17,28 @@ vi.mock('mermaid', () => ({
 
 afterEach(cleanup)
 
+it('keeps a single SVG while Escape closes the fullscreen diagram', async () => {
+  render(<Mermaid code="graph TD; source" />)
+  fireEvent.click(await screen.findByRole('button', { name: /全/ }))
+  const dialog = await screen.findByRole('dialog')
+  const counts: number[] = []
+  const sample = () => counts.push(document.querySelectorAll('[id="flowchart-source-0"]').length)
+  const observer = new MutationObserver(sample)
+  observer.observe(document.body, { childList: true, subtree: true })
+  try {
+    sample()
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    sample()
+    await waitForElementToBeRemoved(dialog)
+    await waitFor(() => expect(screen.getByRole('img')).toBeTruthy())
+    sample()
+    expect(Math.max(...counts)).toBe(1)
+    expect(document.querySelectorAll('[id="flowchart-source-0"]')).toHaveLength(1)
+  } finally {
+    observer.disconnect()
+  }
+})
+
 it.each(['click', 'Enter', ' '])('opens source with %s inline, fullscreen and after closing', async (action) => {
   const onNode = vi.fn()
   render(<Mermaid code="graph TD; source[Source file]" onNode={onNode} />)
@@ -84,6 +106,18 @@ it('shows the code when rendering fails', async () => {
   render(<Mermaid code="invalid" onNode={vi.fn()} />)
   expect(await screen.findByText('invalid')).toBeTruthy()
   expect(screen.queryByRole('button')).toBeNull()
+})
+
+it('restores the inline diagram after a fullscreen redraw fails and then succeeds', async () => {
+  const { rerender } = render(<Mermaid code="graph TD; source" />)
+  fireEvent.click(await screen.findByRole('button', { name: /全/ }))
+  expect(await screen.findByRole('dialog')).toBeTruthy()
+  rerender(<Mermaid code="invalid" />)
+  expect(await screen.findByText('invalid')).toBeTruthy()
+  expect(screen.queryByRole('dialog')).toBeNull()
+  rerender(<Mermaid code="graph TD; source" />)
+  expect(await screen.findByRole('img')).toBeTruthy()
+  expect(screen.queryByRole('dialog')).toBeNull()
 })
 
 it('handles a diagram with no nodes', async () => {

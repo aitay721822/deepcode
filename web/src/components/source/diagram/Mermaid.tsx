@@ -104,6 +104,7 @@ export function Mermaid({
   const [failed, setFailed] = useState(false)
   const [theme, setTheme] = useState(() => document.documentElement.className)
   const [open, setOpen] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
   const [view, setView] = useState({ s: 1, x: 0, y: 0 })
   const viewport = useRef<HTMLDivElement>(null)
   const expander = useRef<HTMLButtonElement>(null)
@@ -131,6 +132,7 @@ export function Mermaid({
             if (live) {
               setFailed(true)
               setOpen(false)
+              setFullscreen(false)
             }
           },
         ),
@@ -211,6 +213,7 @@ export function Mermaid({
         size="sm"
         onClick={() => {
           reset()
+          setFullscreen(true)
           setOpen(true)
         }}
       >
@@ -235,6 +238,7 @@ export function Mermaid({
           expander.current?.focus({ preventScroll: true })
         }}
         className="h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none print:hidden sm:max-w-none [&>div]:h-full [&>div]:grid-rows-[auto_minmax(0,1fr)] [&>div]:gap-0 [&>div]:overflow-hidden [&>div]:p-0"
+        onExitComplete={() => setFullscreen(false)}
       >
         <DialogHeader className="flex-row items-center justify-between gap-2 border-b px-4 py-3 pr-12 text-left">
           <DialogTitle className="min-w-0 truncate font-sans text-base">{label}</DialogTitle>
@@ -295,7 +299,7 @@ export function Mermaid({
   return (
     <>
       {expand}
-      {!open && diagram}
+      {!fullscreen && diagram}
       {full}
     </>
   )

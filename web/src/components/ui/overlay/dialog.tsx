@@ -19,10 +19,10 @@ function Dialog({ open = false, ...props }: ComponentProps<typeof DialogPrimitiv
 }
 
 // An open dialog's portal and backdrop, around its content.
-function Layer({ children }: { children: ReactNode }) {
+function Layer({ children, onExitComplete }: { children: ReactNode; onExitComplete?: () => void }) {
   const open = useContext(OpenContext)
   return (
-    <AnimatePresence>
+    <AnimatePresence onExitComplete={onExitComplete}>
       {open && (
         <DialogPrimitive.Portal forceMount>
           <DialogPrimitive.Overlay forceMount asChild>
@@ -59,9 +59,14 @@ function SheetContent({ className, children, ...props }: ComponentProps<typeof D
   )
 }
 
-function DialogContent({ className, children, ...props }: ComponentProps<typeof DialogPrimitive.Content>) {
+function DialogContent({
+  className,
+  children,
+  onExitComplete,
+  ...props
+}: ComponentProps<typeof DialogPrimitive.Content> & { onExitComplete?: () => void }) {
   return (
-    <Layer>
+    <Layer onExitComplete={onExitComplete}>
       <DialogPrimitive.Content forceMount asChild {...props}>
         <motion.div
           data-slot="dialog-content"
