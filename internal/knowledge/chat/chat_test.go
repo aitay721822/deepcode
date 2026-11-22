@@ -271,6 +271,16 @@ func gathered(w http.ResponseWriter, query string) {
 	json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"finish_reason": "stop", "message": msg}}})
 }
 
+// request is the messages a model request sends, and whether it offers tools, as gathering does.
+func request(r *http.Request) ([]ai.Message, bool) {
+	var body struct {
+		Messages []ai.Message
+		Tools    []any
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	return body.Messages, len(body.Tools) > 0
+}
+
 // TestGathered: an answer is written once, from what the model gathered with its tools after the first
 // search, each call announced as a search event; the evidence event tells the rounds, the calls and the rule
 // that ended the gathering. A deep answer reads the nearest wiki page as background, its links' targets

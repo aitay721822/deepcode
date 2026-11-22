@@ -144,7 +144,7 @@ func (s *Store) Forget(ctx context.Context, snap int64, paths []string) error {
 	}
 	defer tx.Rollback()
 	for _, p := range paths {
-		for _, table := range []string{"chunks", "symbols", "source_files"} {
+		for _, table := range []string{"scip_occurrences", "chunks", "symbols", "source_files"} {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE snapshot_id = ? AND path = ?`, snap, p); err != nil {
 				return err
 			}

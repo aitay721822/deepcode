@@ -63,10 +63,16 @@ var defaults = map[string]any{
 	"cache_mb":    64,
 	"sync_every":  time.Duration(0), // 0 = never
 
-	"max_repo_mb":  1024,
-	"max_files":    20000,
-	"max_file_kb":  512,
-	"max_index_mb": 200,
+	"max_repo_mb":           1024,
+	"max_files":             20000,
+	"max_file_kb":           512,
+	"max_index_mb":          200,
+	"scip_go_image":         "",
+	"scip_typescript_image": "",
+	"scip_python_image":     "",
+	"scip_rust_image":       "",
+	"scip_java_image":       "",
+	"scip_csharp_image":     "",
 
 	"wiki_language":   "Traditional Chinese (Taiwan)",
 	"wiki_parallel":   1,  // pages planned or written at a time
@@ -174,10 +180,16 @@ func Load() (cfg app.Config, addr string, err error) {
 		CacheMB:    p.whole("cache_mb"),
 		SyncEvery:  p.duration("sync_every"),
 
-		MaxRepoMB:  p.whole("max_repo_mb"),
-		MaxFiles:   p.whole("max_files"),
-		MaxFileKB:  p.whole("max_file_kb"),
-		MaxIndexMB: p.whole("max_index_mb"),
+		MaxRepoMB:           p.whole("max_repo_mb"),
+		MaxFiles:            p.whole("max_files"),
+		MaxFileKB:           p.whole("max_file_kb"),
+		MaxIndexMB:          p.whole("max_index_mb"),
+		SCIPGoImage:         p.str("scip_go_image"),
+		SCIPTypeScriptImage: p.str("scip_typescript_image"),
+		SCIPPythonImage:     p.str("scip_python_image"),
+		SCIPRustImage:       p.str("scip_rust_image"),
+		SCIPJavaImage:       p.str("scip_java_image"),
+		SCIPCSharpImage:     p.str("scip_csharp_image"),
 
 		WikiLanguage: p.str("wiki_language"),
 		WikiParallel: p.whole("wiki_parallel"),

@@ -22,6 +22,8 @@ function describe(s: Step): string {
     }
     case 'users':
       return `找出使用 ${s.args.name} 的程式碼`
+    case 'users_at':
+      return `查找 ${s.args.name} 的引用（${s.args.path}：第 ${s.args.line} 行）`
   }
 }
 

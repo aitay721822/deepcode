@@ -15,6 +15,7 @@ import (
 	"deepcode/internal/repo/gitserver"
 	"deepcode/internal/repo/index/analyzer"
 	"deepcode/internal/repo/index/graph"
+	"deepcode/internal/repo/index/indexer/scipimport"
 	"deepcode/internal/repo/index/indexer/store"
 	"deepcode/internal/repo/index/indexer/vectorstore"
 )
@@ -26,14 +27,15 @@ type Limits struct {
 }
 
 type Indexer struct {
-	Store   *store.Store
-	Graph   *graph.Graph // the snapshots' imports
-	Git     *git.Client
-	Servers *gitserver.Service // where each repository is fetched from
-	Embed   *compat.Client     // nil: FTS5 and symbol search only
-	Vectors *vectorstore.SQLite
-	Events  *events.Bus // receives snapshot.published
-	Limits  Limits
+	Store      *store.Store
+	Graph      *graph.Graph // the snapshots' imports
+	Git        *git.Client
+	Servers    *gitserver.Service // where each repository is fetched from
+	Embed      *compat.Client     // nil: FTS5 and symbol search only
+	Vectors    *vectorstore.SQLite
+	Events     *events.Bus // receives snapshot.published
+	Limits     Limits
+	SCIPImages scipimport.Images
 }
 
 // Run indexes repoID at sha, publishes the snapshot and announces it with
@@ -100,6 +102,15 @@ func (ix *Indexer) run(ctx context.Context, repoID int64, sha string, full bool,
 			return err
 		}
 		progress.Logf("linked the files by %d imports", n)
+		if ix.SCIPImages != (scipimport.Images{}) {
+			_, err := scipimport.Generate(ctx, ix.Store, ix.Git, dir, sha, snap, ix.SCIPImages, progress.Logf)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err != nil {
+				progress.Logf("SCIP unavailable; kept the base index: %v", err)
+			}
+		}
 	}
 	model := ""
 	if ix.Embed != nil {

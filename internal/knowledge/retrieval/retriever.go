@@ -283,3 +283,7 @@ func (r *Retriever) Users(ctx context.Context, snapshotID int64, names []string,
 	}
 	return r.Store.Chunks(ctx, ids)
 }
+
+func (r *Retriever) SCIPUsers(ctx context.Context, snapshotID int64, name string, at Anchor, limit int) ([]store.SCIPHit, bool, error) {
+	return r.Store.SCIPUsers(ctx, snapshotID, name, at.Path, at.Line, limit)
+}

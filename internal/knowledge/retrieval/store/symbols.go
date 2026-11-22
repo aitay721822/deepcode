@@ -282,3 +282,72 @@ func (s *Store) spans(ctx context.Context, snapshotID int64, p string) ([]span, 
 	}
 	return out, rows.Err()
 }
+
+type SCIPHit struct {
+	Hit
+	ReferenceLine int
+}
+
+func (s *Store) HasSCIP(ctx context.Context, snapshot int64) (bool, error) {
+	var indexed bool
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM scip_occurrences WHERE snapshot_id = ? AND definition_name <> ''
+	)`, snapshot).Scan(&indexed)
+	return indexed, err
+}
+
+// SCIPUsers selects one indexed definition and finds chunks at its references.
+// Sample one line from each chunk before returning more lines from any one chunk.
+// found distinguishes a covered definition with no references from a missing
+// or ambiguous definition. Never widen an exact query to same-name symbols.
+func (s *Store) SCIPUsers(ctx context.Context, snapshot int64, name, path string, line, limit int) ([]SCIPHit, bool, error) {
+	rows, err := s.DB.QueryContext(ctx, scipUsersQuery, snapshot, path, line, name, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var hits []SCIPHit
+	var found bool
+	for rows.Next() {
+		var id, start, end, ref sql.NullInt64
+		var path, symbol, content sql.NullString
+		if err := rows.Scan(&id, &path, &symbol, &start, &end, &content, &ref); err != nil {
+			return nil, false, err
+		}
+		found = true
+		if id.Valid {
+			hits = append(hits, SCIPHit{
+				Hit: Hit{ChunkID: id.Int64, Path: path.String, Symbol: symbol.String,
+					StartLine: int(start.Int64), EndLine: int(end.Int64), Content: content.String},
+				ReferenceLine: int(ref.Int64),
+			})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return hits, found, nil
+}
+
+// scipUsersQuery is SCIPUsers' SQL. Its CROSS JOINs fix the order SQLite
+// joins in: the definition's one symbol, then that symbol's references by
+// scip_references, then the chunks of each reference's file. Left to choose
+// with no statistics, SQLite walked every occurrence in the snapshot and
+// matched each to the definition last.
+const scipUsersQuery = `WITH definition AS (
+		SELECT min(o.symbol) AS symbol FROM scip_occurrences o
+		JOIN snapshots s ON s.id = o.snapshot_id AND s.status = 'ready'
+		WHERE o.snapshot_id = ?1 AND o.path = ?2 AND o.line = ?3 AND o.definition_name = ?4 AND o.definition_name <> ''
+		HAVING count(DISTINCT o.symbol) = 1
+	), locations AS (
+		SELECT min(c.id) AS id, r.path, r.line FROM definition d
+		CROSS JOIN scip_occurrences r ON r.snapshot_id = ?1 AND r.symbol = d.symbol AND r.definition_name = ''
+		CROSS JOIN chunks c ON c.snapshot_id = r.snapshot_id AND c.path = r.path AND r.line BETWEEN c.start_line AND c.end_line
+		GROUP BY r.path, r.line
+	), refs AS (
+		SELECT id, path, line, row_number() OVER (PARTITION BY id ORDER BY line) AS pass
+		FROM locations ORDER BY pass, path, line LIMIT ?5
+	)
+	SELECT refs.id, c.path, c.symbol_name, c.start_line, c.end_line, c.content, refs.line
+	FROM definition LEFT JOIN refs ON true LEFT JOIN chunks c ON c.id = refs.id
+	ORDER BY refs.pass, refs.path, refs.line`

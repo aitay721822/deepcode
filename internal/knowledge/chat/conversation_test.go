@@ -23,6 +23,89 @@ import (
 	"deepcode/internal/repo/catalog"
 )
 
+// TestAskSCIPContext: the answer's request holds each users_at lookup's exact reference lines, a few per chunk,
+// says so when SCIP holds none, when a lookup fell back to names and when more exist, never lists another
+// symbol's line (beta.Resolve on main.go:10), and keeps each lookup's verdict when its locations are cut to fit.
+func TestAskSCIPContext(t *testing.T) {
+	db, err := storage.Open(t.Context(), filepath.Join(t.TempDir(), "chat.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	seed := `INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x');
+		INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r');
+		INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready');
+		UPDATE repositories SET ready_snapshot_id = 1;
+		INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash)
+			VALUES (1, 'main.go', 9, 11, 'alpha.Resolve()' || char(10) || 'beta.Resolve()' || char(10) || 'alpha.Resolve()', 'h');
+		INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name) VALUES
+			(1, 'alpha.go', 3, 5, 'alpha.Resolve', 'Resolve'), (1, 'main.go', 9, 6, 'alpha.Resolve', ''), (1, 'main.go', 10, 5, 'beta.Resolve', ''),
+			(1, 'main.go', 11, 6, 'alpha.Resolve', ''), (1, 'alpha.go', 4, 5, 'alpha.Unused', 'Unused'), (1, 'alpha.go', 5, 5, 'alpha.Busy', 'Busy');`
+	for i := range 3 { // Busy is called on all four lines of three chunks, each in a file with a long path
+		seed += strings.ReplaceAll(`INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'P', 1, 4, 'Busy()' || char(10) || 'Busy()' || char(10) || 'Busy()' || char(10) || 'Busy()', 'h');
+			INSERT INTO scip_occurrences(snapshot_id, path, line, byte_column, symbol, definition_name) VALUES (1, 'P', 1, 0, 'alpha.Busy', ''), (1, 'P', 2, 0, 'alpha.Busy', ''), (1, 'P', 3, 0, 'alpha.Busy', ''), (1, 'P', 4, 0, 'alpha.Busy', '');`,
+			"'P'", fmt.Sprintf("'pkg/%s/%d/main.go'", strings.Repeat("long-directory/", 15), i))
+	}
+	if _, err := db.Exec(seed); err != nil {
+		t.Fatal(err)
+	}
+	exact, empty := `{"name":"Resolve","path":"alpha.go","line":3}`, `{"name":"Unused","path":"alpha.go","line":4}`
+	fallback, busy := `{"name":"Resolve","path":"alpha.go","line":99}`, `{"name":"Busy","path":"alpha.go","line":5}`
+	for _, tc := range []struct {
+		name, question string
+		args, want     []string
+		context        int
+	}{
+		{"two exact lines in one source chunk", "where is Resolve called?", []string{exact}, []string{`"alpha.go":3`, `"main.go":9, 11`}, 0},
+		{"no indexed references", "zzzz qqqq", []string{empty}, []string{`"alpha.go":4`, "No SCIP-indexed references", "may not cover"}, 0},
+		{"fallback", "where is Resolve called?", []string{fallback}, []string{`"alpha.go":99`, "name-based search", "not verified"}, 0},
+		{"sample spans multiple chunks", "where is Busy called?", []string{busy}, []string{`"alpha.go":5`, `/0/main.go":1, 2`, `/1/main.go":1`, `/2/main.go":1`, "More indexed references exist"}, 0},
+		{"bounded context preserves verdicts", "where are Busy and Resolve called?", []string{busy, empty, exact, fallback},
+			[]string{`"alpha.go":5`, `"alpha.go":4`, `"alpha.go":3`, `"alpha.go":99`, "not verified", "Some SCIP lookups or locations were omitted"}, 8192},
+		{"retry with smaller lookup budget", "where is Resolve called?", []string{exact}, []string{"Some SCIP lookups or locations were omitted", "Do not treat other lines as SCIP-verified"}, 4000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			final := make(chan string, 1)
+			model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				msgs, tools := request(r)
+				if tools && slices.ContainsFunc(msgs, func(m ai.Message) bool { return m.Role == "tool" }) {
+					gathered(w, "")
+				} else if tools { // the first gathering reply calls users_at with each of tc.args
+					var calls []string
+					for i, arg := range tc.args {
+						calls = append(calls, fmt.Sprintf(`{"id":"c%d","type":"function","function":{"name":"users_at","arguments":%q}}`, i, arg))
+					}
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprintf(w, `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[%s]}}]}`, strings.Join(calls, ","))
+				} else {
+					if strings.HasPrefix(msgs[0].Content, "You are deepcode") {
+						final <- msgs[len(msgs)-1].Content
+					}
+					fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+				}
+			}))
+			defer model.Close()
+			s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m", Context: tc.context, MaxTokens: 512})
+			if err := s.Ask(t.Context(), Request{RepoID: 1, Question: tc.question, UserID: 1}, func(string, any) {}); err != nil || len(final) == 0 {
+				t.Fatal("no answer request:", err)
+			}
+			prompt := <-final
+			_, notes, ok := strings.Cut(prompt, "SCIP reference lookups:\n")
+			if !ok {
+				_, notes, _ = strings.Cut(prompt, "\n\n")
+			}
+			if notes, _, _ = strings.Cut(notes, "\n\n"); strings.Contains(notes, `"main.go":10`) {
+				t.Errorf("unrelated reference in SCIP context: %q", notes)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(notes, want) {
+					t.Errorf("SCIP context missing %q: %q", want, notes)
+				}
+			}
+		})
+	}
+}
+
 // TestOpenOwnConversation: a conversation is continued only by its owner and only in its repository;
 // to anyone else it does not exist. Its history, and the summary of what does not fit the model's context.
 func TestOpenOwnConversation(t *testing.T) {
@@ -152,12 +235,7 @@ func TestCodemap(t *testing.T) {
 	drawn := `{"title":"Page","description":"` + strings.Repeat("x", 600) + `","traces":[{"title":"Render","description":"d","guide":"g","locations":[{"title":"Page","description":"renders",` +
 		`"path":"app/[slug]/page.tsx","line":1,"code":"export default function Page() {}"}]}]}`
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Messages []ai.Message
-			Tools    []any
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		if len(body.Tools) > 0 {
+		if _, tools := request(r); tools {
 			gathered(w, "")
 			return
 		}
@@ -235,19 +313,15 @@ func TestRefitted(t *testing.T) {
 	var asked []string // each request's new message but the gathering's, the refused one first
 	var messages []int // and its messages
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Messages []ai.Message `json:"messages"`
-			Tools    []any        `json:"tools"`
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		if len(body.Tools) > 0 {
+		msgs, tools := request(r)
+		if tools {
 			gathered(w, "")
 			return
 		}
 		reply := "It subscribes [a.ts:1-1]."
-		if body.Messages[0].Content == languagePrompt {
+		if msgs[0].Content == languagePrompt {
 			reply = "English"
-		} else if asked, messages = append(asked, body.Messages[len(body.Messages)-1].Content), append(messages, len(body.Messages)); len(asked) == 1 {
+		} else if asked, messages = append(asked, msgs[len(msgs)-1].Content), append(messages, len(msgs)); len(asked) == 1 {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, `{"error":{"code":400,"message":"too long","type":"exceed_context_size_error","n_prompt_tokens":419430,"n_ctx":524288}}`) // the threshold: room for exactly what was sent
 			return
@@ -389,11 +463,8 @@ func TestAnswerLanguage(t *testing.T) {
 	var asked []ai.Message
 	reply, status := "German", http.StatusOK
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Messages []ai.Message `json:"messages"`
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		asked = append(asked, body.Messages...)
+		msgs, _ := request(r)
+		asked = append(asked, msgs...)
 		if w.WriteHeader(status); status == http.StatusOK {
 			chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
 			fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
