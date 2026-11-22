@@ -132,6 +132,7 @@ export function Mermaid({
             if (live) {
               setFailed(true)
               setOpen(false)
+              setFullscreen(false)
             }
           },
         ),

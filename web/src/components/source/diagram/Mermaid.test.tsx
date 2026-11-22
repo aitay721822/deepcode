@@ -106,6 +106,18 @@ it('shows the code when rendering fails', async () => {
   expect(screen.queryByRole('button')).toBeNull()
 })
 
+it('restores the inline diagram after a fullscreen redraw fails and then succeeds', async () => {
+  const { rerender } = render(<Mermaid code="graph TD; source" />)
+  fireEvent.click(await screen.findByRole('button', { name: /全/ }))
+  expect(await screen.findByRole('dialog')).toBeTruthy()
+  rerender(<Mermaid code="invalid" />)
+  expect(await screen.findByText('invalid')).toBeTruthy()
+  expect(screen.queryByRole('dialog')).toBeNull()
+  rerender(<Mermaid code="graph TD; source" />)
+  expect(await screen.findByRole('img')).toBeTruthy()
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
 it('handles a diagram with no nodes', async () => {
   const onNode = vi.fn()
   render(<Mermaid code="empty" onNode={onNode} />)
