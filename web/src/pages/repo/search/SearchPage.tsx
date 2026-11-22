@@ -3,7 +3,6 @@ import { ArrowLeftIcon } from 'lucide-react'
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { AskBox } from '../../../components/chat/AskBox'
 import { SearchSteps } from '../../../components/chat/SearchSteps'
-import { useChatModel } from '../../../components/chat/useChatModel'
 import { RepoNotice } from '../../../components/repo/RepoNotice'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
 import type { Citation } from '../../../types/repo/code'
@@ -13,6 +12,7 @@ import { useRepo } from '../../useRepo'
 import { CitedFile } from '../files/CitedFile'
 import { ChatTurn } from './ChatTurn'
 import { useChat } from './useChat'
+import { useChatModel } from './useChatModel'
 
 export function SearchPage({ id, conversationId }: { id: string; conversationId?: string }) {
   const navigate = useNavigate()

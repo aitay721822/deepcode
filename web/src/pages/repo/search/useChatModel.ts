@@ -1,5 +1,5 @@
-import { getHealth } from '../../api/repo/repos'
-import { useApi } from '../../lib/useApi'
+import { getHealth } from '../../../api/repo/repos'
+import { useApi } from '../../../lib/useApi'
 
 /**
  * The server's health, read for its chat model: a question box stays disabled until one is known to be set.
