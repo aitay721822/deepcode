@@ -138,7 +138,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
 
   const here = { to: '/repos/$id', params: { id: repo.id } } as const
   const page = search.page === undefined ? wiki?.pages[0] : wiki?.pages.find((p) => p.slug === search.page)
-  const pageNotFound = search.page !== undefined && !!wiki && !page
+  const pageNotFound = search.page !== undefined && !!wiki && !page && !wikiBusy
   // The wiki job's card: once it failed (above any pages written before), or while it runs before the first page exists.
   const job = repo.job
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null

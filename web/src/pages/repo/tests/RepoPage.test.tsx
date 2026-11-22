@@ -1,9 +1,9 @@
 import { Link } from '@tanstack/react-router'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import type { ComponentProps, ReactNode } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { getWiki } from '../../../api/repo/wiki'
-import type { Repo } from '../../../types/repo/repo'
+import type { Job, Repo } from '../../../types/repo/repo'
 import { useRepo } from '../../useRepo'
 import { RepoPage } from '../RepoPage'
 
@@ -35,11 +35,12 @@ vi.mock('../wiki/WikiArticle', () => ({ WikiArticle: () => <article>Overview art
 
 const pages = [{ slug: 'overview', title: 'Overview', content: '# Overview', citations: [] }]
 
-function open(search: { page?: string }, wikiPages = pages) {
+function open(search: { page?: string }, wikiPages = pages, job?: Job) {
   vi.mocked(useRepo).mockReturnValue({
     data: {
       id: 'r1',
       permissions: [],
+      job,
       snapshot: { id: 's1', commitSha: 'abc', indexedAt: '2026-01-01' },
     } as unknown as Repo,
     error: undefined,
@@ -90,6 +91,33 @@ it('shows a missing page when the loaded wiki is empty', async () => {
   open({ page: 'does-not-exist' }, [])
   expect((await screen.findByRole('heading', { name: '找不到 Wiki 頁面' })).textContent).toBe('找不到 Wiki 頁面')
 })
+
+it.each(['queued', 'running'] as const)(
+  'keeps the job card for a missing slug while the wiki job is %s',
+  async (status) => {
+    open({ page: 'coming-soon' }, [], {
+      id: 'j1',
+      kind: 'wiki',
+      status,
+      stage: 'plan',
+      commitSha: 'abc',
+      attempts: 0,
+      retries: 0,
+      progress: 0,
+      total: 0,
+      error: '',
+      runAfter: '',
+      createdAt: '',
+      updatedAt: '',
+    })
+    await act(async () => {
+      await vi.mocked(getWiki).mock.results[0].value
+    })
+    expect(screen.getByRole('status').textContent).toContain('產生 Wiki')
+    expect(screen.queryByText('找不到 Wiki 頁面')).toBeNull()
+    expect(screen.queryByRole('link', { name: '返回 Overview' })).toBeNull()
+  },
+)
 
 it('shows the load error rather than claiming the page is missing', async () => {
   vi.mocked(getWiki).mockRejectedValueOnce(new Error('Bad Gateway'))
