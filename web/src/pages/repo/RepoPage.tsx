@@ -1,6 +1,7 @@
 import { useNavigate } from '@tanstack/react-router'
 import { AnimatePresence, motion } from 'motion/react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { getHealth } from '../../api/repo/repos'
 import { getWiki } from '../../api/repo/wiki'
 import { AskBox } from '../../components/chat/AskBox'
@@ -29,6 +30,7 @@ import { WikiNav } from './wiki/WikiNav'
 import { WikiPlaceholder } from './wiki/WikiPlaceholder'
 
 type Tab = 'wiki' | 'files'
+const RIGHT_RAIL_MEDIA = '(min-width: 1240px)'
 
 /** ?page= a wiki page; or ?file= a file, L= its lines (5-9), s= the snapshot it is read at (links made before wiki
  * citations opened in the drawer: nothing writes it now). */
@@ -38,6 +40,22 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const navigate = useNavigate()
   const { data: repo, error, status, reload } = useRepo(id)
   const { data: health, error: healthError } = useApi('health', getHealth)
+  const canSync = repo?.permissions.includes('repo.sync') ?? false
+  const leftControls = useRef<HTMLDivElement>(null)
+  const rightControls = useRef<HTMLDivElement>(null)
+  const [controlsHost] = useState(() => document.createElement('div'))
+  useLayoutEffect(() => {
+    if (!canSync) return
+    const wide = window.matchMedia(RIGHT_RAIL_MEDIA)
+    // Move the portal host, not the cards: resizing must retain the one-time webhook secret and not refetch.
+    const placeControls = () => (wide.matches ? rightControls.current : leftControls.current)?.append(controlsHost)
+    placeControls()
+    wide.addEventListener('change', placeControls)
+    return () => {
+      wide.removeEventListener('change', placeControls)
+      controlsHost.remove()
+    }
+  }, [canSync, controlsHost])
   const sync = useSync(id, reload) // Retry of a failed job, Sync when there is no wiki
   const ready = repo?.snapshot
   const wikiBusy = repo?.job?.kind === 'wiki' && isActive(repo.job)
@@ -89,7 +107,6 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
 
   const here = { to: '/repos/$id', params: { id: repo.id } } as const
   const page = wiki?.pages.find((p) => p.slug === search.page) ?? wiki?.pages[0]
-  const canSync = repo.permissions.includes('repo.sync')
   // The wiki job's card: once it failed (above any pages written before), or while it runs before the first page exists.
   const job = repo.job
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
@@ -116,14 +133,6 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     : ready?.commitSha
   // Whether the main column shows the latest job in a card: the first index job, or the wiki job above the wiki.
   const jobCard = ready ? !file && !!wikiJob : !!job
-  const syncCard = canSync && (
-    <div className="flex flex-col gap-3">
-      <SyncCard repo={repo} jobCard={jobCard} onSynced={reload} />
-      <BranchCard repo={repo} onChanged={reload} />
-      <WebhookCard repo={repo} />
-    </div>
-  )
-
   return (
     <Frame repo={repo}>
       <div className="grid grid-cols-1 min-[900px]:grid-cols-[260px_minmax(0,1fr)] min-[1240px]:grid-cols-[300px_minmax(0,1fr)_300px]">
@@ -137,8 +146,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
               <span className="text-foreground normal-case">{shortSha(ready.commitSha)}</span>
             </p>
           )}
-          {/* Sync lives in the rail; once the rail is hidden, here. */}
-          {syncCard && <div className="mb-4 min-[1240px]:hidden">{syncCard}</div>}
+          {canSync && <div className="mb-4 min-[1240px]:hidden" ref={leftControls} />}
           {ready && (
             <Tabs value={tab} onValueChange={(t) => (t === 'wiki' && file ? navigate(here) : setTab(t as Tab))}>
               <TabsList aria-label="瀏覽 Repository">
@@ -211,10 +219,19 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
           aria-label="同步與本頁內容"
           className="sticky top-16 hidden print:hidden h-[calc(100dvh-4rem)] overflow-y-auto px-6 pt-7 pb-36 min-[1240px]:block"
         >
-          {syncCard && <div className="mb-7">{syncCard}</div>}
+          {canSync && <div className="mb-7" ref={rightControls} />}
           {!file && page?.content && toc.length > 0 && <Toc items={toc} />}
         </aside>
       </div>
+      {canSync &&
+        createPortal(
+          <div className="flex flex-col gap-3">
+            <SyncCard repo={repo} jobCard={jobCard} onSynced={reload} />
+            <BranchCard repo={repo} onChanged={reload} />
+            <WebhookCard repo={repo} />
+          </div>,
+          controlsHost,
+        )}
       {cited && (
         <Dialog open={cited.open} onOpenChange={closeCitation}>
           <SheetContent
