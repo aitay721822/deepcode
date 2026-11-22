@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { cleanup, render, screen } from '@testing-library/react'
 import type { ComponentProps, ReactNode } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -7,15 +8,22 @@ import { useRepo } from '../../useRepo'
 import { RepoPage } from '../RepoPage'
 
 vi.mock('@tanstack/react-router', () => ({
-  Link: ({
-    children,
-    params,
-    search,
-    ...props
-  }: ComponentProps<'a'> & { params: { id: string }; search?: { page?: string } }) => (
-    <a {...props} href={`/repos/${params.id}${search?.page ? `?page=${search.page}` : ''}`}>
-      {children}
-    </a>
+  Link: vi.fn(
+    ({
+      children,
+      params,
+      search,
+      activeOptions: _activeOptions,
+      ...props
+    }: ComponentProps<'a'> & {
+      params: { id: string }
+      search?: { page?: string }
+      activeOptions?: { exact: boolean }
+    }) => (
+      <a {...props} href={`/repos/${params.id}${search?.page ? `?page=${search.page}` : ''}`}>
+        {children}
+      </a>
+    ),
   ),
   useNavigate: () => vi.fn(),
 }))
@@ -58,6 +66,10 @@ it('shows a missing page and Overview link without highlighting a wiki page', as
   expect((await screen.findByRole('heading', { name: '找不到 Wiki 頁面' })).textContent).toBe('找不到 Wiki 頁面')
   expect(screen.getByText('找不到頁面「does-not-exist」。').textContent).toContain('does-not-exist')
   expect(screen.getByRole('link', { name: '返回 Overview' }).getAttribute('href')).toBe('/repos/r1')
+  expect(Link).toHaveBeenCalledWith(
+    expect.objectContaining({ children: '返回 Overview', activeOptions: { exact: true } }),
+    undefined,
+  )
   expect(container.querySelector('[aria-current="page"]')).toBeNull()
   expect(screen.queryByText('Overview article')).toBeNull()
 })

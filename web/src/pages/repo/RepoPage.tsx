@@ -237,7 +237,12 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                   ) : pageNotFound ? (
                     <Notice title="找不到 Wiki 頁面">
                       <p className="text-muted-foreground [overflow-wrap:anywhere]">找不到頁面「{search.page}」。</p>
-                      <Link {...here} search={{}} className="text-brand underline underline-offset-4">
+                      <Link
+                        {...here}
+                        search={{}}
+                        activeOptions={{ exact: true }}
+                        className="text-brand underline underline-offset-4"
+                      >
                         返回 Overview
                       </Link>
                     </Notice>
