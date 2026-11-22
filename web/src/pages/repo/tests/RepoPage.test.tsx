@@ -164,9 +164,16 @@ it.each(['found', 'missing', 'failed'] as const)(
       }),
     )
     setRepo({ ...job, status: 'succeeded' })
+    const observer = new MutationObserver(() => {})
+    observer.observe(screen.getByRole('main'), { childList: true, subtree: true })
     rerender(<RepoPage id="r1" search={search} />)
+    const addedText = observer
+      .takeRecords()
+      .flatMap(({ addedNodes }) => Array.from(addedNodes, (node) => node.textContent))
+    observer.disconnect()
 
     expect(getWiki).toHaveBeenCalledTimes(2)
+    expect(addedText.filter((text) => text?.includes('找不到 Wiki 頁面'))).toEqual([])
     expect(screen.queryByRole('heading', { name: '找不到 Wiki 頁面' })).toBeNull()
     expect(screen.getByRole('status', { name: '載入中' })).toBeTruthy()
     expect(screen.getByRole('link', { name: /Overview/ })).toBeTruthy()
