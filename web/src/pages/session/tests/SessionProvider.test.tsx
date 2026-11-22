@@ -4,10 +4,13 @@ import { login } from '../../../api/auth'
 import { SessionProvider } from '../SessionProvider'
 import { useSession } from '../session'
 
-const navigate = vi.hoisted(() => vi.fn())
+const { navigate, location } = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  location: { pathname: '/', searchStr: '' },
+}))
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
-  useLocation: () => ({ pathname: '/login', searchStr: '' }),
+  useLocation: () => location,
 }))
 
 function Screen() {
@@ -40,7 +43,8 @@ afterEach(() => {
   navigate.mockClear()
 })
 
-function setup(failure?: 'network' | 'server' | 'empty') {
+function setup(failure?: 'network' | 'server' | 'empty', pathname = '/') {
+  location.pathname = pathname
   const fetch = vi
     .fn()
     .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'admin', username: 'admin', permissions: [] })))
@@ -95,7 +99,7 @@ it('keeps the error outside the page flow and lets the user dismiss it', async (
 })
 
 it('clears a failed logout error after a 401 and reauthentication', async () => {
-  const fetch = setup('server')
+  const fetch = setup('server', '/login')
   fireEvent.click(await screen.findByRole('button', { name: '登出 admin' }))
   await screen.findByRole('alert')
   fetch.mockResolvedValueOnce(new Response(null, { status: 401 }))
