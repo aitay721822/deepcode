@@ -15,9 +15,12 @@ const label = (s: string) =>
     .trim()
     .replace(/[#"`<>{}[\]|:&]/g, (c) => `#${c.charCodeAt(0)};`)
 
-/** The map as a Mermaid flowchart: a box per trace holding its locations, each pointing to the next. */
+/**
+ * The map as a Mermaid flowchart: a box per trace holding its locations, each pointing to the next. Unlinked boxes
+ * fall in no set order, so an invisible link chains each trace to the one after it, left to right.
+ */
 export function flowchart(map: Codemap) {
-  const lines = ['flowchart TB']
+  const lines = ['flowchart LR']
   for (const t of map.traces) {
     lines.push(`  subgraph T${t.id}["${t.id}. ${label(t.title)}"]`, '    direction TB')
     t.locations.forEach((l, i) => {
@@ -26,6 +29,7 @@ export function flowchart(map: Codemap) {
     })
     lines.push('  end')
   }
+  lines.push(...map.traces.slice(1).map((t, i) => `  T${map.traces[i].id} ~~~ T${t.id}`))
   return lines.join('\n')
 }
 
