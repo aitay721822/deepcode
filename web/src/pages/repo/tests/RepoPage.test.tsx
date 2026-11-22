@@ -68,6 +68,9 @@ it('keeps the article visible when a wiki poll fails and retries the fetch', asy
   vi.mocked(getWiki).mockRejectedValueOnce(Object.assign(new Error('Internal Server Error'), { status: 500 }))
   expect((await screen.findByRole('alert', {}, { timeout: 4000 })).textContent).toBe('Internal Server Error')
   expect(screen.getByText('Overview article').textContent).toBe('Overview article')
+  expect(
+    screen.getByRole('alert').compareDocumentPosition(screen.getByRole('article')) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy()
   await act(async () => fireEvent.click(screen.getByRole('button', { name: '重試' })))
   expect(getWiki).toHaveBeenCalledTimes(3)
   expect(screen.queryByRole('alert')).toBeNull()
