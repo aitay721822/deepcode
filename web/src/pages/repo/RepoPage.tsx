@@ -231,6 +231,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                 <FileView repo={repo} path={file} lines={lines} snapshot={fileSnapshot} sha={fileSha} />
               ) : (
                 <>
+                  {page && <LoadError error={wikiError} onRetry={reloadWiki} />}
                   {wikiJob && <JobProgress job={wikiJob} title="產生 Wiki" retry={canSync ? sync : undefined} />}
                   {page ? (
                     <WikiArticle page={page} repo={repo} writing={wikiBusy} onToc={setToc} onCite={openCitation} />
