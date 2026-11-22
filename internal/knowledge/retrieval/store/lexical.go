@@ -75,16 +75,24 @@ func (s *Store) Defining(ctx context.Context, snapshotID int64, names, code, run
 	add(names)
 	add(names)
 	add(runs)
-	return scanIDs(s.DB.QueryContext(ctx, `
+	return scanIDs(s.DB.QueryContext(ctx, definingQuery(len(code), len(names), len(runs)), append(args, snapshotID, limit)...))
+}
+
+// definingQuery is Defining's SQL for code, names and runs of those lengths.
+// freq is MATERIALIZED: each name's chunks are counted once, where SQLite, as
+// a subquery it joins, counted them all again for each row of hit, the rows
+// times the names times each count's postings.
+func definingQuery(code, names, runs int) string {
+	return `
 		WITH hit AS (
-			SELECT c.id, s.name, s.name COLLATE NOCASE IN (`+storage.Placeholders(len(code))+`) AS code, length(s.name) AS len
+			SELECT c.id, s.name, s.name COLLATE NOCASE IN (` + storage.Placeholders(code) + `) AS code, length(s.name) AS len
 			FROM symbols s
 			JOIN chunks c ON c.snapshot_id = s.snapshot_id AND c.path = s.path
 				AND c.start_line <= s.start_line AND c.end_line >= s.start_line
-			WHERE s.snapshot_id = ? AND s.kind <> 'section' AND (s.name COLLATE NOCASE IN (`+storage.Placeholders(len(names))+`)
-					AND (s.kind NOT IN ('property', 'event', 'indexer', 'constructor') OR s.name IN (`+storage.Placeholders(len(names))+`))
-				OR s.name COLLATE NOCASE IN (`+storage.Placeholders(len(runs))+`) AND s.kind IN ('method', 'function'))
-		), freq AS (
+			WHERE s.snapshot_id = ? AND s.kind <> 'section' AND (s.name COLLATE NOCASE IN (` + storage.Placeholders(names) + `)
+					AND (s.kind NOT IN ('property', 'event', 'indexer', 'constructor') OR s.name IN (` + storage.Placeholders(names) + `))
+				OR s.name COLLATE NOCASE IN (` + storage.Placeholders(runs) + `) AND s.kind IN ('method', 'function'))
+		), freq AS MATERIALIZED (
 			SELECT name, CASE WHEN name GLOB '*[A-Za-z0-9]*' THEN (SELECT count(*) FROM chunk_fts JOIN chunks f ON f.id = chunk_fts.rowid
 				WHERE chunk_fts MATCH '"' || name || '"' AND f.snapshot_id = ?) ELSE 1000000000 END AS chunks
 			FROM (SELECT DISTINCT name FROM hit)
@@ -92,5 +100,5 @@ func (s *Store) Defining(ctx context.Context, snapshotID int64, names, code, run
 			SELECT id, code, chunks, len, row_number() OVER (PARTITION BY id ORDER BY code DESC, chunks, len DESC) AS n
 			FROM hit JOIN freq USING (name)
 		)
-		SELECT id FROM best WHERE n = 1 ORDER BY code DESC, chunks, len DESC, id LIMIT ?`, append(args, snapshotID, limit)...))
+		SELECT id FROM best WHERE n = 1 ORDER BY code DESC, chunks, len DESC, id LIMIT ?`
 }

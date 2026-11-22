@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"deepcode/internal/platform/storage"
@@ -57,5 +58,36 @@ func TestDefiningOrder(t *testing.T) {
 		if got, err := s.Defining(ctx, 1, c.names, c.code, nil, 10); err != nil || !slices.Equal(got, c.want) {
 			t.Errorf("Defining(%v, code %v) = %v %v, want %v", c.names, c.code, got, err, c.want)
 		}
+	}
+}
+
+// TestDefiningPlan: SQLite counts each name's chunks once (freq materialized),
+// not again for each symbol the names match.
+func TestDefiningPlan(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	rows, err := db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+definingQuery(1, 1, 1), "run", 1, "run", "run", "run", 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(plan, "MATERIALIZE freq") {
+		t.Errorf("Defining's plan materializes no freq:\n%s", strings.Join(plan, "\n"))
 	}
 }
