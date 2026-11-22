@@ -1,10 +1,10 @@
-import { CopyIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { clearWebhook, getWebhook, setWebhook } from '../../api/repo/repos'
 import { Button } from '../../components/ui/controls/button'
 import { Card } from '../../components/ui/display/card'
 import { Spinner } from '../../components/ui/feedback/spinner'
 import type { Repo } from '../../types/repo/repo'
+import { CopyField } from '../session/tokens/CopyField'
 
 /** The webhook card: its endpoint, a secret shown once, and how to turn it off. */
 export function WebhookCard({ repo }: { repo: Repo }) {
@@ -71,22 +71,7 @@ export function WebhookCard({ repo }: { repo: Repo }) {
       {secret && (
         <div className="mt-3">
           <p className="text-[12px] text-muted-foreground">密鑰只顯示一次，請立即保存</p>
-          <div className="mt-1 flex items-center gap-2">
-            <input
-              readOnly
-              aria-label="Webhook 密鑰"
-              value={secret}
-              className="h-9 min-w-0 flex-1 rounded-md border border-input bg-card px-3 font-mono text-[12px]"
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => navigator.clipboard.writeText(secret)}
-              aria-label="複製密鑰"
-            >
-              <CopyIcon /> 複製
-            </Button>
-          </div>
+          <CopyField value={secret} label="密鑰" className="mt-1" />
         </div>
       )}
       {error && (
