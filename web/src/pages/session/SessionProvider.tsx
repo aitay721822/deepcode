@@ -1,4 +1,5 @@
 import { useLocation, useNavigate } from '@tanstack/react-router'
+import { XIcon } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getMe, logout as signOut } from '../../api/auth'
 import { setUnauthorizedHandler } from '../../api/client'
@@ -19,6 +20,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const publicPage = ['/login', '/signup'].includes(pathname) // pages for the signed out
   const [user, setUser] = useState<Me | null>() // undefined while loading
   const [error, setError] = useState('') // the first load failed
+  const [logoutError, setLogoutError] = useState('')
+  useEffect(() => setLogoutError(''), [user?.id])
   // Signing out is counted: a refresh that started before it cannot put the user back when its answer comes.
   const signOuts = useRef(0)
   // A 401 signs out; any other failure rejects and leaves the user as it was.
@@ -60,7 +63,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       can: (p: Permission) => !!user?.permissions.includes(p),
       refresh,
       logout: async () => {
-        await signOut().catch(() => {}) // signed out here either way
+        setLogoutError('')
+        try {
+          await signOut()
+        } catch (e) {
+          setLogoutError((e as Error).message)
+          return
+        }
         signOuts.current++
         setUser(null)
         navigate({ to: '/login' })
@@ -94,6 +103,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }
   return (
     <SessionContext key={user?.id ?? 'anonymous'} value={session}>
+      {user && logoutError && (
+        <div
+          className="fixed top-20 right-4 left-4 z-50 flex items-center gap-3 rounded-xl border bg-popover p-4 text-sm text-destructive shadow-modal sm:left-auto sm:max-w-md"
+          role="alert"
+        >
+          <p className="min-w-0 flex-1 break-words">登出失敗：{logoutError}</p>
+          <Button variant="ghost" size="icon-sm" aria-label="關閉" onClick={() => setLogoutError('')}>
+            <XIcon />
+          </Button>
+        </div>
+      )}
       {body}
     </SessionContext>
   )
