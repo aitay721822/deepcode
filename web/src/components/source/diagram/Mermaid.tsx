@@ -230,13 +230,13 @@ export function Mermaid({
     >
       <DialogContent
         aria-describedby={undefined}
-        onExitComplete={() => setFullscreen(false)}
         // With no Dialog.Trigger, Radix would leave focus on the body, or on the node just pressed, now gone.
         onCloseAutoFocus={(e) => {
           e.preventDefault()
           expander.current?.focus()
         }}
         className="h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none print:hidden sm:max-w-none [&>div]:h-full [&>div]:grid-rows-[auto_minmax(0,1fr)] [&>div]:gap-0 [&>div]:overflow-hidden [&>div]:p-0"
+        onExitComplete={() => setFullscreen(false)}
       >
         <DialogHeader className="flex-row items-center justify-between gap-2 border-b px-4 py-3 pr-12 text-left">
           <DialogTitle className="min-w-0 truncate font-sans text-base">{label}</DialogTitle>
