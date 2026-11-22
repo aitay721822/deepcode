@@ -17,6 +17,28 @@ vi.mock('mermaid', () => ({
 
 afterEach(cleanup)
 
+it('keeps a single SVG while Escape closes the fullscreen diagram', async () => {
+  render(<Mermaid code="graph TD; source" />)
+  fireEvent.click(await screen.findByRole('button', { name: /全/ }))
+  const dialog = await screen.findByRole('dialog')
+  const counts: number[] = []
+  const sample = () => counts.push(document.querySelectorAll('[id="flowchart-source-0"]').length)
+  const observer = new MutationObserver(sample)
+  observer.observe(document.body, { childList: true, subtree: true })
+  try {
+    sample()
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    sample()
+    await waitForElementToBeRemoved(dialog)
+    await waitFor(() => expect(screen.getByRole('img')).toBeTruthy())
+    sample()
+    expect(Math.max(...counts)).toBe(1)
+    expect(document.querySelectorAll('[id="flowchart-source-0"]')).toHaveLength(1)
+  } finally {
+    observer.disconnect()
+  }
+})
+
 it.each(['click', 'Enter', ' '])('opens source with %s inline, fullscreen and after closing', async (action) => {
   const onNode = vi.fn()
   render(<Mermaid code="graph TD; source[Source file]" onNode={onNode} />)

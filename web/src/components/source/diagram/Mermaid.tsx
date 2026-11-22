@@ -104,6 +104,7 @@ export function Mermaid({
   const [failed, setFailed] = useState(false)
   const [theme, setTheme] = useState(() => document.documentElement.className)
   const [open, setOpen] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
   const [view, setView] = useState({ s: 1, x: 0, y: 0 })
   const viewport = useRef<HTMLDivElement>(null)
   const expander = useRef<HTMLButtonElement>(null)
@@ -211,6 +212,7 @@ export function Mermaid({
         size="sm"
         onClick={() => {
           reset()
+          setFullscreen(true)
           setOpen(true)
         }}
       >
@@ -228,6 +230,7 @@ export function Mermaid({
     >
       <DialogContent
         aria-describedby={undefined}
+        onExitComplete={() => setFullscreen(false)}
         // With no Dialog.Trigger, Radix would leave focus on the body, or on the node just pressed, now gone.
         onCloseAutoFocus={(e) => {
           e.preventDefault()
@@ -294,7 +297,7 @@ export function Mermaid({
   return (
     <>
       {expand}
-      {!open && diagram}
+      {!fullscreen && diagram}
       {full}
     </>
   )
