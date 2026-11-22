@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { getMe } from '../../../api/auth'
 import { useApi } from '../../../lib/useApi'
@@ -39,10 +39,22 @@ it.each(['Member wiki', '', 'Not found'])('discards private API data when the ne
   await waitFor(() => expect(getMe).toHaveBeenCalledTimes(3))
   expect(screen.getByText('Private admin wiki / Sync')).toBeTruthy()
   vi.mocked(getMe).mockResolvedValue(member)
-  if (result === 'Not found') load.mockRejectedValueOnce(new Error(result))
-  else load.mockResolvedValueOnce(result)
+  let resolve!: (value: string) => void
+  let reject!: (error: Error) => void
+  load.mockReturnValueOnce(
+    new Promise<string>((yes, no) => {
+      resolve = yes
+      reject = no
+    }),
+  )
   fireEvent(document, new Event('visibilitychange'))
+  expect(await screen.findByText('Loading wiki')).toBeTruthy()
+  expect(screen.queryByText('Private admin wiki / Sync')).toBeNull()
   await waitFor(() => expect(load).toHaveBeenCalledTimes(2))
+  await act(async () => {
+    if (result === 'Not found') reject(new Error(result))
+    else resolve(result)
+  })
   if (result) expect(await screen.findByText(result)).toBeTruthy()
   expect(screen.queryByText('Private admin wiki / Sync')).toBeNull()
   expect(load).toHaveBeenCalledTimes(2)
