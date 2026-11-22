@@ -14,9 +14,8 @@ it('reports loading when a settled key is re-entered after being disabled', asyn
         resolveReload = resolve
       }),
     )
-  const { result, rerender } = renderHook(({ key }: { key: string | null }) => useApi(key, load), {
-    initialProps: { key: 'symbols' },
-  })
+  const initialProps: { key: string | null } = { key: 'symbols' }
+  const { result, rerender } = renderHook(({ key }) => useApi(key, load), { initialProps })
   await waitFor(() => expect(result.current).toMatchObject({ data: 'cached', loading: false }))
 
   rerender({ key: null })
