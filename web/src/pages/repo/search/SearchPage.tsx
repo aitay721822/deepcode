@@ -3,6 +3,7 @@ import { ArrowLeftIcon } from 'lucide-react'
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { AskBox } from '../../../components/chat/AskBox'
 import { SearchSteps } from '../../../components/chat/SearchSteps'
+import { useChatModel } from '../../../components/chat/useChatModel'
 import { RepoNotice } from '../../../components/repo/RepoNotice'
 import { SkeletonText } from '../../../components/ui/feedback/skeleton'
 import type { Citation } from '../../../types/repo/code'
@@ -17,6 +18,7 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
   const navigate = useNavigate()
   const { data: repo, error, status, reload } = useRepo(id)
   const { conv, turns, selected, loadError, busy, loading, ask, select } = useChat(id, conversationId)
+  const { ready: canAsk, unavailable } = useChatModel()
   const started = useRef(false)
   const aside = useRef<HTMLElement>(null)
   const handed = useLocation({ select: (l) => l.state }) // the question the repository page handed over, if any
@@ -125,9 +127,9 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
       </main>
       {repo.permissions.includes('repo.chat') && (
         <AskBox
-          placeholder="繼續追問"
+          placeholder={unavailable || '繼續追問'}
           busy={busy}
-          disabled={loading}
+          disabled={loading || !canAsk}
           defaultMode={handedMode}
           onAsk={(q, mode) => ask(repo, q, mode)}
         />
