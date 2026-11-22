@@ -50,14 +50,20 @@ it.each([false, true])('updates browser and router hash, scrolls and focuses (re
   const focus = vi.spyOn(HTMLElement.prototype, 'focus')
   HTMLElement.prototype.scrollIntoView = scroll
   const router = createRouter({ routeTree: createRootRoute({ component: Page }), history: createBrowserHistory() })
+  const order: string[] = []
+  router.subscribe('onBeforeLoad', () => order.push('navigation'))
+  scroll.mockImplementation(() => order.push('scroll'))
   render(<RouterProvider router={router} />)
-  fireEvent.click(await screen.findByRole('link', { name: 'Details' }))
+  const link = await screen.findByRole('link', { name: 'Details' })
+  order.length = 0
+  fireEvent.click(link)
   await waitFor(() => expect(window.location.hash).toBe('#h-details'))
   expect(screen.getByRole('status').textContent).toBe('h-details')
   expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Details' }))
   expect(focus).toHaveBeenCalledWith({ preventScroll: true })
   expect(window.location.search).toBe('?page=overview')
   expect(scroll).toHaveBeenCalledExactlyOnceWith({ behavior: reduced ? 'auto' : 'smooth', block: 'start' })
+  expect(order).toEqual(['navigation', 'scroll'])
   router.history.back()
   await waitFor(() => expect(window.location.hash).toBe(''))
   await waitFor(() => expect(screen.getByRole('status').textContent).toBe(''))
