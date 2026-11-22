@@ -54,6 +54,19 @@ it('lets a focused fullscreen node open source with Enter', async () => {
   expect(onNode).toHaveBeenCalledWith('source')
 })
 
+it.each(['a node', 'Escape'])('returns focus to the fullscreen button when %s closes the dialog', async (how) => {
+  render(<Mermaid code="graph TD; source" onNode={vi.fn()} />)
+  const expand = await screen.findByRole('button', { name: /全/ })
+  expand.focus()
+  fireEvent.click(expand)
+  const dialog = await screen.findByRole('dialog')
+  const node = within(dialog).getByRole('button', { name: 'Source file' })
+  node.focus()
+  fireEvent.keyDown(node, { key: how === 'a node' ? 'Enter' : 'Escape' })
+  await waitForElementToBeRemoved(dialog)
+  await waitFor(() => expect(document.activeElement).toBe(expand))
+})
+
 it('ignores the background and leaves diagrams without a callback noninteractive', async () => {
   const onNode = vi.fn()
   const { rerender } = render(<Mermaid code="graph TD; source" onNode={onNode} />)

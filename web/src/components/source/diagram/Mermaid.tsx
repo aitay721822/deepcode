@@ -106,6 +106,7 @@ export function Mermaid({
   const [open, setOpen] = useState(false)
   const [view, setView] = useState({ s: 1, x: 0, y: 0 })
   const viewport = useRef<HTMLDivElement>(null)
+  const expander = useRef<HTMLButtonElement>(null)
   const drag = useRef<{ id: number; x: number; y: number } | null>(null)
   // The theme switch changes <html>'s class: the diagram is drawn again in the new colours.
   useEffect(() => {
@@ -205,6 +206,7 @@ export function Mermaid({
   const expand = (
     <div className="mb-2 flex justify-end print:hidden">
       <Button
+        ref={expander}
         variant="ghost"
         size="sm"
         onClick={() => {
@@ -226,6 +228,11 @@ export function Mermaid({
     >
       <DialogContent
         aria-describedby={undefined}
+        // With no Dialog.Trigger, Radix would leave focus on the body, or on the node just pressed, now gone.
+        onCloseAutoFocus={(e) => {
+          e.preventDefault()
+          expander.current?.focus()
+        }}
         className="h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none print:hidden sm:max-w-none [&>div]:h-full [&>div]:grid-rows-[auto_minmax(0,1fr)] [&>div]:gap-0 [&>div]:overflow-hidden [&>div]:p-0"
       >
         <DialogHeader className="flex-row items-center justify-between gap-2 border-b px-4 py-3 pr-12 text-left">
