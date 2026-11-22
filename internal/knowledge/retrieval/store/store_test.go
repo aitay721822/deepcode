@@ -194,3 +194,34 @@ func TestReached(t *testing.T) {
 		t.Errorf("Holding: %v, %v; want [1 0 2], an anchor on no chunk 0", got, err)
 	}
 }
+
+// TestSCIPUsersPlan: SQLite finds a definition's references by its symbol
+// (scip_references), not by walking every occurrence in the snapshot.
+func TestSCIPUsersPlan(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	rows, err := db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+scipUsersQuery, 1, "a.go", 1, "x", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "SEARCH r USING COVERING INDEX scip_references (snapshot_id=? AND symbol=?)"; !slices.Contains(plan, want) {
+		t.Errorf("SCIPUsers' plan has no %q:\n%s", want, strings.Join(plan, "\n"))
+	}
+}
