@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { SessionProvider } from './SessionProvider'
-import { useSession } from './session'
+import { SessionProvider } from '../SessionProvider'
+import { useSession } from '../session'
 
 const navigate = vi.hoisted(() => vi.fn())
 vi.mock('@tanstack/react-router', () => ({
