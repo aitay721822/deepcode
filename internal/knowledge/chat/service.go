@@ -36,21 +36,23 @@ type Service struct {
 	Chat      ai.Chat         // nil: not configured
 	Tokens    *tokens.Counter // counts Chat's tokens (tokens.Load)
 
-	mu     sync.Mutex
-	asking map[int64]int // answers being written, by user
+	mu        sync.Mutex
+	asking    map[int64]int  // answers being written, by user
+	answering map[int64]bool // conversations with an answer being written
 }
 
 // What an asker can act on. Explain shows these, and only these, to them.
 var (
-	ErrNotFound = store.ErrNotFound
-	errQuestion = errors.New("問題長度必須為 1 到 4000 個字元")
-	errNoModel  = errors.New("尚未設定對話模型：請設定 DEEPCODE_CHAT_MODEL")
-	errIndexing = errors.New("Repository 仍在建立索引中")
-	errBusy     = fmt.Errorf("同時最多只能產生 %d 個回答；請等其中一個完成後再提問", maxAsking)
-	errModel    = errors.New("語言模型沒有回應；請稍後再試")
-	errMap      = errors.New("語言模型沒有畫出有效的 Codemap；請再試一次，或改用一般問答")
-	errSchema   = errors.New("語言模型的回覆不是 Codemap 的 JSON，無法畫出 Codemap；請再試一次，或改用一般問答")
-	errContext  = errors.New("問題連同程式碼超出了語言模型的上下文；請管理員把 DEEPCODE_CHAT_CONTEXT 設為模型的上下文大小")
+	ErrNotFound         = store.ErrNotFound
+	errQuestion         = errors.New("問題長度必須為 1 到 4000 個字元")
+	errNoModel          = errors.New("尚未設定對話模型：請設定 DEEPCODE_CHAT_MODEL")
+	errIndexing         = errors.New("Repository 仍在建立索引中")
+	errBusy             = fmt.Errorf("同時最多只能產生 %d 個回答；請等其中一個完成後再提問", maxAsking)
+	errConversationBusy = errors.New("這個對話正在產生回答；請等它完成後再提問")
+	errModel            = errors.New("語言模型沒有回應；請稍後再試")
+	errMap              = errors.New("語言模型沒有畫出有效的 Codemap；請再試一次，或改用一般問答")
+	errSchema           = errors.New("語言模型的回覆不是 Codemap 的 JSON，無法畫出 Codemap；請再試一次，或改用一般問答")
+	errContext          = errors.New("問題連同程式碼超出了語言模型的上下文；請管理員把 DEEPCODE_CHAT_CONTEXT 設為模型的上下文大小")
 )
 
 // Explain is what the asker is told about err from Ask: one of the errors
@@ -67,7 +69,7 @@ func Explain(err error) (msg string, logIt bool) {
 	case errors.As(err, new(*ai.ErrContext)):
 		return errContext.Error(), true
 	}
-	for _, known := range []error{ErrNotFound, errQuestion, errNoModel, errIndexing, errBusy, errMap} {
+	for _, known := range []error{ErrNotFound, errQuestion, errNoModel, errIndexing, errBusy, errConversationBusy, errMap} {
 		if errors.Is(err, known) {
 			return known.Error(), false
 		}
@@ -157,6 +159,10 @@ func (s *Service) Ask(ctx context.Context, req Request, emit Emit) error {
 	if err != nil {
 		return err
 	}
+	if !s.claim(conv.id) {
+		return errConversationBusy
+	}
+	defer s.release(conv.id)
 	emit("conversation", map[string]any{"id": conv.public, "snapshotId": conv.snap.PublicID, "commitSha": conv.snap.CommitSHA})
 
 	turns, err := s.history(ctx, conv.id)
@@ -313,6 +319,27 @@ func (s *Service) end(user int64) {
 	if s.asking[user]--; s.asking[user] <= 0 {
 		delete(s.asking, user)
 	}
+}
+
+// claim reserves a conversation while its answer is being written.
+func (s *Service) claim(conv int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.answering[conv] {
+		return false
+	}
+	if s.answering == nil {
+		s.answering = map[int64]bool{}
+	}
+	s.answering[conv] = true
+	return true
+}
+
+// release gives back the conversation claim reserved.
+func (s *Service) release(conv int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.answering, conv)
 }
 
 // search retrieves the evidence for query. When none of its words match the

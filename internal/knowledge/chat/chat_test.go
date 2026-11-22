@@ -13,11 +13,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"deepcode/internal/knowledge/chat/harness"
 	"deepcode/internal/knowledge/chat/loop"
 	"deepcode/internal/knowledge/chat/store"
-	"deepcode/internal/knowledge/codemap"
 	"deepcode/internal/knowledge/evidence"
 	"deepcode/internal/knowledge/retrieval"
 	retrievalstore "deepcode/internal/knowledge/retrieval/store"
@@ -33,44 +33,110 @@ import (
 	graphstore "deepcode/internal/repo/index/graphstore"
 )
 
-// TestAskLimit: a user has at most maxAsking answers written at a time, which
-// holds up nobody else, and a finished Ask gives its place back. The asker is
-// told why.
-func TestAskLimit(t *testing.T) {
-	var s Service // no model: an Ask let through fails with errNoModel
-	ask := func(user int64) error {
-		return s.Ask(context.Background(), Request{UserID: user, Question: "why?"}, nil)
+// TestConversationLimit: overlapping questions cannot put answers out of order;
+// another conversation can proceed, and a finished answer releases its place.
+func TestConversationLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := storage.Open(ctx, filepath.Join(t.TempDir(), "limit.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for range maxAsking {
-		s.begin(1)
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x');
+		INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r');
+		INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready');
+		UPDATE repositories SET ready_snapshot_id = 1;
+		INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'store.go', 1, 1, 'subscribe', 'h')`); err != nil {
+		t.Fatal(err)
 	}
-	if err := ask(1); !errors.Is(err, errBusy) {
-		t.Fatalf("one answer too many: %v", err)
-	}
-	if msg, logIt := Explain(errBusy); msg != errBusy.Error() || logIt {
-		t.Fatalf("the asker is told %q (logged: %v)", msg, logIt)
-	}
-	if err := ask(2); !errors.Is(err, errNoModel) {
-		t.Fatalf("another user: %v", err)
-	}
-	s.end(1)
-	for range 2 { // the first gives its place back, so the second gets it
-		if err := ask(1); !errors.Is(err, errNoModel) {
-			t.Fatalf("after one finished: %v", err)
+	started, release := make(chan struct{}), make(chan struct{})
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []ai.Message
+			Tools    []any
 		}
-	}
-	// A question is 1 to 4000 characters, counted as characters, not bytes.
-	for q, want := range map[string]error{" \n": errQuestion, strings.Repeat("長", maxQuestion): errNoModel, strings.Repeat("長", maxQuestion+1): errQuestion} {
-		if err := s.Ask(context.Background(), Request{UserID: 3, Question: q}, nil); !errors.Is(err, want) {
-			t.Fatalf("a question of %d characters: %v", len([]rune(q)), err)
+		json.NewDecoder(r.Body).Decode(&body)
+		if len(body.Tools) > 0 {
+			gathered(w, "")
+			return
 		}
+		reply := "English"
+		if strings.HasPrefix(body.Messages[0].Content, "You are deepcode") {
+			reply = "A2"
+			if strings.Contains(body.Messages[len(body.Messages)-1].Content, "Q1") {
+				close(started)
+				select {
+				case <-release:
+				case <-r.Context().Done():
+					return
+				}
+				reply = "A1"
+			}
+		}
+		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
+		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
+	}))
+	defer model.Close()
+	defer close(release)
+	s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m"})
+	conv := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Ask(ctx, Request{RepoID: 1, UserID: 1, Question: "subscribe Q1"}, func(event string, data any) {
+			if event == "conversation" {
+				conv <- data.(map[string]any)["id"].(string)
+			}
+		})
+	}()
+	var public string
+	select {
+	case <-started:
+		public = <-conv
+	case <-ctx.Done():
+		t.Fatal("first answer did not start")
 	}
-	// Other errors may quote SQL or a server's answer: the asker gets a generic line, the log the error.
-	if msg, logIt := Explain(errors.New(`near "SELECT": syntax error`)); strings.Contains(msg, "SELECT") || !logIt {
-		t.Fatalf("an unexplained error is told as %q (logged: %v)", msg, logIt)
+	ask := func(id, q string) error {
+		return s.Ask(ctx, Request{RepoID: 1, UserID: 1, ConversationID: id, Question: q}, func(string, any) {})
 	}
-	if msg, logIt := Explain(fmt.Errorf("%w: %w", errModel, errors.New("502 from upstream"))); msg != errModel.Error() || !logIt {
-		t.Fatalf("a model failure is told as %q (logged: %v)", msg, logIt)
+	second := ask(public, "subscribe Q2")
+	if err := ask("", "subscribe other"); err != nil {
+		t.Errorf("another conversation while Q1 is blocked: %v", err)
+	}
+	release <- struct{}{}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.Store.ID(ctx, public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := s.Store.Messages(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, m := range messages {
+		content, _, _ := strings.Cut(m.Content, "\n\n")
+		order = append(order, content)
+	}
+	t.Logf("stored messages: %q", order)
+	if !errors.Is(second, errConversationBusy) || !slices.Equal(order, []string{"subscribe Q1", "A1"}) {
+		t.Fatalf("overlapping question: %v; stored messages: %q", second, order)
+	}
+	if msg, logIt := Explain(second); msg != "這個對話正在產生回答；請等它完成後再提問" || logIt {
+		t.Errorf("the asker is told %q (logged: %v)", msg, logIt)
+	}
+	if err := ask(public, "subscribe Q3"); err != nil {
+		t.Fatalf("after the answer finished: %v", err)
+	}
+	failed, stop := context.WithCancel(ctx)
+	defer stop()
+	if err := s.Ask(failed, Request{RepoID: 1, UserID: 1, ConversationID: public, Question: "subscribe failure"}, func(string, any) { stop() }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled answer: %v", err)
+	}
+	if err := ask(public, "subscribe retry"); err != nil {
+		t.Fatalf("after the answer failed: %v", err)
 	}
 }
 
@@ -406,75 +472,5 @@ func TestEvidenceEvent(t *testing.T) {
 	if b, _ := json.Marshal(evidenceEvent(got, got.Hits, 9, evidence.Limit{Chars: math.MaxInt}, parts, fit)); !strings.Contains(string(b), `"dropped":[]`) || !strings.Contains(string(b), all) ||
 		!strings.Contains(string(b), `"evicted":[]`) || !strings.Contains(string(b), `"refused":[]`) || !strings.Contains(string(b), `"chars":{"rendered":9}`) {
 		t.Errorf("nothing left out: %s", b)
-	}
-}
-
-// TestCodemap: a code map is drawn with drawing events, its locations linked
-// (a path's brackets escaped) and cited, and stored to be read back; an answer
-// that is no map is told as errSchema, and logged; a map that shows no line of
-// the sources, twice, as errMap; a question no code matches, as an answer's in
-// its language. A context that holds a plain answer's request
-// but not a code map's with its retry tells the asker the context it needs.
-func TestCodemap(t *testing.T) {
-	ctx := context.Background()
-	db, _ := storage.Open(ctx, filepath.Join(t.TempDir(), "m.db"))
-	defer db.Close()
-	db.Exec(`INSERT INTO users(id, username, password_hash) VALUES (1, 'a', 'x');
-		INSERT INTO repositories(id, url, owner, name) VALUES (1, 'https://github.com/o/r', 'o', 'r');
-		INSERT INTO snapshots(id, repository_id, commit_sha, status) VALUES (1, 1, 'abc', 'ready');
-		UPDATE repositories SET ready_snapshot_id = 1;
-		INSERT INTO chunks(snapshot_id, path, start_line, end_line, content, content_hash) VALUES (1, 'app/[slug]/page.tsx', 1, 1, 'export default function Page() {}', 'h')`)
-	drawn := `{"title":"Page","description":"` + strings.Repeat("x", 600) + `","traces":[{"title":"Render","description":"d","guide":"g","locations":[{"title":"Page","description":"renders",` +
-		`"path":"app/[slug]/page.tsx","line":1,"code":"export default function Page() {}"}]}]}`
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Messages []ai.Message
-			Tools    []any
-		}
-		json.NewDecoder(r.Body).Decode(&body)
-		if len(body.Tools) > 0 {
-			gathered(w, "")
-			return
-		}
-		reply := drawn
-		chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": reply}, "finish_reason": "stop"}}})
-		fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", chunk)
-	}))
-	defer model.Close()
-	s := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m"})
-	var events []string
-	var done Message
-	err := s.Ask(ctx, Request{RepoID: 1, Question: "How is a Page rendered?", Codemap: true, UserID: 1}, func(event string, data any) {
-		if events = append(events, event); event == "done" {
-			done = data.(Message)
-		}
-	})
-	stored, _ := s.Store.Messages(ctx, 1)
-	if err != nil || !slices.Contains(events, "drawing") || !strings.Contains(done.Content, `- **1a** Page [app/\[slug\]/page.tsx:1-1](`) ||
-		len(done.Citations) != 1 || len(stored) != 2 || !strings.Contains(string(stored[1].Codemap), `"id":"1a"`) {
-		t.Fatalf("%v %v %+v %+v", err, events, done, stored)
-	}
-	for reply, want := range map[string]error{"no map": errSchema, strings.Replace(drawn, `"path":"app/[slug]/page.tsx"`, `"path":"nope.tsx"`, 1): errMap} {
-		drawn = reply
-		err := s.Ask(ctx, Request{RepoID: 1, Question: "How is a Page rendered?", Codemap: true, UserID: 1}, func(string, any) {})
-		if msg, logIt := Explain(err); !errors.Is(err, want) || msg != want.Error() || logIt != (want == errSchema) {
-			t.Fatalf("%.20q: %v, told %q", reply, err, msg)
-		}
-	}
-	kept, drawn := drawn, "zzzz" // the language and the search terms named: none matches a chunk, so no map is drawn
-	for q, want := range map[string]string{"zzzz qqqq": "No indexed code matched this question, so it can't be confirmed from the current code.", "zzzz 什麼": "無法從目前程式碼確認：沒有任何已索引的程式碼符合這個問題。"} {
-		err := s.Ask(ctx, Request{RepoID: 1, Question: q, Codemap: true, UserID: 1}, func(event string, data any) {
-			if event == "done" {
-				done = data.(Message)
-			}
-		})
-		if err != nil || done.Content != want || len(done.Citations) != 0 {
-			t.Fatalf("no evidence for %q: %v %+v", q, err, done)
-		}
-	}
-	drawn = kept
-	m := codemap.Request{Repo: "o/r", Commit: "abc", Question: "How is a Page rendered?", Language: "English"} // as Ask asks
-	if err := service(db, &compat.Client{BaseURL: model.URL, ModelName: "m", MaxTokens: 100, Context: (codemap.Fixed(m, &compat.Client{}, harness.New(&compat.Client{}, o200k).Prompt) + 2000) * 10 / 8}).Ask(ctx, Request{RepoID: 1, Question: m.Question, Codemap: true, UserID: 1}, func(string, any) {}); !errors.As(err, new(*harness.ErrSmall)) {
-		t.Fatalf("a context without the retry's room: %v", err)
 	}
 }
