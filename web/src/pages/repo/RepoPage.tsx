@@ -1,10 +1,11 @@
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { ChevronRightIcon } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { type Ref, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getWiki } from '../../api/repo/wiki'
 import { AskBox } from '../../components/chat/AskBox'
+import { Notice } from '../../components/layout/Notice'
 import { JobProgress } from '../../components/repo/JobProgress'
 import { isActive } from '../../components/repo/jobStage'
 import { RepoNotice } from '../../components/repo/RepoNotice'
@@ -136,7 +137,8 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   }
 
   const here = { to: '/repos/$id', params: { id: repo.id } } as const
-  const page = wiki?.pages.find((p) => p.slug === search.page) ?? wiki?.pages[0]
+  const page = search.page === undefined ? wiki?.pages[0] : wiki?.pages.find((p) => p.slug === search.page)
+  const pageNotFound = search.page !== undefined && !!wiki && !page
   // The wiki job's card: once it failed (above any pages written before), or while it runs before the first page exists.
   const job = repo.job
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
@@ -232,6 +234,13 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                   {wikiJob && <JobProgress job={wikiJob} title="產生 Wiki" retry={canSync ? sync : undefined} />}
                   {page ? (
                     <WikiArticle page={page} repo={repo} writing={wikiBusy} onToc={setToc} onCite={openCitation} />
+                  ) : pageNotFound ? (
+                    <Notice title="找不到 Wiki 頁面">
+                      <p className="text-muted-foreground [overflow-wrap:anywhere]">找不到頁面「{search.page}」。</p>
+                      <Link {...here} search={{}} className="text-brand underline underline-offset-4">
+                        返回 Overview
+                      </Link>
+                    </Notice>
                   ) : (
                     !wikiJob && (
                       <WikiPlaceholder
