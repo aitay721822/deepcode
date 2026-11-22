@@ -51,10 +51,11 @@ export function WikiNav({
     setBusy(true)
     setError('')
     try {
-      const url = URL.createObjectURL(await exportWiki(repoId))
+      const { blob, filename } = await exportWiki(repoId)
+      const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `wiki-${repoId}.zip`
+      a.download = filename
       a.click()
       setTimeout(() => URL.revokeObjectURL(url), 0)
     } catch (e) {
