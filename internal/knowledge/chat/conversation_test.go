@@ -94,7 +94,7 @@ func TestAskSCIPContext(t *testing.T) {
 			if !ok {
 				_, notes, _ = strings.Cut(prompt, "\n\n")
 			}
-			if notes, _, _ = strings.Cut(notes, "\n\n"); strings.Contains(notes, `"main.go":10`) {
+			if notes, _, _ = strings.Cut(notes, "\n\n"); regexp.MustCompile(`"main\.go":[\d, ]*\b10\b`).MatchString(notes) { // wherever 10 falls in main.go's lines
 				t.Errorf("unrelated reference in SCIP context: %q", notes)
 			}
 			for _, want := range tc.want {

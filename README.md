@@ -141,84 +141,59 @@
 
 ## 語意引用（SCIP）
 
-SCIP 是可選的精確引用索引，不取代 Tree-sitter、呼叫圖或 Wiki，也不需要 LSP。啟用後，deepcode 對同一個 Git commit 以各自隔離的容器執行 Go、JavaScript／TypeScript／TSX、Python、Rust、Java、C# 索引，不用每次手動匯入。Java 與 C# 僅涵蓋 JDK／SDK-only 原始碼，不支援 Maven、Gradle 或 repo 的 MSBuild 建置。
+選用。設定後，deepcode 索引時會在隔離的容器裡為 Go、JavaScript／TypeScript／TSX、Python、Rust、Java、C# 產生 SCIP 索引，問答就能列出某個宣告在索引內的確切引用行，主要用在「誰呼叫了 X」這類問題。執行 deepcode 的帳號要能使用本機 Docker（Linux 容器）。
 
-```sh
-docker build -f scripts/scip/scip-go.Dockerfile -t deepcode-scip-go:0.2.10 .
-docker build -f scripts/scip/scip-node.Dockerfile -t deepcode-scip-node:0.6.2-0.6.8 .
-docker build -f scripts/scip/scip-rust.Dockerfile -t deepcode-scip-rust:2026-11-16 .
-docker build -f scripts/scip/scip-java.Dockerfile -t deepcode-scip-java:0.14.2 .
-docker build -f scripts/scip/scip-dotnet.Dockerfile -t deepcode-scip-dotnet:0.2.14 .
-DEEPCODE_SCIP_GO_IMAGE=deepcode-scip-go:0.2.10 \
-DEEPCODE_SCIP_TYPESCRIPT_IMAGE=deepcode-scip-node:0.6.2-0.6.8 \
-DEEPCODE_SCIP_PYTHON_IMAGE=deepcode-scip-node:0.6.2-0.6.8 \
-DEEPCODE_SCIP_RUST_IMAGE=deepcode-scip-rust:2026-11-16 \
-DEEPCODE_SCIP_JAVA_IMAGE=deepcode-scip-java:0.14.2 \
-DEEPCODE_SCIP_CSHARP_IMAGE=deepcode-scip-dotnet:0.2.14 deepcode serve
-```
+1. 在 deepcode 原始碼（git clone 下來的 repository）的根目錄建映像：
 
-也可在 `deepcode.yaml` 設定 `scip_go_image: deepcode-scip-go:0.2.10`、`scip_typescript_image: deepcode-scip-node:0.6.2-0.6.8`、`scip_python_image: deepcode-scip-node:0.6.2-0.6.8`、`scip_rust_image: deepcode-scip-rust:2026-11-16`、`scip_java_image: deepcode-scip-java:0.14.2`、`scip_csharp_image: deepcode-scip-dotnet:0.2.14`。各自獨立設定，預設留空（停用）。Node 映像固定使用 scip-typescript 0.6.2 與 scip-python 0.6.8；Rust 使用 Rust 1.91.1 與校驗 SHA-256 的 rust-analyzer 2026-11-16（目前映像為 x86-64）；Java 使用 JDK 21 與校驗 SHA-256 的 scip-javac／scip-java 0.14.2；C# 使用 .NET SDK 10 與校驗 SHA-256 的 scip-dotnet 0.2.14。需要 deepcode 服務帳號能使用本機 Docker 的 Linux 容器；既有快照用「重建索引」補上，不必切到新 commit。
+   ```sh
+   docker build -f scripts/scip/scip-go.Dockerfile -t deepcode-scip-go:0.2.10 .
+   docker build -f scripts/scip/scip-node.Dockerfile -t deepcode-scip-node:0.6.2-0.6.8 .
+   docker build -f scripts/scip/scip-rust.Dockerfile -t deepcode-scip-rust:2026-11-16 .
+   docker build -f scripts/scip/scip-java.Dockerfile -t deepcode-scip-java:0.14.2 .
+   docker build -f scripts/scip/scip-dotnet.Dockerfile -t deepcode-scip-dotnet:0.2.14 .
+   ```
 
-索引容器使用唯讀的 Git 檔案、停用網路、非特權使用者與 noexec 暫存區，不會自動拉取映像、下載或安裝依賴。Go 另停用 CGO、測試與 workspace；依賴須已 vendoring、是 repo 內的本機模組，或由管理者預先放入可信映像的 `/opt/go-mod` 快取。不要在 deepcode 主機上為不可信 repo 安裝依賴。共用 checkout 上限為 20,000 檔案、128 MiB；每種索引器上限為 16 個專案、兩分鐘，另有容器資源與輸出限制。任一專案失敗會捨棄該索引器的全部結果並記錄原因，不影響其他語言或 Tree-sitter；最後一次發布所有成功語言的 SCIP 結果。
+2. 在 `deepcode.yaml` 為要用的語言設定映像（也可以用 `DEEPCODE_SCIP_GO_IMAGE` 這類環境變數；沒設的語言就不跑），再重新啟動 `deepcode serve`：
 
-JS／TS 以 Git tree 的 `tsconfig.json` 或 `jsconfig.json` 所在目錄為專案（排除 node_modules、vendor、點與底線開頭目錄），同一檔案以最深專案的結果為準。沒有設定檔時以 repo 根目錄與 `--infer-tsconfig` 索引；因工具會寫入設定檔，設定產生於容器 `/tmp`，涵蓋唯讀來源的 JS／TS／TSX。Python 在根目錄索引，使用空環境清單跳過 pip。這兩種索引器不執行 npm scripts 或 Python 專案程式；離線缺少的第三方依賴可能無法解析。
+   ```yaml
+   scip_go_image: deepcode-scip-go:0.2.10
+   scip_typescript_image: deepcode-scip-node:0.6.2-0.6.8
+   scip_python_image: deepcode-scip-node:0.6.2-0.6.8
+   scip_rust_image: deepcode-scip-rust:2026-11-16
+   scip_java_image: deepcode-scip-java:0.14.2
+   scip_csharp_image: deepcode-scip-dotnet:0.2.14
+   ```
 
-JS／TS 專案若編譯自己 `tsconfig.json`／`jsconfig.json` 所在目錄以外的檔案，該次索引的全部 JS／TS 結果會捨棄，僅保留 Tree-sitter；不影響其他語言。
+3. 新的索引會帶上 SCIP；既有的快照用「重新索引」補上。
 
-Rust 以最外層 `Cargo.toml` 為專案（排除 target、vendor、點與底線開頭目錄）。必須提交有效的 `Cargo.lock`；先以 `cargo metadata --offline --locked` 驗證所有套件的 source 都是 null，只接受無外部依賴或 path-only workspace，不接受 registry／Git 依賴。為避免設定指定可執行程式或切換專案載入方式，含 `.cargo/config`、`.cargo/config.toml` 或 `rust-project.json` 的 repo 會停用 Rust SCIP。固定工具鏈、覆寫 build scripts 為 `true`、停用 proc macros，並以 null sysroot 避免標準函式庫與巨集伺服器載入；不安裝 rust-src，也不執行 repo 的 build.rs 或巨集。因此 std、外部依賴與巨集產生的符號可能無法解析。Cargo HOME、target、設定與輸出皆在容器 `/tmp`，不寫入 `/src`。無文件的 JS／TS solution 專案會略過，仍保留其子專案結果。
+索引容器只讀 Git 裡的檔案，沒有網路，不安裝依賴，也不執行 repo 的程式、建置或巨集，所以只解析得到 repo 內的引用：
 
-Java 在 repo 根目錄以直接 `javac -proc:none` 編譯 JDK-only 的 `.java` 來源，再由 scip-javac 產生索引。不執行 Maven、Gradle、annotation processors 或 repo 程式；排除點與底線開頭、vendor、node_modules、build、target 目錄。類別檔、shards 與輸出都寫在 `/tmp`。需要外部依賴或產生來源的專案會編譯失敗，只捨棄 Java SCIP，保留 Tree-sitter 與其他語言結果。
+- Go：依賴須已 vendoring、屬於 repo 內的模組，或由管理者預先放進可信映像的 `/opt/go-mod`。不要在 deepcode 主機上為不可信的 repo 安裝依賴。
+- JS／TS：以 `tsconfig.json`／`jsconfig.json` 所在目錄為專案，沒有時從根目錄推斷；有專案編譯到自己目錄以外的檔案時，捨棄整個 JS／TS 結果。
+- Python：在根目錄索引，不跑 pip。
+- Rust：要提交 `Cargo.lock`，只接受沒有外部依賴或只有 path 依賴的 workspace；有 `.cargo/config`、`.cargo/config.toml` 或 `rust-project.json` 時停用。映像目前只有 x86-64。
+- Java：以 `javac` 編譯只用 JDK 的原始碼，不跑 Maven、Gradle 或 annotation processor。
+- C#：只編譯 repo 的 `.cs`，不讀 `.csproj`、`.sln`，還原時只用空的套件來源，不取得任何 NuGet 套件。
 
-C# 使用 `/tmp` 內產生的可信 `net10.0` 專案，僅納入 repo 的 `.cs` 原始碼（排除 obj、bin、點與底線開頭、vendor、node_modules、build、target 目錄），停用分析器、程式碼產生器與共用編譯。不讀取 repo 的 `.csproj`、`.sln`、`global.json`、`Directory.Build.*` 或 NuGet 設定；以空套件來源還原並先編譯成功，再使用 `--skip-dotnet-restore` 索引。scip-dotnet 仍會評估 MSBuild，但只評估產生的可信專案；workspace 失敗訊息或空索引會被拒絕。需要 NuGet 套件、generators、多目標建置或不相容編譯設定的程式碼僅保留 Tree-sitter，不會嘗試執行 repo 建置。
+每種語言最多 16 個專案、合計兩分鐘；共用的 checkout 最多 20,000 個檔案、128 MiB。某個語言失敗時只捨棄它的 SCIP 結果，Tree-sitter 與其他語言照常，原因寫在背景工作的進度裡。問答找不到指定的宣告時，會退回名稱搜尋並標示出來；找得到宣告卻沒有引用，不代表整個 repo 都沒有。
 
-### 從 CI 手動匯入（備用）
+### 從 CI 匯入 Go 索引
 
-手動 `import-scip` 仍只接受 Go。若不使用本機 Docker，或要採用不同的 Go 建置組態，仍可從可信 CI 匯入：
-
-1. 在可信 CI 用乾淨的 checkout 產生索引。使用與 deepcode 快照相同的完整 commit，把依賴和建置組態固定在 CI；只匯入這個 job 產生的索引和清單。
-2. 在 deepcode 伺服器上，等對應快照索引完成，再匯入這兩個檔案。repo ID 是 deepcode 網址 `/repos/<id>` 中的 ID。
-
-以下在 checkout 的 Go module 根目錄執行（可以是 repo 的子目錄；已用 `scip-go` v0.2.10 驗證）。將輸出保存在 checkout 外，再把 `<repo-id>` 換成 deepcode 的 ID：
+不用本機 Docker，或 Go 要用別的建置組態時，可以在可信的 CI 對快照的同一個 commit 產生索引再匯入（只支援 Go）。CI 需要 scip-go v0.2.10（`go install github.com/scip-code/scip-go/cmd/scip-go@v0.2.10`）與 Python 3.9 以上。在乾淨 checkout 的 Go module 根目錄執行，`<repo-id>` 是 deepcode 網址 `/repos/<id>` 裡的 id，[`scip-manifest.py`](scripts/scip-manifest.py) 從本 repository 取得，放在 checkout 以外：
 
 ```sh
 out=$(mktemp -d)
 scip-go index --skip-tests --skip-implementations --output "$out/index.scip" ./...
-python3 - '<repo-id>' "$out/index.scip" > "$out/manifest.json" <<'PY'
-import hashlib, json, pathlib, subprocess, sys
-
-def git(*args):
-    return subprocess.check_output(["git", *args])
-
-commit = git("rev-parse", "HEAD").decode().strip()
-module_root = git("rev-parse", "--show-prefix").decode().removesuffix("\n").removesuffix("/")
-prefix = (module_root + "/").encode() if module_root else b""
-files = {}
-for entry in git("ls-tree", "--full-tree", "-rz", commit).split(b"\0"):
-    if not entry:
-        continue
-    header, path = entry.split(b"\t", 1)
-    mode, _, oid = header.split()
-    if mode in (b"100644", b"100755") and path.endswith(b".go") and path.startswith(prefix):
-        files[path.decode()] = oid.decode()
-print(json.dumps({
-    "repository": sys.argv[1],
-    "commit": commit,
-    "module_root": module_root,
-    "index_sha256": hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest(),
-    "files": files,
-}))
-PY
+python3 /path/to/scip-manifest.py '<repo-id>' "$out/index.scip" > "$out/manifest.json"
 ```
+
+等 deepcode 把這個 commit 的快照索引完成，再把這兩個檔案帶到 deepcode 伺服器上匯入。只匯入這個 CI job 產生的檔案：
 
 ```sh
 deepcode import-scip --data /path/to/deepcode-data manifest.json index.scip
 ```
 
-匯入會核對 commit、索引檔 SHA-256 與每個文件的 Git blob ID，並驗證要儲存的 UTF-8 位置。若 Tree-sitter 跳過某個 Go 檔案，匯入只用本機 Git 快取核對該 commit 與 blob，不儲存該檔案的引用，也不會向遠端抓取；若快取已換到新 commit，請為目前的快照重新產生索引。雜湊只用來核對輸入是否一致，不能驗證來源。匯入失敗會保留所有語言的原有索引；重新匯入只會完整取代同一快照的 Go SCIP 資料，保留其他語言的自動索引，新 commit 不會沿用。
-
-啟用自動 SCIP 後，重建同一快照時，自動產生的索引會取代該快照的所有 SCIP 資料，包括手動匯入的 Go 資料。若要保留手動索引的建置組態，請在這類重建完成後重新執行 `import-scip`。
-
-只有 SCIP 已涵蓋的檔案與建置組態提供精確引用。未能識別指定宣告時，問答會退回名稱搜尋並標示；找得到宣告但沒有索引內的引用，不代表整個 repo 都沒有引用。試點上限是 16 MiB、5,000 個索引文件及 200,000 筆 occurrences；若超限可選擇較小的一組 Go packages。
+匯入會核對 commit、索引的 SHA-256 與每個檔案的 Git blob，這只確認輸入一致，不能證明來源。失敗時保留原有的索引，成功時只取代同一快照的 Go SCIP 資料。上限是 16 MiB、5,000 個索引文件、200,000 筆 occurrence，超過時改為一組較小的 Go packages 產生索引。之後若用自動 SCIP 重新索引同一個快照，手動匯入的資料會被取代，要再匯入一次。
 
 ## 升級
 
