@@ -1,22 +1,36 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
+import { login } from '../../../api/auth'
 import { SessionProvider } from '../SessionProvider'
 import { useSession } from '../session'
 
 const navigate = vi.hoisted(() => vi.fn())
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigate,
-  useLocation: () => ({ pathname: '/', searchStr: '' }),
+  useLocation: () => ({ pathname: '/login', searchStr: '' }),
 }))
 
 function Screen() {
-  const { user, logout } = useSession()
+  const { user, logout, refresh } = useSession()
   return user ? (
-    <button type="button" onClick={logout}>
-      登出 {user.username}
-    </button>
+    <>
+      <button type="button" onClick={logout}>
+        登出 {user.username}
+      </button>
+      <button type="button" onClick={refresh}>
+        重新整理工作階段
+      </button>
+    </>
   ) : (
-    <h1>登入</h1>
+    <button
+      type="button"
+      onClick={async () => {
+        await login('admin', 'password')
+        await refresh()
+      }}
+    >
+      登入
+    </button>
   )
 }
 
@@ -27,7 +41,9 @@ afterEach(() => {
 })
 
 function setup(failure?: 'network' | 'server' | 'empty') {
-  const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ username: 'admin', permissions: [] })))
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'admin', username: 'admin', permissions: [] })))
   if (failure === 'network') fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
   else if (failure === 'server')
     fetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: '登出失敗，請稍後再試。' }), { status: 500 }))
@@ -51,7 +67,7 @@ it.each(['network', 'server', 'empty'] as const)(
     expect((await screen.findByRole('alert')).textContent).toContain(
       failure === 'network' ? '無法連線到伺服器' : failure === 'server' ? '登出失敗' : 'HTTP 500',
     )
-    expect(screen.queryByRole('heading', { name: '登入' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^登入$/ })).toBeNull()
     expect(screen.getByRole('button', { name: '登出 admin' })).toBeTruthy()
     expect(navigate).not.toHaveBeenCalled()
     fetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
@@ -65,5 +81,40 @@ it('navigates to login after a successful logout', async () => {
   setup()
   fireEvent.click(await screen.findByRole('button', { name: '登出 admin' }))
   await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: '/login' }))
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('keeps the error outside the page flow and lets the user dismiss it', async () => {
+  setup('server')
+  fireEvent.click(await screen.findByRole('button', { name: '登出 admin' }))
+  expect((await screen.findByRole('alert')).classList.contains('fixed')).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: '關閉' }))
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.getByRole('button', { name: '登出 admin' })).toBeTruthy()
+  expect(navigate).not.toHaveBeenCalled()
+})
+
+it('clears a failed logout error after a 401 and reauthentication', async () => {
+  const fetch = setup('server')
+  fireEvent.click(await screen.findByRole('button', { name: '登出 admin' }))
+  await screen.findByRole('alert')
+  fetch.mockResolvedValueOnce(new Response(null, { status: 401 }))
+  fireEvent.click(screen.getByRole('button', { name: '重新整理工作階段' }))
+  const signIn = await screen.findByRole('button', { name: /^登入$/ })
+  expect(screen.queryByRole('alert')).toBeNull()
+  fetch.mockResolvedValueOnce(new Response('{}'))
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'admin', username: 'admin', permissions: [] })))
+  fireEvent.click(signIn)
+  await screen.findByRole('button', { name: '登出 admin' })
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('clears a failed logout error when the signed-in user changes', async () => {
+  const fetch = setup('server')
+  fireEvent.click(await screen.findByRole('button', { name: '登出 admin' }))
+  await screen.findByRole('alert')
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ id: 'other', username: 'other', permissions: [] })))
+  fireEvent.click(screen.getByRole('button', { name: '重新整理工作階段' }))
+  await screen.findByRole('button', { name: '登出 other' })
   expect(screen.queryByRole('alert')).toBeNull()
 })
