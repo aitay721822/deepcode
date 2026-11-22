@@ -228,10 +228,11 @@ export function Mermaid({
     >
       <DialogContent
         aria-describedby={undefined}
-        // With no Dialog.Trigger, Radix would leave focus on the body, or on the node just pressed, now gone.
+        // With no Dialog.Trigger, Radix would leave focus on the body, or on the node just pressed, now gone. Not
+        // scrolled to: on one column, a node's source has just been scrolled into view below.
         onCloseAutoFocus={(e) => {
           e.preventDefault()
-          expander.current?.focus()
+          expander.current?.focus({ preventScroll: true })
         }}
         className="h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none print:hidden sm:max-w-none [&>div]:h-full [&>div]:grid-rows-[auto_minmax(0,1fr)] [&>div]:gap-0 [&>div]:overflow-hidden [&>div]:p-0"
       >
