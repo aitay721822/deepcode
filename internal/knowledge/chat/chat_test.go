@@ -103,7 +103,11 @@ func TestConversationLimit(t *testing.T) {
 	if err := ask("", "subscribe other"); err != nil {
 		t.Errorf("another conversation while Q1 is blocked: %v", err)
 	}
-	release <- struct{}{}
+	select {
+	case release <- struct{}{}:
+	case <-ctx.Done():
+		t.Fatal("first answer did not accept release")
+	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
