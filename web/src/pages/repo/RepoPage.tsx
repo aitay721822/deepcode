@@ -2,7 +2,6 @@ import { useNavigate } from '@tanstack/react-router'
 import { AnimatePresence, motion } from 'motion/react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { getHealth } from '../../api/repo/repos'
 import { getWiki } from '../../api/repo/wiki'
 import { AskBox } from '../../components/chat/AskBox'
 import { JobProgress } from '../../components/repo/JobProgress'
@@ -22,6 +21,7 @@ import { CitedFile } from './files/CitedFile'
 import { FilesPanel } from './files/FilesPanel'
 import { FileView } from './files/FileView'
 import { SyncCard } from './SyncCard'
+import { useChatModel } from './search/useChatModel'
 import { useSync } from './useSync'
 import { WebhookCard } from './WebhookCard'
 import { Toc, type TocItem } from './wiki/Toc'
@@ -39,7 +39,7 @@ type RepoSearch = { page?: string; file?: string; L?: string; s?: string }
 export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const navigate = useNavigate()
   const { data: repo, error, status, reload } = useRepo(id)
-  const { data: health, error: healthError } = useApi('health', getHealth)
+  const { health, error: healthError, ready: canAsk, unavailable } = useChatModel()
   const canSync = repo?.permissions.includes('repo.sync') ?? false
   const leftControls = useRef<HTMLDivElement>(null)
   const rightControls = useRef<HTMLDivElement>(null)
@@ -255,14 +255,8 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
       )}
       {repo.permissions.includes('repo.chat') && (
         <AskBox
-          placeholder={
-            healthError
-              ? `目前無法提問：${healthError}`
-              : health && !health.chatModel
-                ? '請先設定 DEEPCODE_CHAT_MODEL 才能提問'
-                : `針對 ${repo.owner}/${repo.name} 提問`
-          }
-          disabled={!ready || !health?.chatModel}
+          placeholder={unavailable || `針對 ${repo.owner}/${repo.name} 提問`}
+          disabled={!ready || !canAsk}
           // Over the main column, clear of the side columns: 260px from 900px wide, 300px each from 1240px.
           className="min-[900px]:pl-[276px] min-[1240px]:px-[316px]"
           onAsk={(q, mode) =>

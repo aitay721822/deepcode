@@ -12,11 +12,13 @@ import { useRepo } from '../../useRepo'
 import { CitedFile } from '../files/CitedFile'
 import { ChatTurn } from './ChatTurn'
 import { useChat } from './useChat'
+import { useChatModel } from './useChatModel'
 
 export function SearchPage({ id, conversationId }: { id: string; conversationId?: string }) {
   const navigate = useNavigate()
   const { data: repo, error, status, reload } = useRepo(id)
   const { conv, turns, selected, loadError, busy, loading, ask, select } = useChat(id, conversationId)
+  const { ready: canAsk, unavailable } = useChatModel()
   const started = useRef(false)
   const aside = useRef<HTMLElement>(null)
   const handed = useLocation({ select: (l) => l.state }) // the question the repository page handed over, if any
@@ -125,9 +127,9 @@ export function SearchPage({ id, conversationId }: { id: string; conversationId?
       </main>
       {repo.permissions.includes('repo.chat') && (
         <AskBox
-          placeholder="繼續追問"
+          placeholder={unavailable || '繼續追問'}
           busy={busy}
-          disabled={loading}
+          disabled={loading || !canAsk}
           defaultMode={handedMode}
           onAsk={(q, mode) => ask(repo, q, mode)}
         />
