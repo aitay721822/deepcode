@@ -1,7 +1,7 @@
 import { useNavigate } from '@tanstack/react-router'
 import { ChevronRightIcon } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { type Ref, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { getHealth } from '../../api/repo/repos'
 import { getWiki } from '../../api/repo/wiki'
@@ -38,6 +38,26 @@ const RIGHT_RAIL_MEDIA = '(min-width: 1240px)'
 /** ?page= a wiki page; or ?file= a file, L= its lines (5-9), s= the snapshot it is read at (links made before wiki
  * citations opened in the drawer: nothing writes it now). */
 type RepoSearch = { page?: string; file?: string; L?: string; s?: string }
+
+function MobileControls({ initiallyOpen, hostRef }: { initiallyOpen: boolean; hostRef: Ref<HTMLDivElement> }) {
+  const [open, setOpen] = useState(initiallyOpen)
+  return (
+    <details
+      className="group border-b print:hidden min-[900px]:hidden"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 font-mono text-[11.5px] font-medium tracking-[0.12em] [&::-webkit-details-marker]:hidden">
+        <ChevronRightIcon
+          aria-hidden="true"
+          className="size-3.5 text-brand transition-transform group-open:rotate-90"
+        />
+        管理 Repository
+      </summary>
+      <div className="px-4 pb-4" ref={hostRef} />
+    </details>
+  )
+}
 
 export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const navigate = useNavigate()
@@ -181,18 +201,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
           )}
         </aside>
 
-        {canSync && (
-          <details className="group border-b print:hidden min-[900px]:hidden" open={!ready}>
-            <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-3 font-mono text-[11.5px] font-medium tracking-[0.12em] [&::-webkit-details-marker]:hidden">
-              <ChevronRightIcon
-                aria-hidden="true"
-                className="size-3.5 text-brand transition-transform group-open:rotate-90"
-              />
-              管理 Repository
-            </summary>
-            <div className="px-4 pb-4" ref={mobileControls} />
-          </details>
-        )}
+        {canSync && <MobileControls initiallyOpen={!ready} hostRef={mobileControls} />}
 
         <main
           tabIndex={-1}
