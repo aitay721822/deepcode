@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { clearWebhook, getWebhook, setWebhook } from '../../api/repo/repos'
 import { Button } from '../../components/ui/controls/button'
 import { Card } from '../../components/ui/display/card'
@@ -12,13 +12,15 @@ export function WebhookCard({ repo }: { repo: Repo }) {
   const [secret, setSecret] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const writeVersion = useRef(0)
   const endpoint = `${window.location.origin}/api/hooks/${repo.id}`
 
   useEffect(() => {
     let live = true
+    const version = writeVersion.current
     getWebhook(repo.id)
-      .then((r) => live && setHasSecret(r.hasSecret))
-      .catch((e) => live && setError(e instanceof Error ? e.message : String(e)))
+      .then((r) => live && version === writeVersion.current && setHasSecret(r.hasSecret))
+      .catch((e) => live && version === writeVersion.current && setError(e instanceof Error ? e.message : String(e)))
     return () => {
       live = false
     }
@@ -29,6 +31,7 @@ export function WebhookCard({ repo }: { repo: Repo }) {
     setError('')
     try {
       const r = await setWebhook(repo.id)
+      writeVersion.current++
       setSecret(r.secret)
       setHasSecret(true)
     } catch (e) {
@@ -43,6 +46,7 @@ export function WebhookCard({ repo }: { repo: Repo }) {
     setError('')
     try {
       await clearWebhook(repo.id)
+      writeVersion.current++
       setHasSecret(false)
       setSecret('')
     } catch (e) {
