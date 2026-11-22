@@ -37,11 +37,11 @@ export function BranchCard({ repo, onChanged }: { repo: Repo; onChanged: () => v
     try {
       const r = await setTrackedBranch(repo.id, branch)
       setNote(r.job ? '已排入同步' : '已是最新的 Commit')
-      onChanged()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
+      onChanged() // The branch may be saved even when the sync after it fails.
     }
   }
 
