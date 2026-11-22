@@ -27,9 +27,9 @@ export function WikiArticle({
 }) {
   const ref = useRef<HTMLElement>(null)
   const scrolled = useRef<{ content: string; hash: string } | null>(null)
-  const hash = location.hash
   // Headings get their ids from the rendered text, so the outline always matches.
   useLayoutEffect(() => {
+    const hash = location.hash
     const used = new Set<string>()
     const items = [...(ref.current?.querySelectorAll<HTMLElement>('.markdown h2, .markdown h3') ?? [])].map((h) => {
       const text = h.textContent ?? ''
@@ -59,7 +59,7 @@ export function WikiArticle({
     return () => {
       cancelled = true
     }
-  }, [page.content, onToc, hash])
+  }, [page.content, onToc])
   // Its plan's files first, then any other file it cites (a section's shared sources).
   const files = [...new Set([...(page.files ?? []), ...page.citations.map((c) => c.path)])]
   return (

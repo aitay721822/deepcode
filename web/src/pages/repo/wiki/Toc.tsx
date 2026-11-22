@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { cn } from '../../../lib/style/cn'
 
 export type TocItem = { id: string; text: string; level: number }
@@ -15,15 +16,18 @@ export function Toc({ items }: { items: TocItem[] }) {
       <ul>
         {numbered.map((i) => (
           <li key={i.id}>
-            <a
-              href={`#${i.id}`}
+            <Link
+              to="."
+              hash={i.id}
+              search={(search) => search}
+              resetScroll={false}
+              hashScrollIntoView={false}
               className={cn(
                 'flex gap-2.5 py-1.5 text-[13px] leading-[1.45] [overflow-wrap:anywhere] text-muted-foreground transition-colors hover:text-foreground',
                 i.level === 3 && 'pl-[22px]',
               )}
               onClick={(e) => {
                 if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return // a new tab or window: the browser's own way
-                e.preventDefault()
                 const still = matchMedia('(prefers-reduced-motion: reduce)').matches
                 const heading = document.getElementById(i.id)
                 heading?.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' })
@@ -36,7 +40,7 @@ export function Toc({ items }: { items: TocItem[] }) {
                 </span>
               )}
               {i.text}
-            </a>
+            </Link>
           </li>
         ))}
       </ul>
