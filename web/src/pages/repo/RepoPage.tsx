@@ -93,6 +93,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const {
     data: wiki,
     error: wikiError,
+    loading: wikiLoading,
     reload: reloadWiki,
   } = useApi(
     repo && ready ? `${repo.id}:${ready.id}` : null,
@@ -100,11 +101,12 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     wikiBusy ? 3000 : undefined,
   )
   // Pick up the last page once generation stops; on the first render the wiki is being fetched already.
-  const wasBusy = useRef(wikiBusy)
+  const [wasBusy, setWasBusy] = useState(wikiBusy)
   useEffect(() => {
-    if (wasBusy.current && !wikiBusy) reloadWiki()
-    wasBusy.current = wikiBusy
-  }, [wikiBusy, reloadWiki])
+    if (wasBusy && !wikiBusy) reloadWiki()
+    setWasBusy(wikiBusy)
+  }, [wikiBusy, wasBusy, reloadWiki])
+  const wikiPending = wikiBusy || wasBusy || wikiLoading
 
   const file = search.file ?? null
   const lines = search.L?.split('-')
@@ -138,7 +140,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
 
   const here = { to: '/repos/$id', params: { id: repo.id } } as const
   const page = search.page === undefined ? wiki?.pages[0] : wiki?.pages.find((p) => p.slug === search.page)
-  const pageNotFound = search.page !== undefined && !!wiki && !page && !wikiBusy
+  const pageNotFound = search.page !== undefined && !!wiki && !page && !wikiPending && !wikiError
   // The wiki job's card: once it failed (above any pages written before), or while it runs before the first page exists.
   const job = repo.job
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
@@ -251,8 +253,8 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                       <WikiPlaceholder
                         repo={repo}
                         health={healthError ? null : health}
-                        wiki={wiki}
-                        error={wikiError}
+                        wiki={wikiPending ? undefined : wiki}
+                        error={wikiPending ? undefined : wikiError}
                         onReload={reloadWiki}
                         sync={canSync ? sync : undefined}
                       />

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 
-type State<T> = { key?: string; data?: T; error?: string; status?: number }
+type State<T> = { key?: string; tick?: number; data?: T; error?: string; status?: number }
 
 /**
  * Calls load for key (null = nothing yet), again every pollMs while set (less often while loads fail).
  * The key names what load fetches: a new key loads anew.
+ * loading means the latest request has not settled, even when there is data from an earlier load.
  * status is the HTTP status of the last failure, when the error carries one.
  */
 export function useApi<T>(key: string | null, load: () => Promise<T>, pollMs?: number) {
@@ -26,13 +27,19 @@ export function useApi<T>(key: string | null, load: () => Promise<T>, pollMs?: n
       .then(
         (data) => {
           failures.current = skip.current = 0
-          if (live) setState({ key, data })
+          if (live) setState({ key, tick, data })
         },
         // A failed poll keeps the last data for this key; never another key's.
         (e: Error & { status?: number }) => {
           skip.current = 2 ** Math.min(++failures.current, 4) - 1
           if (live)
-            setState((s) => ({ key, data: s.key === key ? s.data : undefined, error: e.message, status: e.status }))
+            setState((s) => ({
+              key,
+              tick,
+              data: s.key === key ? s.data : undefined,
+              error: e.message,
+              status: e.status,
+            }))
         },
       )
       .finally(() => {
@@ -63,6 +70,7 @@ export function useApi<T>(key: string | null, load: () => Promise<T>, pollMs?: n
     data: current ? state.data : undefined,
     error: current ? state.error : undefined,
     status: current ? state.status : undefined,
+    loading: !!key && (!current || state.tick !== tick),
     reload,
   }
 }
