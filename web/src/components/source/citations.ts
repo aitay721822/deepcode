@@ -18,7 +18,8 @@ export function linkMarkers(
   if (!sha) return { text, citations }
   const link = (c: Citation) => {
     citations.push(c)
-    return `[${c.path}:${c.startLine}-${c.endLine}](${sourceUrl(repo, sha, c.path, c.startLine, c.endLine)})`
+    const label = c.path.replace(/[\\`*_[\]{}()#+.!<>&~|-]/g, '\\$&')
+    return `[${label}:${c.startLine}-${c.endLine}](${sourceUrl(repo, sha, c.path, c.startLine, c.endLine)})`
   }
   const linked = text
     .split(fenceRe) // odd parts are code blocks, where links do not render
