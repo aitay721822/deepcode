@@ -56,9 +56,11 @@ it.each([false, true])('updates browser and router hash, scrolls and focuses (re
   render(<RouterProvider router={router} />)
   const link = await screen.findByRole('link', { name: 'Details' })
   order.length = 0
+  expect(link.hasAttribute('aria-current')).toBe(false)
   fireEvent.click(link)
   await waitFor(() => expect(window.location.hash).toBe('#h-details'))
   expect(screen.getByRole('status').textContent).toBe('h-details')
+  expect(link.getAttribute('aria-current')).toBe('page')
   expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Details' }))
   expect(focus).toHaveBeenCalledWith({ preventScroll: true })
   expect(window.location.search).toBe('?page=overview')

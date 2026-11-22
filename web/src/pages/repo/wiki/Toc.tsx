@@ -27,6 +27,7 @@ export function Toc({ items }: { items: TocItem[] }) {
             <li key={i.id}>
               <Link
                 {...destination}
+                activeOptions={{ includeHash: true }}
                 className={cn(
                   'flex gap-2.5 py-1.5 text-[13px] leading-[1.45] [overflow-wrap:anywhere] text-muted-foreground transition-colors hover:text-foreground',
                   i.level === 3 && 'pl-[22px]',
