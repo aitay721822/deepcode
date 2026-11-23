@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,6 +119,31 @@ func (c *client) patch(path, body string, v any) int { return c.call(http.Method
 func (c *client) delete(path string) int             { return c.call(http.MethodDelete, path, "", nil) }
 func (c *client) login(username, password string) int {
 	return c.post("/api/auth/login", creds(username, password), nil)
+}
+
+func checkBranchRemoteFailure(t *testing.T, admin *client, repoPath string) {
+	t.Helper()
+	for _, status := range []int{http.StatusNotFound, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			client := *admin
+			client.t = t
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer remote.Close()
+			t.Setenv("GIT_CONFIG_KEY_0", "url."+remote.URL+"/demo.git.insteadOf")
+			for _, req := range []struct{ method, path, body string }{
+				{http.MethodGet, "/branches", ""},
+				{http.MethodPost, "/branch", `{"branch":"main"}`},
+			} {
+				var response struct{ Error string }
+				code := client.call(req.method, repoPath+req.path, req.body, &response)
+				if code != http.StatusBadGateway || !strings.HasPrefix(response.Error, "Git 無法從伺服器讀取這個 Repository；") {
+					t.Errorf("%s %s: got %d %q, want 502 with the Git upstream error", req.method, req.path, code, response.Error)
+				}
+			}
+		})
+	}
 }
 
 // githubServer returns the public id of the built-in GitHub server.
