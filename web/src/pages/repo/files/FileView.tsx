@@ -1,4 +1,5 @@
 import { ExternalLinkIcon } from 'lucide-react'
+import { type Ref, useLayoutEffect } from 'react'
 import { getFile } from '../../../api/repo/code'
 import { providerName } from '../../../components/repo/provider/providerName'
 import { sourceUrl } from '../../../components/repo/sourceLinks'
@@ -19,16 +20,27 @@ export function FileView({
   lines,
   snapshot,
   sha,
+  onReady,
+  codeRef,
+  lineRef,
 }: {
   repo: Repo
   path: string
   lines?: number[]
   snapshot: string | null
   sha?: string
+  onReady?: () => void
+  /** The code's box, for a page to scroll to. */
+  codeRef?: Ref<HTMLDivElement>
+  /** CodeView's marker on the line asked for. */
+  lineRef?: Ref<HTMLDivElement>
 }) {
   const { data, error, reload } = useApi(`${repo.id}:${snapshot || repo.snapshot?.id}:${path}`, () =>
     getFile(repo.id, path, snapshot),
   )
+  useLayoutEffect(() => {
+    if (data || error) onReady?.()
+  }, [data, error, onReady])
   const commit = data?.commitSha ?? sha
   const cut = path.lastIndexOf('/') + 1 // on a narrow screen the folders give way, the file name stays
   const link = commit && (
@@ -53,14 +65,18 @@ export function FileView({
       {error ? (
         <LoadError className="m-0 p-4" error={error} onRetry={reload} />
       ) : data ? (
-        <CodeView
-          label={path}
-          className={codeHeight}
-          content={data.content}
-          language={data.language}
-          startLine={lines?.[0]}
-          endLine={lines?.[1]}
-        />
+        // Scrolled to, the code clears the sticky header (4rem).
+        <div ref={codeRef} className="scroll-mt-16">
+          <CodeView
+            label={path}
+            className={codeHeight}
+            content={data.content}
+            language={data.language}
+            startLine={lines?.[0]}
+            endLine={lines?.[1]}
+            lineRef={lineRef}
+          />
+        </div>
       ) : (
         <SkeletonText className="px-4" />
       )}

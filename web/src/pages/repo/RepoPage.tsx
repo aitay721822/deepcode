@@ -39,6 +39,7 @@ const RIGHT_RAIL_MEDIA = '(min-width: 1240px)'
 /** ?page= the selected wiki page; ?file= a file, L= its lines (5-9), s= the snapshot it is read at (links made before wiki
  * citations opened in the drawer: nothing writes it now). */
 type RepoSearch = { page?: string; file?: string; L?: string; s?: string }
+type FileReveal = { repoId: string; path: string; lines: string | undefined; opener: Element | null; ready?: true }
 
 function MobileControls({ initiallyOpen, hostRef }: { initiallyOpen: boolean; hostRef: Ref<HTMLDivElement> }) {
   const [open, setOpen] = useState(initiallyOpen)
@@ -65,6 +66,10 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const { data: repo, error, status, reload } = useRepo(id)
   const { health, error: healthError, ready: canAsk, unavailable } = useChatModel()
   const canSync = repo?.permissions.includes('repo.sync') ?? false
+  const main = useRef<HTMLElement>(null)
+  const code = useRef<HTMLDivElement>(null)
+  const askedLine = useRef<HTMLDivElement>(null)
+  const askBox = useRef<HTMLDivElement>(null)
   const mobileControls = useRef<HTMLDivElement>(null)
   const leftControls = useRef<HTMLDivElement>(null)
   const rightControls = useRef<HTMLDivElement>(null)
@@ -114,6 +119,35 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     .filter(Boolean)
     .sort((a, b) => a - b) // "5-" → [5], "9-3" → [3, 9]
   const fileSnapshot = search.s ?? null
+  const [fileReveal, setFileReveal] = useState<FileReveal | null>(null)
+  const revealMatches = useCallback(
+    (request: FileReveal) =>
+      request.repoId === id && request.path === file && request.lines === search.L && !fileSnapshot,
+    [id, file, search.L, fileSnapshot],
+  )
+  useLayoutEffect(() => {
+    setFileReveal((request) => (request && revealMatches(request) ? request : null))
+  }, [revealMatches])
+  const reveal = fileReveal && revealMatches(fileReveal) ? fileReveal : null
+  useLayoutEffect(() => {
+    if (!reveal?.ready) return
+    setFileReveal(null)
+    main.current?.scrollIntoView({ block: 'start' })
+    // The AskBox floats over the foot, as tall as its draft. Only when it covers the line asked for (a phone held
+    // sideways, a long draft) does the code go up under the header, past the file bar; and should the line still be
+    // under it (near the file's end it sits low in the box), the page goes up the rest of the way.
+    const floor = askBox.current?.getBoundingClientRect().top ?? window.innerHeight
+    const hidden = () => (askedLine.current?.getBoundingClientRect().bottom ?? 0) - floor
+    if (hidden() > 0) {
+      code.current?.scrollIntoView({ block: 'start' })
+      const rest = hidden()
+      if (rest > 0) window.scrollBy({ top: rest })
+    }
+    const focused = document.activeElement
+    if (!focused || focused === document.body || focused === reveal.opener) {
+      main.current?.focus({ preventScroll: true })
+    }
+  }, [reveal])
   const [tab, setTab] = useState<Tab>(file ? 'files' : 'wiki')
   useEffect(() => setTab(file ? 'files' : 'wiki'), [file]) // follow back/forward too
   const [toc, setToc] = useState<TocItem[]>([])
@@ -145,8 +179,16 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const job = repo.job
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
   // The file tree and symbol search list the published snapshot, so their files open there.
-  const openFile = (path: string, start?: number, end?: number) =>
-    navigate({ ...here, search: { page: search.page, file: path, L: start ? `${start}-${end ?? start}` : undefined } })
+  const openFile = (path: string, start?: number, end?: number) => {
+    const singleColumn = !window.matchMedia(LEFT_RAIL_MEDIA).matches
+    const lines = start ? `${start}-${end ?? start}` : undefined
+    setFileReveal(singleColumn ? { repoId: id, path, lines, opener: document.activeElement } : null)
+    return navigate({
+      ...here,
+      search: { page: search.page, file: path, L: lines },
+      resetScroll: !singleColumn,
+    })
+  }
   const changeTab = (t: string) => {
     if (t === 'wiki' && file) navigate({ ...here, search: { page: search.page } })
     else setTab(t as Tab)
@@ -212,8 +254,10 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
         {canSync && <MobileControls initiallyOpen={!ready} hostRef={mobileControls} />}
 
         <main
+          ref={main}
+          inert={!!fileReveal && !fileReveal.ready}
           tabIndex={-1}
-          className="mx-auto w-full max-w-[860px] px-4 pt-6 pb-44 outline-none min-[900px]:px-12 min-[900px]:pt-9"
+          className="mx-auto w-full max-w-[860px] scroll-mt-16 px-4 pt-6 pb-44 outline-none min-[900px]:px-12 min-[900px]:pt-9"
         >
           {/* A poll that failed keeps the repository as it was: say so, or a job's card would seem to stand still. */}
           <LoadError className="mb-6" error={error} onRetry={reload} />
@@ -234,7 +278,20 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                   <p className="text-muted-foreground">尚未建立索引。</p>
                 ) // its first job was never queued, or is gone: Sync queues it
               ) : file ? (
-                <FileView repo={repo} path={file} lines={lines} snapshot={fileSnapshot} sha={fileSha} />
+                <FileView
+                  repo={repo}
+                  path={file}
+                  lines={lines}
+                  snapshot={fileSnapshot}
+                  sha={fileSha}
+                  codeRef={code}
+                  lineRef={askedLine}
+                  onReady={
+                    reveal && !reveal.ready
+                      ? () => setFileReveal((current) => (current === reveal ? { ...reveal, ready: true } : current))
+                      : undefined
+                  }
+                />
               ) : (
                 <>
                   {page && <LoadError error={wikiError} onRetry={reloadWiki} />}
@@ -311,6 +368,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
       )}
       {repo.permissions.includes('repo.chat') && (
         <AskBox
+          ref={askBox}
           placeholder={unavailable || `針對 ${repo.owner}/${repo.name} 提問`}
           disabled={!ready || !canAsk}
           // Over the main column, clear of the side columns: 260px from 900px wide, 300px each from 1240px.
