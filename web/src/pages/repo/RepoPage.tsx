@@ -39,7 +39,7 @@ const RIGHT_RAIL_MEDIA = '(min-width: 1240px)'
 /** ?page= the selected wiki page; ?file= a file, L= its lines (5-9), s= the snapshot it is read at (links made before wiki
  * citations opened in the drawer: nothing writes it now). */
 type RepoSearch = { page?: string; file?: string; L?: string; s?: string }
-type FileReveal = { repoId: string; path: string; lines: string | undefined; ready?: true }
+type FileReveal = { repoId: string; path: string; lines: string | undefined; opener: Element | null; ready?: true }
 
 function MobileControls({ initiallyOpen, hostRef }: { initiallyOpen: boolean; hostRef: Ref<HTMLDivElement> }) {
   const [open, setOpen] = useState(initiallyOpen)
@@ -130,7 +130,10 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     if (!reveal?.ready) return
     setFileReveal(null)
     main.current?.scrollIntoView({ block: 'start' })
-    main.current?.focus({ preventScroll: true })
+    const focused = document.activeElement
+    if (!focused || focused === document.body || focused === reveal.opener) {
+      main.current?.focus({ preventScroll: true })
+    }
   }, [reveal])
   const [tab, setTab] = useState<Tab>(file ? 'files' : 'wiki')
   useEffect(() => setTab(file ? 'files' : 'wiki'), [file]) // follow back/forward too
@@ -166,7 +169,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const openFile = (path: string, start?: number, end?: number) => {
     const singleColumn = !window.matchMedia(LEFT_RAIL_MEDIA).matches
     const lines = start ? `${start}-${end ?? start}` : undefined
-    setFileReveal(singleColumn ? { repoId: id, path, lines } : null)
+    setFileReveal(singleColumn ? { repoId: id, path, lines, opener: document.activeElement } : null)
     return navigate({
       ...here,
       search: { page: search.page, file: path, L: lines },

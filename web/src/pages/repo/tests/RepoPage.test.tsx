@@ -38,19 +38,19 @@ vi.mock('../../Frame', () => ({ Frame: ({ children }: { children: ReactNode }) =
 vi.mock('../../useRepo', () => ({ useRepo: vi.fn() }))
 vi.mock('../../../api/repo/code', () => ({ getFile: vi.fn(), listFiles: vi.fn() }))
 vi.mock('../../../api/repo/wiki', () => ({ getWiki: vi.fn() }))
-vi.mock('../search/useChatModel', () => ({ useChatModel: () => ({}) }))
+vi.mock('../search/useChatModel', () => ({ useChatModel: () => ({ ready: true }) }))
 vi.mock('../wiki/WikiArticle', () => ({
   WikiArticle: ({ page }: { page: Wiki['pages'][number] }) => <article>{page.title} article</article>,
 }))
 
 const pages = [{ slug: 'overview', title: 'Overview', content: '# Overview', citations: [] }]
 
-function setRepo(job?: Job) {
+function setRepo(job?: Job, permissions: Repo['permissions'] = []) {
   vi.mocked(useRepo).mockReturnValue({
     data: {
       id: 'r1',
       url: 'https://github.com/acme/demo',
-      permissions: [],
+      permissions,
       job,
       snapshot: { id: 's1', commitSha: 'abc', indexedAt: '2026-01-01' },
     } as unknown as Repo,
@@ -61,8 +61,8 @@ function setRepo(job?: Job) {
   })
 }
 
-function open(search: { page?: string }, wikiPages = pages, job?: Job) {
-  setRepo(job)
+function open(search: { page?: string }, wikiPages = pages, job?: Job, permissions?: Repo['permissions']) {
+  setRepo(job, permissions)
   vi.mocked(getWiki).mockResolvedValue({
     snapshotId: 's1',
     commitSha: 'abc',
@@ -88,12 +88,16 @@ function mockDesktop(desktop: boolean) {
   }))
 }
 
-it.each([false, true])('reveals a selected file only after its code is rendered (desktop: %s)', async (desktop) => {
+it.each([
+  { desktop: false, typing: false },
+  { desktop: true, typing: false },
+  { desktop: false, typing: true },
+])('reveals a selected file after it renders (desktop: $desktop, typing: $typing)', async ({ desktop, typing }) => {
   mockDesktop(desktop)
   vi.mocked(listFiles).mockResolvedValue([{ path: 'main.go', language: 'go', lines: 1, size: 12 }])
   let resolveFile!: (file: FileContent) => void
   vi.mocked(getFile).mockReturnValueOnce(new Promise((resolve) => (resolveFile = resolve)))
-  const { rerender } = open({ page: 'overview' })
+  const { rerender } = open({ page: 'overview' }, pages, undefined, typing ? ['repo.chat'] : [])
   navigate.mockImplementation(({ search = {} }) => rerender(<RepoPage id="r1" search={search} />))
   await screen.findByText('Overview article')
 
@@ -121,6 +125,11 @@ it.each([false, true])('reveals a selected file only after its code is rendered 
   expect.soft(scrollIntoView).not.toHaveBeenCalled()
   expect.soft(focus).not.toHaveBeenCalled()
 
+  const question = typing ? screen.getByRole('textbox', { name: /提問/ }) : null
+  if (question) {
+    question.focus()
+    expect(document.activeElement).toBe(question)
+  }
   await act(async () => resolveFile({ path: 'main.go', content: 'package main', language: 'go', commitSha: 'abc' }))
   expect(main.querySelector('code')?.textContent).toBe('package main')
   expect(main.hasAttribute('inert')).toBe(false)
@@ -130,8 +139,13 @@ it.each([false, true])('reveals a selected file only after its code is rendered 
   } else {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
     expect(scrollIntoView).toHaveReturnedWith('package main')
-    expect(focus).toHaveBeenCalledWith({ preventScroll: true })
-    expect(document.activeElement).toBe(main)
+    if (question) {
+      expect(document.activeElement).toBe(question)
+      expect(focus).not.toHaveBeenCalled()
+    } else {
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true })
+      expect(document.activeElement).toBe(main)
+    }
   }
 })
 
