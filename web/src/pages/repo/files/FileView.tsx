@@ -1,4 +1,5 @@
 import { ExternalLinkIcon } from 'lucide-react'
+import { useLayoutEffect } from 'react'
 import { getFile } from '../../../api/repo/code'
 import { providerName } from '../../../components/repo/provider/providerName'
 import { sourceUrl } from '../../../components/repo/sourceLinks'
@@ -19,16 +20,21 @@ export function FileView({
   lines,
   snapshot,
   sha,
+  onReady,
 }: {
   repo: Repo
   path: string
   lines?: number[]
   snapshot: string | null
   sha?: string
+  onReady?: () => void
 }) {
   const { data, error, reload } = useApi(`${repo.id}:${snapshot || repo.snapshot?.id}:${path}`, () =>
     getFile(repo.id, path, snapshot),
   )
+  useLayoutEffect(() => {
+    if (data || error) onReady?.()
+  }, [data, error, onReady])
   const commit = data?.commitSha ?? sha
   const cut = path.lastIndexOf('/') + 1 // on a narrow screen the folders give way, the file name stays
   const link = commit && (

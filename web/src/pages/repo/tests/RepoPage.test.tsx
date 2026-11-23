@@ -4,6 +4,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { getFile, listFiles } from '../../../api/repo/code'
 import { getWiki } from '../../../api/repo/wiki'
+import type { FileContent } from '../../../types/repo/code'
 import type { Job, Repo } from '../../../types/repo/repo'
 import type { Wiki } from '../../../types/repo/wiki'
 import { useRepo } from '../../useRepo'
@@ -87,13 +88,19 @@ function mockDesktop(desktop: boolean) {
   }))
 }
 
-it.each([false, true])('reveals a selected file in the single-column layout (desktop: %s)', async (desktop) => {
+it.each([false, true])('reveals a selected file only after its code is rendered (desktop: %s)', async (desktop) => {
   mockDesktop(desktop)
   vi.mocked(listFiles).mockResolvedValue([{ path: 'main.go', language: 'go', lines: 1, size: 12 }])
-  open({ page: 'overview' })
+  let resolveFile!: (file: FileContent) => void
+  vi.mocked(getFile).mockReturnValueOnce(new Promise((resolve) => (resolveFile = resolve)))
+  const { rerender } = open({ page: 'overview' })
+  navigate.mockImplementation(({ search = {} }) => rerender(<RepoPage id="r1" search={search} />))
+  await screen.findByText('Overview article')
+
   const main = screen.getByRole('main')
-  const scrollIntoView = vi.fn()
+  const scrollIntoView = vi.fn(() => main.querySelector('code')?.textContent)
   main.scrollIntoView = scrollIntoView
+  const focus = vi.spyOn(main, 'focus')
 
   fireEvent.mouseDown(screen.getByRole('tab', { name: '檔案' }), { button: 0 })
   const file = await screen.findByRole('button', { name: 'main.go' })
@@ -103,11 +110,27 @@ it.each([false, true])('reveals a selected file in the single-column layout (des
   expect(navigate).toHaveBeenCalledWith(
     expect.objectContaining({ search: { page: 'overview', file: 'main.go', L: undefined }, resetScroll: desktop }),
   )
+  expect(screen.getByText('Overview article')).toBeTruthy()
+  expect.soft(scrollIntoView).not.toHaveBeenCalled()
+  expect.soft(focus).not.toHaveBeenCalled()
+  expect.soft(main.hasAttribute('inert')).toBe(!desktop)
+  expect.soft(document.activeElement).toBe(file)
+
+  await screen.findByRole('heading', { name: 'main.go' })
+  expect(screen.queryByText('Overview article')).toBeNull()
+  expect.soft(scrollIntoView).not.toHaveBeenCalled()
+  expect.soft(focus).not.toHaveBeenCalled()
+
+  await act(async () => resolveFile({ path: 'main.go', content: 'package main', language: 'go', commitSha: 'abc' }))
+  expect(main.querySelector('code')?.textContent).toBe('package main')
+  expect(main.hasAttribute('inert')).toBe(false)
   if (desktop) {
     expect(scrollIntoView).not.toHaveBeenCalled()
     expect(document.activeElement).toBe(file)
   } else {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+    expect(scrollIntoView).toHaveReturnedWith('package main')
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true })
     expect(document.activeElement).toBe(main)
   }
 })

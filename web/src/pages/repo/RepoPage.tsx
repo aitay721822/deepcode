@@ -39,6 +39,7 @@ const RIGHT_RAIL_MEDIA = '(min-width: 1240px)'
 /** ?page= the selected wiki page; ?file= a file, L= its lines (5-9), s= the snapshot it is read at (links made before wiki
  * citations opened in the drawer: nothing writes it now). */
 type RepoSearch = { page?: string; file?: string; L?: string; s?: string }
+type FileReveal = { repoId: string; path: string; lines: string | undefined; ready?: true }
 
 function MobileControls({ initiallyOpen, hostRef }: { initiallyOpen: boolean; hostRef: Ref<HTMLDivElement> }) {
   const [open, setOpen] = useState(initiallyOpen)
@@ -115,6 +116,22 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     .filter(Boolean)
     .sort((a, b) => a - b) // "5-" → [5], "9-3" → [3, 9]
   const fileSnapshot = search.s ?? null
+  const [fileReveal, setFileReveal] = useState<FileReveal | null>(null)
+  const revealMatches = useCallback(
+    (request: FileReveal) =>
+      request.repoId === id && request.path === file && request.lines === search.L && !fileSnapshot,
+    [id, file, search.L, fileSnapshot],
+  )
+  useLayoutEffect(() => {
+    setFileReveal((request) => (request && revealMatches(request) ? request : null))
+  }, [revealMatches])
+  const reveal = fileReveal && revealMatches(fileReveal) ? fileReveal : null
+  useLayoutEffect(() => {
+    if (!reveal?.ready) return
+    setFileReveal(null)
+    main.current?.scrollIntoView({ block: 'start' })
+    main.current?.focus({ preventScroll: true })
+  }, [reveal])
   const [tab, setTab] = useState<Tab>(file ? 'files' : 'wiki')
   useEffect(() => setTab(file ? 'files' : 'wiki'), [file]) // follow back/forward too
   const [toc, setToc] = useState<TocItem[]>([])
@@ -146,17 +163,15 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const job = repo.job
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
   // The file tree and symbol search list the published snapshot, so their files open there.
-  const openFile = async (path: string, start?: number, end?: number) => {
+  const openFile = (path: string, start?: number, end?: number) => {
     const singleColumn = !window.matchMedia(LEFT_RAIL_MEDIA).matches
-    await navigate({
+    const lines = start ? `${start}-${end ?? start}` : undefined
+    setFileReveal(singleColumn ? { repoId: id, path, lines } : null)
+    return navigate({
       ...here,
-      search: { page: search.page, file: path, L: start ? `${start}-${end ?? start}` : undefined },
+      search: { page: search.page, file: path, L: lines },
       resetScroll: !singleColumn,
     })
-    if (singleColumn) {
-      main.current?.scrollIntoView({ block: 'start' })
-      main.current?.focus({ preventScroll: true })
-    }
   }
   const changeTab = (t: string) => {
     if (t === 'wiki' && file) navigate({ ...here, search: { page: search.page } })
@@ -224,6 +239,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
 
         <main
           ref={main}
+          inert={!!fileReveal && !fileReveal.ready}
           tabIndex={-1}
           className="mx-auto w-full max-w-[860px] scroll-mt-16 px-4 pt-6 pb-44 outline-none min-[900px]:px-12 min-[900px]:pt-9"
         >
@@ -246,7 +262,18 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                   <p className="text-muted-foreground">尚未建立索引。</p>
                 ) // its first job was never queued, or is gone: Sync queues it
               ) : file ? (
-                <FileView repo={repo} path={file} lines={lines} snapshot={fileSnapshot} sha={fileSha} />
+                <FileView
+                  repo={repo}
+                  path={file}
+                  lines={lines}
+                  snapshot={fileSnapshot}
+                  sha={fileSha}
+                  onReady={
+                    reveal && !reveal.ready
+                      ? () => setFileReveal((current) => (current === reveal ? { ...reveal, ready: true } : current))
+                      : undefined
+                  }
+                />
               ) : (
                 <>
                   {page && <LoadError error={wikiError} onRetry={reloadWiki} />}
