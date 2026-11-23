@@ -153,7 +153,10 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
       search: { file: path, L: start ? `${start}-${end ?? start}` : undefined },
       resetScroll: !singleColumn,
     })
-    if (singleColumn) main.current?.scrollIntoView({ block: 'start' })
+    if (singleColumn) {
+      main.current?.scrollIntoView({ block: 'start' })
+      main.current?.focus({ preventScroll: true })
+    }
   }
   // A wiki citation, or a file of the page, opens in the drawer over the page, which keeps its place, at the wiki's
   // snapshot, which trails the published one while the next wiki is written.

@@ -81,16 +81,25 @@ it.each([false, true])('reveals a selected file in the single-column layout (des
   }))
   vi.mocked(listFiles).mockResolvedValue([{ path: 'main.go', language: 'go', lines: 1, size: 12 }])
   open({})
+  const main = screen.getByRole('main')
   const scrollIntoView = vi.fn()
-  screen.getByRole('main').scrollIntoView = scrollIntoView
+  main.scrollIntoView = scrollIntoView
 
   fireEvent.mouseDown(screen.getByRole('tab', { name: '檔案' }), { button: 0 })
   const file = await screen.findByRole('button', { name: 'main.go' })
+  file.focus()
   await act(async () => fireEvent.click(file))
 
-  expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ search: { file: 'main.go', L: undefined } }))
-  if (desktop) expect(scrollIntoView).not.toHaveBeenCalled()
-  else expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+  expect(navigate).toHaveBeenCalledWith(
+    expect.objectContaining({ search: { file: 'main.go', L: undefined }, resetScroll: desktop }),
+  )
+  if (desktop) {
+    expect(scrollIntoView).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(file)
+  } else {
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
+    expect(document.activeElement).toBe(main)
+  }
 })
 
 it('keeps the article visible when a wiki poll fails and retries the fetch', async () => {
