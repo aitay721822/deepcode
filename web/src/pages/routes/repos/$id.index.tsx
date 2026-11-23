@@ -2,7 +2,7 @@ import { createFileRoute, notFound } from '@tanstack/react-router'
 import { isId, queryParams } from '../../../lib/url'
 import { RepoPage } from '../../repo/RepoPage'
 
-/** /repos/:id[?page=|?file=&L=&s=]: a repository's wiki, or one of its files. */
+/** /repos/:id: a repository's wiki (?page=), or one of its files (?file= with optional page, L and s). */
 export const Route = createFileRoute('/repos/$id/')({
   params: {
     parse: (params) => {
