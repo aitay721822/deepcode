@@ -53,7 +53,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-it('keeps the status filter through a job and back', async () => {
+it('keeps the status filter through a job and back, by its link or the browser', async () => {
   vi.mocked(listJobs).mockImplementation(async (status) => [done, broken].filter((j) => !status || j.status === status))
   vi.mocked(getJob).mockResolvedValue({ job: done, logs: [] })
   const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: ['/admin/jobs'] }) })
@@ -74,4 +74,12 @@ it('keeps the status filter through a job and back', async () => {
   expect(screen.getByRole('combobox', { name: '狀態' }).textContent).toBe('完成')
   expect(screen.queryByText('acme/broken')).toBeNull()
   expect(router.state.location.search).toEqual({ status: 'succeeded' })
+
+  fireEvent.click(screen.getByRole('link', { name: 'acme/done' }))
+  await screen.findByRole('heading', { name: 'acme/done' })
+  await act(async () => router.history.back()) // the browser's Back, not the page's link
+  await screen.findByRole('link', { name: 'acme/done' })
+  await act(async () => {})
+  expect(screen.getByRole('combobox', { name: '狀態' }).textContent).toBe('完成')
+  expect(screen.queryByText('acme/broken')).toBeNull()
 })
