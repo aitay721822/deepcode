@@ -1,5 +1,5 @@
 import { ArrowUpIcon } from 'lucide-react'
-import { useId, useState } from 'react'
+import { type Ref, useId, useState } from 'react'
 import { cn } from '../../lib/style/cn'
 import type { AskMode } from '../../types/repo/chat'
 import { Button } from '../ui/controls/button'
@@ -23,6 +23,7 @@ export function AskBox({
   defaultMode = 'fast',
   className,
   onAsk,
+  ref,
 }: {
   placeholder: string
   disabled?: boolean
@@ -30,6 +31,8 @@ export function AskBox({
   defaultMode?: AskMode
   className?: string
   onAsk: (q: string, mode: AskMode) => void
+  /** The docked strip, as tall as the box: a page keeps what it scrolls to clear of it. */
+  ref?: Ref<HTMLDivElement>
 }) {
   const [text, setText] = useState('')
   const [mode, setMode] = useState(defaultMode)
@@ -43,6 +46,7 @@ export function AskBox({
   }
   return (
     <div
+      ref={ref}
       className={cn(
         'pointer-events-none fixed inset-x-0 bottom-4 z-30 print:hidden flex justify-center px-4',
         className,

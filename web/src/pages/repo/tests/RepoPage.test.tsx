@@ -78,6 +78,8 @@ afterEach(() => {
   vi.clearAllMocks()
   navigate.mockReset()
   vi.unstubAllGlobals()
+  delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView // jsdom has none
+  delete (HTMLElement.prototype as Partial<HTMLElement>).getBoundingClientRect // Element's again
 })
 
 function mockDesktop(desktop: boolean) {
@@ -88,75 +90,95 @@ function mockDesktop(desktop: boolean) {
   }))
 }
 
+// lineTop: where the line asked for lands once main is at the top; lift: how far the code's own scroll raises it.
+// code, by: whether that scroll follows, and how far the page then goes up the rest of the way, judged against the
+// AskBox's top (askTop) or, without an AskBox, the window's foot (768 in jsdom).
 it.each([
-  { desktop: false, typing: false },
-  { desktop: true, typing: false },
-  { desktop: false, typing: true },
-])('reveals a selected file after it renders (desktop: $desktop, typing: $typing)', async ({ desktop, typing }) => {
-  mockDesktop(desktop)
-  vi.mocked(listFiles).mockResolvedValue([{ path: 'main.go', language: 'go', lines: 1, size: 12 }])
-  let resolveFile!: (file: FileContent) => void
-  vi.mocked(getFile).mockReturnValueOnce(new Promise((resolve) => (resolveFile = resolve)))
-  const { rerender } = open({ page: 'overview' }, pages, undefined, typing ? ['repo.chat'] : [])
-  navigate.mockImplementation(({ search = {} }) => rerender(<RepoPage id="r1" search={search} />))
-  await screen.findByText('Overview article')
+  { desktop: false, typing: false, lineTop: 760, lift: 200, code: true },
+  { desktop: false, typing: false, lineTop: 500, code: false },
+  { desktop: true, typing: false, lineTop: 760, code: false },
+  { desktop: false, typing: true, askTop: 150, lineTop: 140, lift: 76, code: true },
+  { desktop: false, typing: true, askTop: 285, lineTop: 140, code: false },
+  { desktop: false, typing: true, askTop: 134, lineTop: 200, lift: 68, code: true, by: 18 },
+])(
+  'reveals a selected file after it renders (desktop: $desktop, typing: $typing, line at $lineTop, AskBox at $askTop)',
+  async ({ desktop, typing, askTop, lineTop, lift, code, by }) => {
+    mockDesktop(desktop)
+    vi.mocked(listFiles).mockResolvedValue([{ path: 'main.go', language: 'go', lines: 1, size: 12 }])
+    let resolveFile!: (file: FileContent) => void
+    vi.mocked(getFile).mockReturnValueOnce(new Promise((resolve) => (resolveFile = resolve)))
+    const { rerender } = open({ page: 'overview' }, pages, undefined, typing ? ['repo.chat'] : [])
+    navigate.mockImplementation(({ search = {} }) => rerender(<RepoPage id="r1" search={search} />))
+    await screen.findByText('Overview article')
 
-  const main = screen.getByRole('main')
-  // Each scroll: the element, its options, and the code shown when it started.
-  const scrolls: [Element, unknown, string | null | undefined][] = []
-  HTMLElement.prototype.scrollIntoView = function (this: HTMLElement, options) {
-    scrolls.push([this, options, main.querySelector('code')?.textContent])
-  }
-  const focus = vi.spyOn(main, 'focus')
-
-  fireEvent.mouseDown(screen.getByRole('tab', { name: '檔案' }), { button: 0 })
-  const file = await screen.findByRole('button', { name: 'main.go' })
-  file.focus()
-  await act(async () => fireEvent.click(file))
-
-  expect(navigate).toHaveBeenCalledWith(
-    expect.objectContaining({ search: { page: 'overview', file: 'main.go', L: undefined }, resetScroll: desktop }),
-  )
-  expect(screen.getByText('Overview article')).toBeTruthy()
-  expect.soft(scrolls).toEqual([])
-  expect.soft(focus).not.toHaveBeenCalled()
-  expect.soft(main.hasAttribute('inert')).toBe(!desktop)
-  expect.soft(document.activeElement).toBe(file)
-
-  await screen.findByRole('heading', { name: 'main.go' })
-  expect(screen.queryByText('Overview article')).toBeNull()
-  expect.soft(scrolls).toEqual([])
-  expect.soft(focus).not.toHaveBeenCalled()
-
-  const question = typing ? screen.getByRole('textbox', { name: /提問/ }) : null
-  if (question) {
-    question.focus()
-    expect(document.activeElement).toBe(question)
-  }
-  await act(async () => resolveFile({ path: 'main.go', content: 'package main', language: 'go', commitSha: 'abc' }))
-  expect(main.querySelector('code')?.textContent).toBe('package main')
-  expect(main.hasAttribute('inert')).toBe(false)
-  if (desktop) {
-    expect(scrolls).toEqual([])
-    expect(document.activeElement).toBe(file)
-  } else {
-    // main's top, then the code's box, with margins for the sticky header and the AskBox (their sizes are layout,
-    // measured in a browser): on a phone held sideways main's top alone leaves the code under the AskBox.
-    const box = main.querySelector('code')?.closest('[class*="scroll-mt-"][class*="scroll-mb-"]')
-    expect(box).toBeTruthy()
-    expect(scrolls.map(([el, ...rest]) => [el === main ? 'main' : el === box ? 'code' : el, ...rest])).toEqual([
-      ['main', { block: 'start' }, 'package main'],
-      ['code', { block: 'nearest' }, 'package main'],
-    ])
-    if (question) {
-      expect(document.activeElement).toBe(question)
-      expect(focus).not.toHaveBeenCalled()
-    } else {
-      expect(focus).toHaveBeenCalledWith({ preventScroll: true })
-      expect(document.activeElement).toBe(main)
+    const main = screen.getByRole('main')
+    // Each scroll: the element, its options, and the code shown when it started.
+    const scrolls: [Element, unknown, string | null | undefined][] = []
+    let lifted = 0
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement, options) {
+      scrolls.push([this, options, main.querySelector('code')?.textContent])
+      if (this !== main) lifted = lift ?? 0
     }
-  }
-})
+    // The AskBox's strip holds its textarea; the line asked for is CodeView's line-high marker, placed by style.
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const top = this.querySelector('textarea') ? (askTop ?? 0) : this.style.top ? lineTop - lifted : 0
+      return { top, bottom: top + 20 } as DOMRect
+    }
+    const scrollBy = vi.fn()
+    vi.stubGlobal('scrollBy', scrollBy)
+    const focus = vi.spyOn(main, 'focus')
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '檔案' }), { button: 0 })
+    const file = await screen.findByRole('button', { name: 'main.go' })
+    file.focus()
+    await act(async () => fireEvent.click(file))
+
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ search: { page: 'overview', file: 'main.go', L: undefined }, resetScroll: desktop }),
+    )
+    expect(screen.getByText('Overview article')).toBeTruthy()
+    expect.soft(scrolls).toEqual([])
+    expect.soft(focus).not.toHaveBeenCalled()
+    expect.soft(main.hasAttribute('inert')).toBe(!desktop)
+    expect.soft(document.activeElement).toBe(file)
+
+    await screen.findByRole('heading', { name: 'main.go' })
+    expect(screen.queryByText('Overview article')).toBeNull()
+    expect.soft(scrolls).toEqual([])
+    expect.soft(focus).not.toHaveBeenCalled()
+
+    const question = typing ? screen.getByRole('textbox', { name: /提問/ }) : null
+    if (question) {
+      question.focus()
+      expect(document.activeElement).toBe(question)
+    }
+    await act(async () => resolveFile({ path: 'main.go', content: 'package main', language: 'go', commitSha: 'abc' }))
+    expect(main.querySelector('code')?.textContent).toBe('package main')
+    expect(main.hasAttribute('inert')).toBe(false)
+    if (desktop) {
+      expect(scrolls).toEqual([])
+      expect(scrollBy).not.toHaveBeenCalled()
+      expect(document.activeElement).toBe(file)
+    } else {
+      // main's top; then, only if that leaves the line asked for hidden, the code's box under the sticky header,
+      // and the page the rest of the way if the line is hidden still.
+      const box = main.querySelector('code')?.closest('[class*="scroll-mt-"]')
+      expect(box).not.toBe(main)
+      expect(scrolls.map(([el, ...rest]) => [el === main ? 'main' : el === box ? 'code' : el, ...rest])).toEqual([
+        ['main', { block: 'start' }, 'package main'],
+        ...(code ? [['code', { block: 'start' }, 'package main']] : []),
+      ])
+      expect(scrollBy.mock.calls).toEqual(by ? [[{ top: by }]] : [])
+      if (question) {
+        expect(document.activeElement).toBe(question)
+        expect(focus).not.toHaveBeenCalled()
+      } else {
+        expect(focus).toHaveBeenCalledWith({ preventScroll: true })
+        expect(document.activeElement).toBe(main)
+      }
+    }
+  },
+)
 
 it('keeps the article visible when a wiki poll fails and retries the fetch', async () => {
   open({}, pages, { kind: 'wiki', status: 'running' } as Job)

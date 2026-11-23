@@ -68,6 +68,8 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const canSync = repo?.permissions.includes('repo.sync') ?? false
   const main = useRef<HTMLElement>(null)
   const code = useRef<HTMLDivElement>(null)
+  const askedLine = useRef<HTMLDivElement>(null)
+  const askBox = useRef<HTMLDivElement>(null)
   const mobileControls = useRef<HTMLDivElement>(null)
   const leftControls = useRef<HTMLDivElement>(null)
   const rightControls = useRef<HTMLDivElement>(null)
@@ -131,8 +133,16 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     if (!reveal?.ready) return
     setFileReveal(null)
     main.current?.scrollIntoView({ block: 'start' })
-    // A screen too short for the file bar, the code and the AskBox over it (a phone held sideways): the code wins.
-    code.current?.scrollIntoView({ block: 'nearest' })
+    // The AskBox floats over the foot, as tall as its draft. Only when it covers the line asked for (a phone held
+    // sideways, a long draft) does the code go up under the header, past the file bar; and should the line still be
+    // under it (near the file's end it sits low in the box), the page goes up the rest of the way.
+    const floor = askBox.current?.getBoundingClientRect().top ?? window.innerHeight
+    const hidden = () => (askedLine.current?.getBoundingClientRect().bottom ?? 0) - floor
+    if (hidden() > 0) {
+      code.current?.scrollIntoView({ block: 'start' })
+      const rest = hidden()
+      if (rest > 0) window.scrollBy({ top: rest })
+    }
     const focused = document.activeElement
     if (!focused || focused === document.body || focused === reveal.opener) {
       main.current?.focus({ preventScroll: true })
@@ -275,6 +285,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                   snapshot={fileSnapshot}
                   sha={fileSha}
                   codeRef={code}
+                  lineRef={askedLine}
                   onReady={
                     reveal && !reveal.ready
                       ? () => setFileReveal((current) => (current === reveal ? { ...reveal, ready: true } : current))
@@ -357,6 +368,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
       )}
       {repo.permissions.includes('repo.chat') && (
         <AskBox
+          ref={askBox}
           placeholder={unavailable || `針對 ${repo.owner}/${repo.name} 提問`}
           disabled={!ready || !canAsk}
           // Over the main column, clear of the side columns: 260px from 900px wide, 300px each from 1240px.

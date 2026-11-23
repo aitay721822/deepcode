@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { type Ref, useLayoutEffect, useMemo, useRef } from 'react'
 import { cn } from '../../lib/style/cn'
 import { highlight } from '../../lib/style/highlight'
 import './source.css'
@@ -18,6 +18,7 @@ export function CodeView({
   startLine,
   endLine,
   className,
+  lineRef,
 }: {
   label: string
   content: string
@@ -25,6 +26,8 @@ export function CodeView({
   startLine?: number
   endLine?: number
   className?: string
+  /** The line asked for (the cited start, else the first), for a page to keep clear of what floats over it. */
+  lineRef?: Ref<HTMLDivElement>
 }) {
   const code = content.replace(/\n$/, '')
   const html = useMemo(() => highlight(code, language), [code, language])
@@ -58,6 +61,13 @@ export function CodeView({
             style={{ top: `${startLine - 1}lh`, height: `${end - startLine + 1}lh` }}
           />
         ) : null}
+        {lineRef && (
+          <div
+            ref={lineRef}
+            className="absolute inset-x-0 mt-2 h-[1lh]"
+            style={{ top: `${Math.min(startLine ?? 1, count) - 1}lh` }}
+          />
+        )}
         <div
           className="relative pr-3.5 pl-3 text-right whitespace-pre text-faint select-none print:hidden"
           aria-hidden="true"
