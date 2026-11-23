@@ -36,7 +36,7 @@ type Tab = 'wiki' | 'files'
 const LEFT_RAIL_MEDIA = '(min-width: 900px)'
 const RIGHT_RAIL_MEDIA = '(min-width: 1240px)'
 
-/** ?page= a wiki page; or ?file= a file, L= its lines (5-9), s= the snapshot it is read at (links made before wiki
+/** ?page= the selected wiki page; ?file= a file, L= its lines (5-9), s= the snapshot it is read at (links made before wiki
  * citations opened in the drawer: nothing writes it now). */
 type RepoSearch = { page?: string; file?: string; L?: string; s?: string }
 
@@ -146,7 +146,11 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
   // The file tree and symbol search list the published snapshot, so their files open there.
   const openFile = (path: string, start?: number, end?: number) =>
-    navigate({ ...here, search: { file: path, L: start ? `${start}-${end ?? start}` : undefined } })
+    navigate({ ...here, search: { page: search.page, file: path, L: start ? `${start}-${end ?? start}` : undefined } })
+  const changeTab = (t: string) => {
+    if (t === 'wiki' && file) navigate({ ...here, search: { page: search.page } })
+    else setTab(t as Tab)
+  }
   // A wiki citation, or a file of the page, opens in the drawer over the page, which keeps its place, at the wiki's
   // snapshot, which trails the published one while the next wiki is written.
   const openCitation = (path: string, startLine?: number, endLine?: number) =>
@@ -185,7 +189,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
           )}
           {canSync && <div className="mb-4 hidden min-[900px]:block min-[1240px]:hidden" ref={leftControls} />}
           {ready && (
-            <Tabs value={tab} onValueChange={(t) => (t === 'wiki' && file ? navigate(here) : setTab(t as Tab))}>
+            <Tabs value={tab} onValueChange={changeTab}>
               <TabsList aria-label="瀏覽 Repository">
                 <TabsTrigger value="wiki">Wiki</TabsTrigger>
                 <TabsTrigger value="files">檔案</TabsTrigger>
