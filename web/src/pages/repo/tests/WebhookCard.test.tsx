@@ -1,12 +1,13 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { getWebhook, setWebhook } from '../../../api/repo/repos'
+import { clearWebhook, getWebhook, setWebhook } from '../../../api/repo/repos'
 import type { Repo } from '../../../types/repo/repo'
 import { WebhookCard } from '../WebhookCard'
 
 vi.mock('../../../api/repo/repos', () => ({
   getWebhook: vi.fn(async () => ({ hasSecret: false })),
   setWebhook: vi.fn(async () => ({ secret: 'one-time-secret' })),
+  clearWebhook: vi.fn(async () => ({})),
 }))
 
 afterEach(() => {
@@ -17,6 +18,81 @@ afterEach(() => {
 })
 
 const repo = { id: 'repo-id' } as Repo
+
+it('keeps a generated secret when the initial status arrives after generation', async () => {
+  let resolveStatus!: (value: { hasSecret: boolean }) => void
+  vi.mocked(getWebhook).mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveStatus = resolve
+    }),
+  )
+  render(<WebhookCard repo={repo} />)
+  fireEvent.click(screen.getByRole('button', { name: '產生密鑰' }))
+  expect((await screen.findByRole('button', { name: '移除' })).textContent).toBe('移除')
+  await act(async () => resolveStatus({ hasSecret: false }))
+  expect(screen.getByRole('button', { name: '移除' }).textContent).toBe('移除')
+})
+
+it('keeps a generated then removed secret cleared when the initial status arrives', async () => {
+  let resolveStatus!: (value: { hasSecret: boolean }) => void
+  vi.mocked(getWebhook).mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveStatus = resolve
+    }),
+  )
+  render(<WebhookCard repo={repo} />)
+  fireEvent.click(screen.getByRole('button', { name: '產生密鑰' }))
+  fireEvent.click(await screen.findByRole('button', { name: '移除' }))
+  await screen.findByRole('button', { name: '產生密鑰' })
+  expect(clearWebhook).toHaveBeenCalledWith(repo.id)
+  await act(async () => resolveStatus({ hasSecret: true }))
+  expect(screen.queryByRole('button', { name: '移除' })).toBeNull()
+  expect(screen.getByRole('button', { name: '產生密鑰' }).textContent).toContain('產生密鑰')
+  expect(screen.queryByText('one-time-secret')).toBeNull()
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it('ignores a late status error after generation succeeds', async () => {
+  let rejectStatus!: (error: Error) => void
+  vi.mocked(getWebhook).mockReturnValueOnce(
+    new Promise((_, reject) => {
+      rejectStatus = reject
+    }),
+  )
+  render(<WebhookCard repo={repo} />)
+  fireEvent.click(screen.getByRole('button', { name: '產生密鑰' }))
+  await screen.findByRole('button', { name: '移除' })
+  await act(async () => rejectStatus(new Error('stale read failed')))
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
+it.each([false, true])('shows the initial status without a write: %s', async (hasSecret) => {
+  vi.mocked(getWebhook).mockResolvedValueOnce({ hasSecret })
+  render(<WebhookCard repo={repo} />)
+  await act(async () => {})
+  expect(screen.queryByRole('button', { name: '移除' })?.textContent ?? '').toBe(hasSecret ? '移除' : '')
+})
+
+it('shows an initial status error without a write', async () => {
+  vi.mocked(getWebhook).mockRejectedValueOnce(new Error('status failed'))
+  render(<WebhookCard repo={repo} />)
+  expect((await screen.findByRole('alert')).textContent).toBe('status failed')
+})
+
+it('still applies the initial status after generation fails', async () => {
+  let resolveStatus!: (value: { hasSecret: boolean }) => void
+  vi.mocked(getWebhook).mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveStatus = resolve
+    }),
+  )
+  vi.mocked(setWebhook).mockRejectedValueOnce(new Error('generation failed'))
+  render(<WebhookCard repo={repo} />)
+  fireEvent.click(screen.getByRole('button', { name: '產生密鑰' }))
+  expect((await screen.findByRole('alert')).textContent).toBe('generation failed')
+  await act(async () => resolveStatus({ hasSecret: true }))
+  expect(screen.getByRole('button', { name: '移除' }).textContent).toBe('移除')
+})
 
 it('does not offer to copy a secret before generating it', async () => {
   render(<WebhookCard repo={repo} />)
