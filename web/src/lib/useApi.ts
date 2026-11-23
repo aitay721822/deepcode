@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 
-type State<T> = { key?: string; data?: T; error?: string; status?: number }
+type LoadRequest = { key: string | null }
+type State<T> = { request?: LoadRequest; data?: T; error?: string; status?: number }
 
 /**
  * Calls load for key (null = nothing yet), again every pollMs while set (less often while loads fail).
  * The key names what load fetches: a new key loads anew.
+ * loading means the latest request has not settled, even when there is data from an earlier load.
  * status is the HTTP status of the last failure, when the error carries one.
  */
 export function useApi<T>(key: string | null, load: () => Promise<T>, pollMs?: number) {
   const [state, setState] = useState<State<T>>({})
-  const [tick, setTick] = useState(0)
+  const [request, setRequest] = useState<LoadRequest>(() => ({ key }))
+  if (request.key !== key) setRequest({ key })
   const pending = useRef(false)
   // Polls to let pass after failures in a row: 1, 3, 7, then 15, so a server that is down is asked every 2, 4, 8, then
   // 16 times pollMs. Set as each load settles, so the first success puts polling back at pollMs.
@@ -19,20 +22,25 @@ export function useApi<T>(key: string | null, load: () => Promise<T>, pollMs?: n
   // what it fetches.
   const loadLatest = useEffectEvent(load)
   useEffect(() => {
-    if (!key) return
+    if (!request.key) return
     let live = true
     pending.current = true
     loadLatest()
       .then(
         (data) => {
           failures.current = skip.current = 0
-          if (live) setState({ key, data })
+          if (live) setState({ request, data })
         },
         // A failed poll keeps the last data for this key; never another key's.
         (e: Error & { status?: number }) => {
           skip.current = 2 ** Math.min(++failures.current, 4) - 1
           if (live)
-            setState((s) => ({ key, data: s.key === key ? s.data : undefined, error: e.message, status: e.status }))
+            setState((s) => ({
+              request,
+              data: s.request?.key === request.key ? s.data : undefined,
+              error: e.message,
+              status: e.status,
+            }))
         },
       )
       .finally(() => {
@@ -41,7 +49,7 @@ export function useApi<T>(key: string | null, load: () => Promise<T>, pollMs?: n
     return () => {
       live = false
     }
-  }, [key, tick])
+  }, [request])
   useEffect(() => {
     if (!key || !pollMs) return
     failures.current = skip.current = 0 // another key: a count of its own
@@ -49,20 +57,21 @@ export function useApi<T>(key: string | null, load: () => Promise<T>, pollMs?: n
     const id = setInterval(() => {
       if (pending.current) return
       if (skip.current > 0) skip.current--
-      else setTick((t) => t + 1)
+      else setRequest((current) => ({ key: current.key }))
     }, pollMs)
     return () => clearInterval(id)
   }, [key, pollMs])
   // Stable, so an effect can list it without re-running.
   const reload = useCallback(() => {
     setState((s) => ({ ...s, error: undefined, status: undefined })) // a retry starts without the last error
-    setTick((t) => t + 1)
+    setRequest((current) => ({ key: current.key }))
   }, [])
-  const current = state.key === key
+  const current = state.request?.key === key
   return {
     data: current ? state.data : undefined,
     error: current ? state.error : undefined,
     status: current ? state.status : undefined,
+    loading: !!key && state.request !== request,
     reload,
   }
 }

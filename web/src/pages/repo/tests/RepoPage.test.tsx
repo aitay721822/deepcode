@@ -4,6 +4,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { getWiki } from '../../../api/repo/wiki'
 import type { Job, Repo } from '../../../types/repo/repo'
+import type { Wiki } from '../../../types/repo/wiki'
 import { useRepo } from '../../useRepo'
 import { RepoPage } from '../RepoPage'
 
@@ -35,7 +36,7 @@ vi.mock('../wiki/WikiArticle', () => ({ WikiArticle: () => <article>Overview art
 
 const pages = [{ slug: 'overview', title: 'Overview', content: '# Overview', citations: [] }]
 
-function open(search: { page?: string }, wikiPages = pages, job?: Job) {
+function setRepo(job?: Job) {
   vi.mocked(useRepo).mockReturnValue({
     data: {
       id: 'r1',
@@ -45,8 +46,13 @@ function open(search: { page?: string }, wikiPages = pages, job?: Job) {
     } as unknown as Repo,
     error: undefined,
     status: undefined,
+    loading: false,
     reload: vi.fn(),
   })
+}
+
+function open(search: { page?: string }, wikiPages = pages, job?: Job) {
+  setRepo(job)
   vi.mocked(getWiki).mockResolvedValue({
     snapshotId: 's1',
     commitSha: 'abc',
@@ -125,3 +131,71 @@ it('shows the load error rather than claiming the page is missing', async () => 
   expect((await screen.findByRole('alert')).textContent).toBe('Bad Gateway')
   expect(screen.queryByText('找不到 Wiki 頁面')).toBeNull()
 })
+
+it.each(['found', 'missing', 'failed'] as const)(
+  'waits for the completion refetch before judging the slug (%s)',
+  async (outcome) => {
+    const job: Job = {
+      id: 'j1',
+      kind: 'wiki',
+      status: 'running',
+      stage: 'write',
+      commitSha: 'abc',
+      attempts: 0,
+      retries: 0,
+      progress: 1,
+      total: 2,
+      error: '',
+      runAfter: '',
+      createdAt: '',
+      updatedAt: '',
+    }
+    const search = { page: '2-server' }
+    const { rerender } = open(search, pages, job)
+    await screen.findByRole('link', { name: /Overview/ })
+    expect(screen.getByRole('status').textContent).toContain('產生 Wiki')
+
+    let resolveRefetch!: (wiki: Wiki) => void
+    let rejectRefetch!: (error: Error) => void
+    vi.mocked(getWiki).mockReturnValueOnce(
+      new Promise((resolve, reject) => {
+        resolveRefetch = resolve
+        rejectRefetch = reject
+      }),
+    )
+    setRepo({ ...job, status: 'succeeded' })
+    const observer = new MutationObserver(() => {})
+    observer.observe(screen.getByRole('main'), { childList: true, subtree: true })
+    rerender(<RepoPage id="r1" search={search} />)
+    const addedText = observer
+      .takeRecords()
+      .flatMap(({ addedNodes }) => Array.from(addedNodes, (node) => node.textContent))
+    observer.disconnect()
+
+    expect(getWiki).toHaveBeenCalledTimes(2)
+    expect(addedText.filter((text) => text?.includes('找不到 Wiki 頁面'))).toEqual([])
+    expect(screen.queryByRole('heading', { name: '找不到 Wiki 頁面' })).toBeNull()
+    expect(screen.getByRole('status', { name: '載入中' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /Overview/ })).toBeTruthy()
+
+    if (outcome === 'failed') {
+      rejectRefetch(new Error('Bad Gateway'))
+      expect((await screen.findByRole('alert')).textContent).toBe('Bad Gateway')
+      expect(screen.queryByRole('heading', { name: '找不到 Wiki 頁面' })).toBeNull()
+    } else {
+      resolveRefetch({
+        snapshotId: 's1',
+        commitSha: 'abc',
+        indexedAt: '',
+        status: 'ready',
+        pages: outcome === 'found' ? [...pages, { ...pages[0], slug: search.page, title: 'Server' }] : pages,
+      })
+      if (outcome === 'found') {
+        expect(await screen.findByRole('article')).toBeTruthy()
+        expect(screen.getByRole('link', { name: /Server/ }).getAttribute('aria-current')).toBe('page')
+      } else {
+        expect(await screen.findByRole('heading', { name: '找不到 Wiki 頁面' })).toBeTruthy()
+      }
+    }
+  },
+)
