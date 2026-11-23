@@ -65,6 +65,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const { data: repo, error, status, reload } = useRepo(id)
   const { health, error: healthError, ready: canAsk, unavailable } = useChatModel()
   const canSync = repo?.permissions.includes('repo.sync') ?? false
+  const main = useRef<HTMLElement>(null)
   const mobileControls = useRef<HTMLDivElement>(null)
   const leftControls = useRef<HTMLDivElement>(null)
   const rightControls = useRef<HTMLDivElement>(null)
@@ -145,8 +146,15 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const job = repo.job
   const wikiJob = job?.kind === 'wiki' && (job.status === 'failed' || (wikiBusy && !page)) ? job : null
   // The file tree and symbol search list the published snapshot, so their files open there.
-  const openFile = (path: string, start?: number, end?: number) =>
-    navigate({ ...here, search: { file: path, L: start ? `${start}-${end ?? start}` : undefined } })
+  const openFile = async (path: string, start?: number, end?: number) => {
+    const singleColumn = !window.matchMedia(LEFT_RAIL_MEDIA).matches
+    await navigate({
+      ...here,
+      search: { file: path, L: start ? `${start}-${end ?? start}` : undefined },
+      resetScroll: !singleColumn,
+    })
+    if (singleColumn) main.current?.scrollIntoView({ block: 'start' })
+  }
   // A wiki citation, or a file of the page, opens in the drawer over the page, which keeps its place, at the wiki's
   // snapshot, which trails the published one while the next wiki is written.
   const openCitation = (path: string, startLine?: number, endLine?: number) =>
@@ -208,8 +216,9 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
         {canSync && <MobileControls initiallyOpen={!ready} hostRef={mobileControls} />}
 
         <main
+          ref={main}
           tabIndex={-1}
-          className="mx-auto w-full max-w-[860px] px-4 pt-6 pb-44 outline-none min-[900px]:px-12 min-[900px]:pt-9"
+          className="mx-auto w-full max-w-[860px] scroll-mt-16 px-4 pt-6 pb-44 outline-none min-[900px]:px-12 min-[900px]:pt-9"
         >
           {/* A poll that failed keeps the repository as it was: say so, or a job's card would seem to stand still. */}
           <LoadError className="mb-6" error={error} onRetry={reload} />

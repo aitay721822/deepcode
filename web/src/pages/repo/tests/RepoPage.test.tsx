@@ -2,11 +2,14 @@ import { Link } from '@tanstack/react-router'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps, ReactNode } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
+import { listFiles } from '../../../api/repo/code'
 import { getWiki } from '../../../api/repo/wiki'
 import type { Job, Repo } from '../../../types/repo/repo'
 import type { Wiki } from '../../../types/repo/wiki'
 import { useRepo } from '../../useRepo'
 import { RepoPage } from '../RepoPage'
+
+const navigate = vi.fn().mockResolvedValue(undefined)
 
 vi.mock('@tanstack/react-router', () => ({
   Link: vi.fn(
@@ -26,10 +29,11 @@ vi.mock('@tanstack/react-router', () => ({
       </a>
     ),
   ),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => navigate,
 }))
 vi.mock('../../Frame', () => ({ Frame: ({ children }: { children: ReactNode }) => children }))
 vi.mock('../../useRepo', () => ({ useRepo: vi.fn() }))
+vi.mock('../../../api/repo/code', () => ({ listFiles: vi.fn() }))
 vi.mock('../../../api/repo/wiki', () => ({ getWiki: vi.fn() }))
 vi.mock('../search/useChatModel', () => ({ useChatModel: () => ({}) }))
 vi.mock('../wiki/WikiArticle', () => ({ WikiArticle: () => <article>Overview article</article> }))
@@ -66,6 +70,27 @@ function open(search: { page?: string }, wikiPages = pages, job?: Job) {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
+})
+
+it.each([false, true])('reveals a selected file in the single-column layout (desktop: %s)', async (desktop) => {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: desktop && query === '(min-width: 900px)',
+    addEventListener: vi.fn(),
+    addListener: vi.fn(),
+  }))
+  vi.mocked(listFiles).mockResolvedValue([{ path: 'main.go', language: 'go', lines: 1, size: 12 }])
+  open({})
+  const scrollIntoView = vi.fn()
+  screen.getByRole('main').scrollIntoView = scrollIntoView
+
+  fireEvent.mouseDown(screen.getByRole('tab', { name: '檔案' }), { button: 0 })
+  const file = await screen.findByRole('button', { name: 'main.go' })
+  await act(async () => fireEvent.click(file))
+
+  expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ search: { file: 'main.go', L: undefined } }))
+  if (desktop) expect(scrollIntoView).not.toHaveBeenCalled()
+  else expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
 })
 
 it('keeps the article visible when a wiki poll fails and retries the fetch', async () => {
