@@ -197,9 +197,8 @@ func (c *Catalog) head(ctx context.Context, remote git.Remote, branch string) (s
 	return c.Git.LsRemoteRef(ctx, remote, branch)
 }
 
-// lsRemoteFailed tells the user why the repository's HEAD could not be
-// read: an empty repository as such; otherwise only that git failed, since
-// git's own words may quote paths or hosts, and those go to the log.
+// lsRemoteFailed reports an empty repository or missing branch as such.
+// Otherwise, git's own words may quote paths or hosts and go only to the log.
 func lsRemoteFailed(err error) error {
 	if errors.Is(err, git.ErrEmpty) {
 		return kinded{ErrInvalid, err}

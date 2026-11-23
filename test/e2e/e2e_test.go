@@ -123,7 +123,7 @@ func endToEnd(t *testing.T, provider string) {
 		EmbedURL: llmSrv.URL + "/v1", EmbedModel: "fake-embed",
 		LLMTimeout: time.Minute, Workers: 2, JobTimeout: time.Minute, CacheMB: 1,
 		MaxRepoMB: 1, MaxFiles: 100, MaxFileKB: 1024, MaxIndexMB: 10,
-		WikiLanguage: "English", GitProtocols: "file",
+		WikiLanguage: "English", GitProtocols: "file:http",
 		AdminPassword: "admin-password", SessionTTL: time.Hour,
 	}
 	if provider == app.ProviderACP {
@@ -211,6 +211,7 @@ func endToEnd(t *testing.T, provider string) {
 	checkJobConsole(t, admin, repo.ID)
 	checkWikiExport(t, admin, repo.ID, sha1)
 	checkBranchesAndHooks(t, admin, repo.ID, sha1)
+	t.Run("branch remote failure", func(t *testing.T) { checkBranchRemoteFailure(t, admin, repoPath) })
 
 	// Chat: streamed answer; the grouped citation keeps the real reference
 	// and drops the made-up one.

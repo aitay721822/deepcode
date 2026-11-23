@@ -101,7 +101,11 @@ func (c *Catalog) Branches(ctx context.Context, id int64) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return c.Git.Branches(ctx, remote)
+	branches, err := c.Git.Branches(ctx, remote)
+	if err != nil {
+		return nil, lsRemoteFailed(err)
+	}
+	return branches, nil
 }
 
 // SetBranch sets the branch repository id follows; "" follows its default.
