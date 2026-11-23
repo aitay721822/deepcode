@@ -2,14 +2,16 @@ import { Link } from '@tanstack/react-router'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps, ReactNode } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { listFiles } from '../../../api/repo/code'
+import { getFile, listFiles } from '../../../api/repo/code'
 import { getWiki } from '../../../api/repo/wiki'
 import type { Job, Repo } from '../../../types/repo/repo'
 import type { Wiki } from '../../../types/repo/wiki'
 import { useRepo } from '../../useRepo'
 import { RepoPage } from '../RepoPage'
 
-const navigate = vi.fn().mockResolvedValue(undefined)
+const { navigate } = vi.hoisted(() => ({
+  navigate: vi.fn<(options: { search?: ComponentProps<typeof RepoPage>['search'] }) => void>(),
+}))
 
 vi.mock('@tanstack/react-router', () => ({
   Link: vi.fn(
@@ -33,10 +35,12 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 vi.mock('../../Frame', () => ({ Frame: ({ children }: { children: ReactNode }) => children }))
 vi.mock('../../useRepo', () => ({ useRepo: vi.fn() }))
-vi.mock('../../../api/repo/code', () => ({ listFiles: vi.fn() }))
+vi.mock('../../../api/repo/code', () => ({ getFile: vi.fn(), listFiles: vi.fn() }))
 vi.mock('../../../api/repo/wiki', () => ({ getWiki: vi.fn() }))
 vi.mock('../search/useChatModel', () => ({ useChatModel: () => ({}) }))
-vi.mock('../wiki/WikiArticle', () => ({ WikiArticle: () => <article>Overview article</article> }))
+vi.mock('../wiki/WikiArticle', () => ({
+  WikiArticle: ({ page }: { page: Wiki['pages'][number] }) => <article>{page.title} article</article>,
+}))
 
 const pages = [{ slug: 'overview', title: 'Overview', content: '# Overview', citations: [] }]
 
@@ -44,6 +48,7 @@ function setRepo(job?: Job) {
   vi.mocked(useRepo).mockReturnValue({
     data: {
       id: 'r1',
+      url: 'https://github.com/acme/demo',
       permissions: [],
       job,
       snapshot: { id: 's1', commitSha: 'abc', indexedAt: '2026-01-01' },
@@ -70,17 +75,22 @@ function open(search: { page?: string }, wikiPages = pages, job?: Job) {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  navigate.mockReset()
   vi.unstubAllGlobals()
 })
 
-it.each([false, true])('reveals a selected file in the single-column layout (desktop: %s)', async (desktop) => {
+function mockDesktop(desktop: boolean) {
   vi.stubGlobal('matchMedia', (query: string) => ({
     matches: desktop && query === '(min-width: 900px)',
     addEventListener: vi.fn(),
     addListener: vi.fn(),
   }))
+}
+
+it.each([false, true])('reveals a selected file in the single-column layout (desktop: %s)', async (desktop) => {
+  mockDesktop(desktop)
   vi.mocked(listFiles).mockResolvedValue([{ path: 'main.go', language: 'go', lines: 1, size: 12 }])
-  open({})
+  open({ page: 'overview' })
   const main = screen.getByRole('main')
   const scrollIntoView = vi.fn()
   main.scrollIntoView = scrollIntoView
@@ -91,7 +101,7 @@ it.each([false, true])('reveals a selected file in the single-column layout (des
   await act(async () => fireEvent.click(file))
 
   expect(navigate).toHaveBeenCalledWith(
-    expect.objectContaining({ search: { file: 'main.go', L: undefined }, resetScroll: desktop }),
+    expect.objectContaining({ search: { page: 'overview', file: 'main.go', L: undefined }, resetScroll: desktop }),
   )
   if (desktop) {
     expect(scrollIntoView).not.toHaveBeenCalled()
@@ -134,6 +144,25 @@ it('shows and highlights Overview when no page is requested', async () => {
   open({})
   expect((await screen.findByText('Overview article')).textContent).toBe('Overview article')
   expect(screen.getByRole('link', { name: /Overview/ }).getAttribute('aria-current')).toBe('page')
+})
+
+it('returns to the selected wiki article from an open file', async () => {
+  mockDesktop(true)
+  const article = { ...pages[0], slug: '2-server', title: 'Server' }
+  vi.mocked(listFiles).mockResolvedValue([{ path: 'main.go', language: 'go', size: 12, lines: 1 }])
+  vi.mocked(getFile).mockResolvedValue({ path: 'main.go', content: 'package main', language: 'go', commitSha: 'abc' })
+  const { rerender } = open({ page: article.slug }, [...pages, article])
+  navigate.mockImplementation(({ search = {} }) => rerender(<RepoPage id="r1" search={search} />))
+  expect(await screen.findByText('Server article')).toBeTruthy()
+
+  fireEvent.mouseDown(screen.getByRole('tab', { name: '檔案' }), { button: 0 })
+  fireEvent.click(await screen.findByRole('button', { name: 'main.go' }))
+
+  expect(await screen.findByRole('heading', { name: 'main.go' })).toBeTruthy()
+  fireEvent.mouseDown(screen.getByRole('tab', { name: 'Wiki' }), { button: 0 })
+
+  expect(await screen.findByText('Server article')).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'Server' }).getAttribute('aria-current')).toBe('page')
 })
 
 it('does not call an existing slug missing', async () => {
