@@ -1,4 +1,4 @@
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, useSearch } from '@tanstack/react-router'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { listJobs, watchJobs } from '../../../api/admin/jobs'
 import type { StreamState } from '../../../api/client'
@@ -33,14 +33,31 @@ function merge(loaded: JobRow[], live: Map<string, JobRow>) {
   return [...rows.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) // newest first, as the server lists them
 }
 
-const jobLink = (j: JobRow) => ({ to: '/admin/{-$section}/{-$id}', params: { section: 'jobs', id: j.id } }) as const
+/** A job's page, carrying the list's filter so its way back returns to the same list. */
+const jobLink = (j: JobRow, status: string) =>
+  ({
+    to: '/admin/{-$section}/{-$id}',
+    params: { section: 'jobs', id: j.id },
+    search: { status: status || undefined },
+  }) as const
+
+/** The filter the address names (?status=), or '' for every status: a value no job has is no filter. */
+const filterOf = (s?: string) => statuses.find((x) => x === s) ?? ''
 
 /** Recent jobs, kept live by the job event stream. */
 export function JobsSection() {
   const navigate = useNavigate()
   const { refresh } = useSession()
   const filterId = useId()
-  const [status, setStatus] = useState<Job['status'] | ''>('')
+  const status = filterOf(useSearch({ from: '/admin/{-$section}/{-$id}' }).status)
+  const setStatus = (s: Job['status'] | '') =>
+    navigate({
+      to: '/admin/{-$section}/{-$id}',
+      params: { section: 'jobs', id: undefined },
+      search: { status: s || undefined },
+      replace: true,
+      resetScroll: false,
+    })
   const { data, error, reload } = useApi(`admin:jobs:${status}`, () => listJobs(status))
   const [live, setLive] = useState(() => new Map<string, JobRow>())
   const [stream, setStream] = useState<StreamState>()
@@ -120,13 +137,13 @@ export function JobsSection() {
               <TableRow
                 key={j.id}
                 className="cursor-pointer"
-                onClick={(e) => (e.target as Element).closest('a') || navigate(jobLink(j))}
+                onClick={(e) => (e.target as Element).closest('a') || navigate(jobLink(j, status))}
               >
                 <TableCell>
                   <StatusBadge status={j.status} />
                 </TableCell>
                 <TableCell className="font-medium">
-                  <Link {...jobLink(j)} className="hover:underline">
+                  <Link {...jobLink(j, status)} className="hover:underline">
                     {j.repoOwner}/{j.repoName}
                   </Link>
                 </TableCell>

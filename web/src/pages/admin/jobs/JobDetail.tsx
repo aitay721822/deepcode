@@ -80,6 +80,7 @@ export function JobDetail({ id }: { id: string }) {
     <Link
       to="/admin/{-$section}/{-$id}"
       params={{ section: 'jobs', id: undefined }}
+      search={({ status }) => ({ status })} // back to the list as it was filtered
       activeOptions={{ exact: true }} // a way back, never the page the reader is on
       className="inline-flex w-fit items-center gap-1.5 text-muted-foreground hover:text-foreground"
     >
