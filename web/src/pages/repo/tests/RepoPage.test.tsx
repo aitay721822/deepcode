@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps, ReactNode } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { getWiki } from '../../../api/repo/wiki'
@@ -67,6 +67,21 @@ afterEach(() => {
   cleanup()
   vi.clearAllMocks()
 })
+
+it('keeps the article visible when a wiki poll fails and retries the fetch', async () => {
+  open({}, pages, { kind: 'wiki', status: 'running' } as Job)
+  expect((await screen.findByText('Overview article')).textContent).toBe('Overview article')
+  vi.mocked(getWiki).mockRejectedValueOnce(Object.assign(new Error('Internal Server Error'), { status: 500 }))
+  expect((await screen.findByRole('alert', {}, { timeout: 4000 })).textContent).toBe('Internal Server Error')
+  expect(screen.getByText('Overview article').textContent).toBe('Overview article')
+  expect(
+    screen.getByRole('alert').compareDocumentPosition(screen.getByRole('article')) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy()
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '重試' })))
+  expect(getWiki).toHaveBeenCalledTimes(3)
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.getByText('Overview article').textContent).toBe('Overview article')
+}, 6000)
 
 it('shows a missing page and Overview link without highlighting a wiki page', async () => {
   const { container } = open({ page: 'does-not-exist' })
