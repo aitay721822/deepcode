@@ -1,6 +1,6 @@
 import { Link, useNavigate } from '@tanstack/react-router'
 import { AnimatePresence, motion } from 'motion/react'
-import { type ReactNode, useEffect } from 'react'
+import { type ReactNode, useCallback, useEffect } from 'react'
 import { cn } from '../../lib/style/cn'
 import { markerRadius, rise, slide } from '../../lib/style/motion'
 import { isId } from '../../lib/url'
@@ -34,6 +34,18 @@ const sections: { path: string; label: string; permission: Permission; page: (id
 export function AdminPage({ section, id }: { section?: string; id?: string }) {
   const navigate = useNavigate()
   const { can } = useSession()
+  const revealTab = useCallback((tab: HTMLAnchorElement | null) => {
+    const rail = tab?.parentElement
+    if (!tab || !rail) return
+    // The router restores the rail's old scroll position as the new route commits.
+    const frame = requestAnimationFrame(() => {
+      const { left, right } = tab.getBoundingClientRect()
+      const bounds = rail.getBoundingClientRect()
+      if (left < bounds.left) rail.scrollLeft += left - bounds.left
+      else if (right > bounds.right) rail.scrollLeft += right - bounds.right
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [])
   const allowed = sections.filter((s) => can(s.permission))
   const first = allowed[0]?.path
   useEffect(() => {
@@ -63,6 +75,7 @@ export function AdminPage({ section, id }: { section?: string; id?: string }) {
           {allowed.map((s, i) => (
             <Link
               key={s.path}
+              ref={s === current ? revealTab : undefined}
               to="/admin/{-$section}/{-$id}"
               params={{ section: s.path, id: undefined }}
               aria-current={s === current ? 'page' : undefined}
