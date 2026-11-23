@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -127,7 +128,9 @@ func checkBranchRemoteFailure(t *testing.T, admin *client, repoPath string) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			client := *admin
 			client.t = t
+			var requests atomic.Int64
 			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
 				w.WriteHeader(status)
 			}))
 			defer remote.Close()
@@ -137,7 +140,11 @@ func checkBranchRemoteFailure(t *testing.T, admin *client, repoPath string) {
 				{http.MethodPost, "/branch", `{"branch":"main"}`},
 			} {
 				var response struct{ Error string }
+				before := requests.Load()
 				code := client.call(req.method, repoPath+req.path, req.body, &response)
+				if requests.Load() == before {
+					t.Errorf("%s %s: Git did not reach the HTTP fixture", req.method, req.path)
+				}
 				if code != http.StatusBadGateway || !strings.HasPrefix(response.Error, "Git 無法從伺服器讀取這個 Repository；") {
 					t.Errorf("%s %s: got %d %q, want 502 with the Git upstream error", req.method, req.path, code, response.Error)
 				}
