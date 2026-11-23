@@ -1,5 +1,5 @@
 import { ExternalLinkIcon } from 'lucide-react'
-import { useLayoutEffect } from 'react'
+import { type Ref, useLayoutEffect } from 'react'
 import { getFile } from '../../../api/repo/code'
 import { providerName } from '../../../components/repo/provider/providerName'
 import { sourceUrl } from '../../../components/repo/sourceLinks'
@@ -21,6 +21,7 @@ export function FileView({
   snapshot,
   sha,
   onReady,
+  codeRef,
 }: {
   repo: Repo
   path: string
@@ -28,6 +29,7 @@ export function FileView({
   snapshot: string | null
   sha?: string
   onReady?: () => void
+  codeRef?: Ref<HTMLDivElement>
 }) {
   const { data, error, reload } = useApi(`${repo.id}:${snapshot || repo.snapshot?.id}:${path}`, () =>
     getFile(repo.id, path, snapshot),
@@ -59,14 +61,18 @@ export function FileView({
       {error ? (
         <LoadError className="m-0 p-4" error={error} onRetry={reload} />
       ) : data ? (
-        <CodeView
-          label={path}
-          className={codeHeight}
-          content={data.content}
-          language={data.language}
-          startLine={lines?.[0]}
-          endLine={lines?.[1]}
-        />
+        // Scrolled to, the code clears the sticky header (4rem) and the AskBox 1rem above the foot: 8.5rem tall
+        // below sm, where its mode hint takes a line of its own, 5.6rem from sm (a phone held sideways).
+        <div ref={codeRef} className="scroll-mt-16 scroll-mb-38 sm:scroll-mb-28">
+          <CodeView
+            label={path}
+            className={codeHeight}
+            content={data.content}
+            language={data.language}
+            startLine={lines?.[0]}
+            endLine={lines?.[1]}
+          />
+        </div>
       ) : (
         <SkeletonText className="px-4" />
       )}

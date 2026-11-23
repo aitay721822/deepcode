@@ -67,6 +67,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
   const { health, error: healthError, ready: canAsk, unavailable } = useChatModel()
   const canSync = repo?.permissions.includes('repo.sync') ?? false
   const main = useRef<HTMLElement>(null)
+  const code = useRef<HTMLDivElement>(null)
   const mobileControls = useRef<HTMLDivElement>(null)
   const leftControls = useRef<HTMLDivElement>(null)
   const rightControls = useRef<HTMLDivElement>(null)
@@ -130,6 +131,8 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     if (!reveal?.ready) return
     setFileReveal(null)
     main.current?.scrollIntoView({ block: 'start' })
+    // A screen too short for the file bar, the code and the AskBox over it (a phone held sideways): the code wins.
+    code.current?.scrollIntoView({ block: 'nearest' })
     const focused = document.activeElement
     if (!focused || focused === document.body || focused === reveal.opener) {
       main.current?.focus({ preventScroll: true })
@@ -271,6 +274,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                   lines={lines}
                   snapshot={fileSnapshot}
                   sha={fileSha}
+                  codeRef={code}
                   onReady={
                     reveal && !reveal.ready
                       ? () => setFileReveal((current) => (current === reveal ? { ...reveal, ready: true } : current))

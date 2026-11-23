@@ -102,8 +102,11 @@ it.each([
   await screen.findByText('Overview article')
 
   const main = screen.getByRole('main')
-  const scrollIntoView = vi.fn(() => main.querySelector('code')?.textContent)
-  main.scrollIntoView = scrollIntoView
+  // Each scroll: the element, its options, and the code shown when it started.
+  const scrolls: [Element, unknown, string | null | undefined][] = []
+  HTMLElement.prototype.scrollIntoView = function (this: HTMLElement, options) {
+    scrolls.push([this, options, main.querySelector('code')?.textContent])
+  }
   const focus = vi.spyOn(main, 'focus')
 
   fireEvent.mouseDown(screen.getByRole('tab', { name: '檔案' }), { button: 0 })
@@ -115,14 +118,14 @@ it.each([
     expect.objectContaining({ search: { page: 'overview', file: 'main.go', L: undefined }, resetScroll: desktop }),
   )
   expect(screen.getByText('Overview article')).toBeTruthy()
-  expect.soft(scrollIntoView).not.toHaveBeenCalled()
+  expect.soft(scrolls).toEqual([])
   expect.soft(focus).not.toHaveBeenCalled()
   expect.soft(main.hasAttribute('inert')).toBe(!desktop)
   expect.soft(document.activeElement).toBe(file)
 
   await screen.findByRole('heading', { name: 'main.go' })
   expect(screen.queryByText('Overview article')).toBeNull()
-  expect.soft(scrollIntoView).not.toHaveBeenCalled()
+  expect.soft(scrolls).toEqual([])
   expect.soft(focus).not.toHaveBeenCalled()
 
   const question = typing ? screen.getByRole('textbox', { name: /提問/ }) : null
@@ -134,11 +137,17 @@ it.each([
   expect(main.querySelector('code')?.textContent).toBe('package main')
   expect(main.hasAttribute('inert')).toBe(false)
   if (desktop) {
-    expect(scrollIntoView).not.toHaveBeenCalled()
+    expect(scrolls).toEqual([])
     expect(document.activeElement).toBe(file)
   } else {
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
-    expect(scrollIntoView).toHaveReturnedWith('package main')
+    // main's top, then the code's box, with margins for the sticky header and the AskBox (their sizes are layout,
+    // measured in a browser): on a phone held sideways main's top alone leaves the code under the AskBox.
+    const box = main.querySelector('code')?.closest('[class*="scroll-mt-"][class*="scroll-mb-"]')
+    expect(box).toBeTruthy()
+    expect(scrolls.map(([el, ...rest]) => [el === main ? 'main' : el === box ? 'code' : el, ...rest])).toEqual([
+      ['main', { block: 'start' }, 'package main'],
+      ['code', { block: 'nearest' }, 'package main'],
+    ])
     if (question) {
       expect(document.activeElement).toBe(question)
       expect(focus).not.toHaveBeenCalled()
