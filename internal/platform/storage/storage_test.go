@@ -83,7 +83,7 @@ func TestFTSTriggersAndBackupRestore(t *testing.T) {
 	}
 
 	backup := filepath.Join(dir, "backup.db")
-	if err := Backup(ctx, db, backup); err != nil {
+	if err := Backup(ctx, path, backup); err != nil {
 		t.Fatal(err)
 	}
 	if fi, err := os.Stat(backup); err != nil {
@@ -91,13 +91,13 @@ func TestFTSTriggersAndBackupRestore(t *testing.T) {
 	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("backup file mode %v, want 0600", fi.Mode().Perm())
 	}
-	if err := Backup(ctx, db, backup); err == nil {
+	if err := Backup(ctx, path, backup); err == nil {
 		t.Fatal("backup overwrote an existing file")
 	}
 	stopped, stop := context.WithCancel(ctx) // as Ctrl+C on deepcode backup
 	stop()
 	cut := filepath.Join(dir, "cut.db")
-	if err := Backup(stopped, db, cut); err == nil {
+	if err := Backup(stopped, path, cut); err == nil {
 		t.Fatal("a stopped backup succeeded")
 	}
 	if _, err := os.Stat(cut); !errors.Is(err, os.ErrNotExist) {

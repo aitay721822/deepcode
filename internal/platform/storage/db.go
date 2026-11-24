@@ -26,10 +26,7 @@ func init() {
 // Write transactions start with BEGIN IMMEDIATE so they queue on busy_timeout
 // instead of failing when a read transaction upgrades.
 func Open(ctx context.Context, path string) (*sql.DB, error) {
-	// The path goes into a URI: escaped, its %, ? and # are not taken for
-	// escapes, the query or a fragment.
-	name := strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
-	dsn := "file:" + name + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"
+	dsn := sqlitePath(path) + "?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -39,4 +36,8 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+func sqlitePath(path string) string {
+	return "file:" + strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
 }

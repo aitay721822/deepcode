@@ -41,22 +41,29 @@ See README.md.`,
 }
 
 // dataFlag adds --data to cmd: the data directory, in place of the configured
-// one. Given it, backup and passwd do not read the config at all (openData).
+// one. Given it, backup and passwd do not read the config at all.
 func dataFlag(cmd *cobra.Command) *string {
 	return cmd.Flags().String("data", "", "data directory (default: the configured one)")
 }
 
-// openData opens the database in the data directory dir, which must exist;
+// dataPath resolves the database path in the data directory dir;
 // dir "" is the configured one. Given --data, the config is not read at all,
 // so a broken one cannot block a backup or a password reset.
-func openData(dir string) (*sql.DB, error) {
+func dataPath(dir string) (string, error) {
 	if dir == "" {
 		var err error
 		if dir, err = config.DataDir(); err != nil {
-			return nil, err
+			return "", err
 		}
 	}
-	path := filepath.Join(dir, "deepcode.db")
+	return filepath.Join(dir, "deepcode.db"), nil
+}
+
+func openData(dir string) (*sql.DB, error) {
+	path, err := dataPath(dir)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(path); err != nil {
 		return nil, err
 	}
