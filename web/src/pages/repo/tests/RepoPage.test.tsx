@@ -2,7 +2,7 @@ import { Link } from '@tanstack/react-router'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps, ReactNode } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { getFile, listFiles } from '../../../api/repo/code'
+import { getFile, listFiles, searchSymbols } from '../../../api/repo/code'
 import { getWiki } from '../../../api/repo/wiki'
 import type { FileContent } from '../../../types/repo/code'
 import type { Job, Repo } from '../../../types/repo/repo'
@@ -36,7 +36,7 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 vi.mock('../../Frame', () => ({ Frame: ({ children }: { children: ReactNode }) => children }))
 vi.mock('../../useRepo', () => ({ useRepo: vi.fn() }))
-vi.mock('../../../api/repo/code', () => ({ getFile: vi.fn(), listFiles: vi.fn() }))
+vi.mock('../../../api/repo/code', () => ({ getFile: vi.fn(), listFiles: vi.fn(), searchSymbols: vi.fn() }))
 vi.mock('../../../api/repo/wiki', () => ({ getWiki: vi.fn() }))
 vi.mock('../search/useChatModel', () => ({ useChatModel: () => ({ ready: true }) }))
 vi.mock('../wiki/WikiArticle', () => ({
@@ -61,7 +61,12 @@ function setRepo(job?: Job, permissions: Repo['permissions'] = []) {
   })
 }
 
-function open(search: { page?: string }, wikiPages = pages, job?: Job, permissions?: Repo['permissions']) {
+function open(
+  search: ComponentProps<typeof RepoPage>['search'],
+  wikiPages = pages,
+  job?: Job,
+  permissions?: Repo['permissions'],
+) {
   setRepo(job, permissions)
   vi.mocked(getWiki).mockResolvedValue({
     snapshotId: 's1',
@@ -179,6 +184,45 @@ it.each([
     }
   },
 )
+
+it('reveals the same symbol again after the code pane was scrolled away', async () => {
+  mockDesktop(true)
+  vi.mocked(listFiles).mockResolvedValue([{ path: 'main.go', language: 'go', lines: 40, size: 480 }])
+  vi.mocked(getFile).mockResolvedValue({
+    path: 'main.go',
+    content: 'package main\n'.repeat(40),
+    language: 'go',
+    commitSha: 'abc',
+  })
+  vi.mocked(searchSymbols).mockResolvedValue([
+    {
+      name: 'main',
+      qualifiedName: 'main',
+      kind: 'function',
+      path: 'main.go',
+      startLine: 15,
+      endLine: 17,
+      signature: '',
+    },
+  ])
+  const { rerender } = open({ file: 'main.go' })
+  navigate.mockImplementationOnce(({ search = {} }) => rerender(<RepoPage id="r1" search={search} />))
+  const code = await screen.findByRole('region', { name: 'main.go' })
+  code.style.lineHeight = '20px' // jsdom does not load the pane's Tailwind styles
+
+  fireEvent.change(screen.getByRole('textbox', { name: '搜尋 Symbol' }), { target: { value: 'main' } })
+  const symbol = await screen.findByRole('button', { name: /main\.go:15/ })
+  fireEvent.click(symbol)
+  expect(code.scrollTop).toBe(220)
+
+  code.scrollTop = 0
+  rerender(<RepoPage id="r1" search={{ file: 'main.go', L: '15-17' }} />)
+  expect(code.scrollTop).toBe(0)
+  fireEvent.click(symbol)
+  expect(code.scrollTop).toBe(220)
+  expect(navigate).toHaveBeenCalledTimes(1)
+  expect(getFile).toHaveBeenCalledTimes(1)
+})
 
 it('keeps the article visible when a wiki poll fails and retries the fetch', async () => {
   open({}, pages, { kind: 'wiki', status: 'running' } as Job)

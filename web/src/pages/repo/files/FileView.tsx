@@ -18,6 +18,7 @@ export function FileView({
   repo,
   path,
   lines,
+  lineRevealRequest,
   snapshot,
   sha,
   onReady,
@@ -27,6 +28,7 @@ export function FileView({
   repo: Repo
   path: string
   lines?: number[]
+  lineRevealRequest: number
   snapshot: string | null
   sha?: string
   onReady?: () => void
@@ -74,6 +76,7 @@ export function FileView({
             language={data.language}
             startLine={lines?.[0]}
             endLine={lines?.[1]}
+            lineRevealRequest={lineRevealRequest}
             lineRef={lineRef}
           />
         </div>

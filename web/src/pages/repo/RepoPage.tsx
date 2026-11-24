@@ -119,6 +119,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     .filter(Boolean)
     .sort((a, b) => a - b) // "5-" → [5], "9-3" → [3, 9]
   const fileSnapshot = search.s ?? null
+  const [lineRevealRequest, setLineRevealRequest] = useState(0)
   const [fileReveal, setFileReveal] = useState<FileReveal | null>(null)
   const revealMatches = useCallback(
     (request: FileReveal) =>
@@ -183,6 +184,10 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
     const singleColumn = !window.matchMedia(LEFT_RAIL_MEDIA).matches
     const lines = start ? `${start}-${end ?? start}` : undefined
     setFileReveal(singleColumn ? { repoId: id, path, lines, opener: document.activeElement } : null)
+    if (lines && file === path && search.L === lines && !fileSnapshot) {
+      setLineRevealRequest((request) => request + 1)
+      return
+    }
     return navigate({
       ...here,
       search: { page: search.page, file: path, L: lines },
@@ -282,6 +287,7 @@ export function RepoPage({ id, search }: { id: string; search: RepoSearch }) {
                   repo={repo}
                   path={file}
                   lines={lines}
+                  lineRevealRequest={lineRevealRequest}
                   snapshot={fileSnapshot}
                   sha={fileSha}
                   codeRef={code}

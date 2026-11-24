@@ -17,6 +17,7 @@ export function CodeView({
   language,
   startLine,
   endLine,
+  lineRevealRequest,
   className,
   lineRef,
 }: {
@@ -25,6 +26,7 @@ export function CodeView({
   language: string
   startLine?: number
   endLine?: number
+  lineRevealRequest?: number
   className?: string
   /** The line asked for (the cited start, else the first), for a page to keep clear of what floats over it. */
   lineRef?: Ref<HTMLDivElement>
@@ -36,7 +38,7 @@ export function CodeView({
   useLayoutEffect(() => {
     const box = ref.current
     if (box) box.scrollTop = startLine ? Math.max(0, (startLine - 4) * parseFloat(getComputedStyle(box).lineHeight)) : 0
-  }, [startLine, code])
+  }, [startLine, code, lineRevealRequest])
   const end = Math.min(endLine ?? startLine ?? 0, count)
   // Line numbers as three blocks of text (before, cited, after), not an element per line.
   const numbers = Array.from({ length: count }, (_, i) => i + 1)
