@@ -56,20 +56,7 @@
 
    建置需要 Go 1.27.1+ 並啟用 CGO（Tree-sitter 需要 C 編譯器）、Node.js `^20.19` 或 `>=22.12`、Bash。執行需要系統 `git` 2.31+。
 
-2. 在執行檔旁建立 `deepcode.yaml`，填入 OpenAI 相容的 Chat API（語意檢索另需 Embedding API，可省略）。伺服器不必強制 JSON schema：schema 只是引導，每個回覆都由 deepcode 自己檢查、要求修正一次，剩下的由程式補正。schema 預設以 `response_format` 送出；伺服器不接受它，或要等整段 JSON 產生完才送出（例如 Strata）時，設 `chat_schema: prompt`，改把 schema 寫進系統訊息，回覆會逐字串流。
-
-   ```yaml
-   chat_base_url: http://host:8080/v1
-   chat_api_key: your-key
-   chat_model: your-chat-model
-   # chat_api: completions  # 或 responses
-   # chat_schema: server    # 或 prompt
-   # embed_model: your-embedding-model
-   # chat_context: 524288
-   # chat_tokenizer: tokenizer.json
-   ```
-
-   每個鍵也可以用環境變數設定，例如 `DEEPCODE_CHAT_MODEL`，環境變數會覆寫檔案。
+2. 把 [`deepcode.yaml.example`](cmd/deepcode/config/deepcode.yaml.example) 複製到啟動 deepcode 時所在的資料夾（通常是執行檔旁），改名為 `deepcode.yaml`，填入 OpenAI 相容的 Chat API（語意檢索另需 Embedding API，可省略）。範例檔依用途分組，列出每個設定與預設值；每個鍵也可以用環境變數設定，例如 `DEEPCODE_CHAT_MODEL`，環境變數會覆寫檔案。
 
 3. 啟動並開啟 <http://127.0.0.1:8080>：
 
@@ -99,45 +86,27 @@
 
    不設 `acp_codex_home` 時 Codex 讀你的 `~/.codex`，其中的 AGENTS.md、MCP server、plugin 與 hook 都會加進每個請求。
 
-2. 設定（第一次執行時 npx 會先下載 agent，可以先手動跑一次）：
+2. 設定（第一次執行時 npx 會先下載 agent，可以先手動跑一次；其他選項見範例檔的 ACP 段落）：
 
    ```yaml
    chat_provider: acp
    acp_command: npx -y @agentclientprotocol/claude-agent-acp
    # acp_command: npx -y @agentclientprotocol/codex-acp
    # acp_codex_home: /path/to/deepcode-codex
-   # chat_model: sonnet          # agent 的 model 選項，不設時用 agent 的預設
-   # reasoning_effort: high      # agent 的 thought level 選項
-   # acp_sessions: 2             # 同時進行的 prompt 數
-   # embed_base_url: http://host:1234/v1
-   # embed_model: your-embedding-model
    ```
 
-每個請求都是一個新的 session，在 `data/acp/work/` 下該 Repository 自己的空資料夾裡執行（不屬於任何 Repository 的請求共用一個），各 Repository 互不相通。deepcode 的指示會取代 Claude 的整個 system prompt 與 Codex 的 custom instructions。agent 拿不到 deepcode 的任何工具、檔案或終端機，它要求的權限一律被拒絕。Codex 以唯讀模式執行，沒有 shell（它要跑的指令一律被拒，而 Codex 被拒就會結束回答），回答的詳細程度用 API 預設的 medium（Codex 給自己模型的 low 回答較短、引用較少），預設不帶 `~/.agents` 的 skills 與 apps 的指示。Claude 預設不載入你的設定、CLAUDE.md、自動記憶、MCP server 與 plugin。`acp_user_config: true` 讓 Claude 載入這些，讓 Codex 帶回 `~/.agents` 的 skills 與 apps 的指示（Codex 自己的設定來自 `CODEX_HOME`；shell 照樣關、詳細程度照樣 medium，權限、環境與協作模式的說明照樣不帶）；claude.ai 的 connectors 也預設關閉，`acp_claude_connectors: true` 才打開，打開後從 session 的第二個 prompt 起，每次約多 16k token。其他 agent 的這些都由它自己決定，deepcode 關不掉：它的指示、設定、MCP server 與工具都會帶進每個 session，deepcode 的指示則放在 prompt 開頭。後台的「模型與用量」頁顯示 agent 的名稱與版本、context、Overhead 與 Scale，以及最後一次失敗（例如未登入）。agent 沒回報的 token 以本地 tokenizer 估算。
+每個請求都是一個新的 session，在 `data/acp/work/` 下該 Repository 自己的空資料夾裡執行（不屬於任何 Repository 的請求共用一個），各 Repository 互不相通。deepcode 的指示會取代 Claude 的整個 system prompt 與 Codex 的 custom instructions。agent 拿不到 deepcode 的任何工具、檔案或終端機，它要求的權限一律被拒絕。Codex 以唯讀模式執行，沒有 shell（它要跑的指令一律被拒，而 Codex 被拒就會結束回答），回答的詳細程度用 API 預設的 medium（Codex 給自己模型的 low 回答較短、引用較少），預設不帶 `~/.agents` 的 skills 與 apps 的指示。Claude 預設不載入你的設定、CLAUDE.md、自動記憶、MCP server 與 plugin，claude.ai 的 connectors 也預設關閉；要打開見範例檔的 `acp_user_config` 與 `acp_claude_connectors`。其他 agent 的這些都由它自己決定，deepcode 關不掉：它的指示、設定、MCP server 與工具都會帶進每個 session，deepcode 的指示則放在 prompt 開頭。後台的「模型與用量」頁顯示 agent 的名稱與版本、context、Overhead 與 Scale，以及最後一次失敗（例如未登入）。agent 沒回報的 token 以本地 tokenizer 估算。
 
 限制：
 
-- agent 不接受 `temperature`、輸出上限與 response format：`chat_base_url`、`chat_api_key`、`chat_api`、`temperature`、`max_output_tokens` 設了會報錯，`chat_schema` 只能是 `prompt` 或不設。
+- agent 不接受 `temperature`、輸出上限與 response format，相關設定在 ACP 下設了會報錯（見範例檔）。
 - 比 API 慢。在 go-chi/chi 上，一題問答 DeepSeek（API）約 11 秒，Claude 約 35 秒，Codex（effort low）約 50 秒。wiki 一次寫 4 頁時，6 頁 Claude 約 100 秒、Codex 約 150 秒，跟 DeepSeek 一次寫 1 頁差不多。
 - `data` 放在 git repository 裡時，Codex 會把從那個 repository 根目錄到工作資料夾之間的 AGENTS.md 加進每個請求。
 - Claude Code 在每個請求都附上它登入帳號的 email、當天日期與環境（工作資料夾、是否在 git repository 裡、平台與 OS），deepcode 關不掉。
-- agent 沒有 Embedding，向量檢索要另接 Embedding API（`embed_base_url` 與 `embed_model`，不沿用 chat 的設定）。不設時只用全文與 Symbol 檢索：小 repo 找得到的相同，較大的 repo recall@10 少到約 0.07，排序也差一些（見下表）。
+- agent 沒有 Embedding，向量檢索要另接 Embedding API（`embed_base_url` 與 `embed_model`，不沿用 chat 的設定）。不設時只用全文與 Symbol 檢索：小 repo 找得到的相同，較大的 repo recall@10 少到約 0.07，排序也差一些。
 - Codex 每個請求固定多出約 1.3 萬 token（它自己的指示與工具定義），Claude 約 600，所以 Codex 的額度用得快很多：在 go-chi/chi 上連跑約 7 次 wiki 與全部問答，就用完了一個 ChatGPT 訂閱的 Codex 額度。
 - Codex 額度用完時，codex-acp 只回報 system error，不說原因。用執行 deepcode 的 OS 使用者、同一個 `CODEX_HOME` 跑 `codex exec "hi"`，它會說額度何時重置。
 - 錯誤訊息與 log 會帶有 agent 回報的內容（例如額度何時重置）和資料夾路徑。agent 自己的輸出寫在 `data/acp/agent.log`（啟動 agent 時若已超過 10 MB，先移到 `agent.log.old`），可能引用 prompt 的內容，也就是你的程式碼。
-
-沒有 Embedding 時的檢索，8 個 eval corpus 的 recall@10／MRR（`test/eval`）：
-
-| Corpus | 只用全文與 Symbol | 加上向量（Qwen3 Embedding 0.6B） |
-|---|---|---|
-| go-chi/chi | 1.000／0.839 | 1.000／0.892 |
-| pmndrs/zustand | 1.000／0.875 | 1.000／0.948 |
-| expressjs/express | 1.000／0.981 | 1.000／1.000 |
-| spring-petclinic | 0.964／0.737 | 1.000／0.873 |
-| deepcode | 0.967／0.701 | 0.967／0.808 |
-| google/gson | 0.839／0.691 | 0.911／0.748 |
-| dotnet/eShop | 0.800／0.688 | 0.833／0.748 |
-| tokio-rs/axum | 0.867／0.641 | 0.933／0.804 |
 
 ## 語意引用（SCIP）
 
@@ -153,16 +122,7 @@
    docker build -f scripts/scip/scip-dotnet.Dockerfile -t deepcode-scip-dotnet:0.2.14 .
    ```
 
-2. 在 `deepcode.yaml` 為要用的語言設定映像（也可以用 `DEEPCODE_SCIP_GO_IMAGE` 這類環境變數；沒設的語言就不跑），再重新啟動 `deepcode serve`：
-
-   ```yaml
-   scip_go_image: deepcode-scip-go:0.2.10
-   scip_typescript_image: deepcode-scip-node:0.6.2-0.6.8
-   scip_python_image: deepcode-scip-node:0.6.2-0.6.8
-   scip_rust_image: deepcode-scip-rust:2026-11-16
-   scip_java_image: deepcode-scip-java:0.14.2
-   scip_csharp_image: deepcode-scip-dotnet:0.2.14
-   ```
+2. 在 `deepcode.yaml` 為要用的語言設定映像（範例檔的 SCIP 段落列出上面的標籤；沒設的語言就不跑），再重新啟動 `deepcode serve`。
 
 3. 新的索引會帶上 SCIP；既有的快照用「重新索引」補上。
 
@@ -201,15 +161,13 @@ deepcode import-scip --data /path/to/deepcode-data manifest.json index.scip
 2. 停掉舊版，換上新的執行檔，再 `./deepcode serve`。資料庫在啟動時自動升級。
 3. `secret_key`（`DEEPCODE_SECRET_KEY`）要沿用；沒設定時用的是 `data/secret.key`，這個檔要留著。換了 key，存下的 Git 伺服器 token 就解不開。
 
-從 1.x 升到 2.0 沒有不相容的改動，照上面做即可：設定檔不必改，不設 `chat_provider` 時照舊使用 OpenAI 相容的 API；資料庫多一個 migration（026），用量表加上沒回報 token 的呼叫數、估算的 token 與耗時，舊的用量列這些欄位是 0；呼叫數從此也算失敗或被拒的請求。從 1.0.x 升級的，還會跑 1.1 的 024、025。要改用訂閱的 agent，見 [ACP](#用訂閱的-agentacp)。
-
 要退回舊版，先停止 Deepcode，再將資料目錄裡的 `deepcode.db` 和仍存在的 `deepcode.db-wal`、`deepcode.db-shm`、`deepcode.db-journal` 一起移到別處保存。將升級前的備份複製為原資料目錄裡的 `deepcode.db`，再用舊版執行檔啟動。只覆蓋 `deepcode.db` 可能讓 SQLite 把殘留日誌裡的變更套到備份上；新版跑過的 migration 也無法倒回。
 
 ## 相容性
 
-1.0.0 起，以下只會新增，不會改名或移除；要移除的，會先在一個 minor 版本標為 deprecated 並在 log 警告，到下一個 major 版本才移除。2.0 沒有移除任何一項，它新增的設定、路由與 migration 也一併納入：
+1.0.0 起，以下只會新增，不會改名或移除（2.0 新增的也一樣）；要移除的，會先在一個 minor 版本標為 deprecated 並在 log 警告，到下一個 major 版本才移除：
 
-- 設定：`deepcode.yaml` 的鍵、對應的 `DEEPCODE_*` 環境變數，以及 `DEEPCODE_CONFIG`。
+- 設定：`deepcode.yaml` 的鍵（範例檔列出全部）、對應的 `DEEPCODE_*` 環境變數，以及 `DEEPCODE_CONFIG`。
 - HTTP API 的路由，以及 MCP（`/mcp`）的工具和參數。路由與網址中資源的 id 一律是 24 字元的 CUID2（OAuth 應用的 client id 除外）；舊版的數字 id 不再有效，會回 404。
 - CLI 指令 `serve`、`backup`、`passwd` 和它們的旗標。
 - 資料庫：發佈過的 migration 不再修改，新版本只往前加；v0.1.0 的資料庫可以直接升級。

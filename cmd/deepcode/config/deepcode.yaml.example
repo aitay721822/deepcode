@@ -1,0 +1,130 @@
+# deepcode 設定範例
+#
+# 複製到啟動 deepcode 時所在的資料夾（通常是執行檔旁）並改名為 deepcode.yaml，或用環境變數 DEEPCODE_CONFIG 指定其他路徑。
+# 每個鍵也能用環境變數設定：DEEPCODE_ 加上大寫的鍵名，例如 DEEPCODE_CHAT_MODEL，環境變數會覆寫檔案。
+# 註解掉的設定是預設值（預設為空的則是範例），要改時取消註解。檔案裡有不認得的鍵時，deepcode 不會啟動。
+# 時間要帶單位，例如 90m、2h；看起來像數字或 true/false 的文字要加引號。
+
+## 伺服器
+
+# 監聽位址。
+# addr: 127.0.0.1:8080
+# 資料目錄：資料庫 deepcode.db、secret.key 與 Git 快取。
+# data: data
+# 反向代理的位址或 CIDR：只有這些代理送來的 X-Forwarded-For 會被當成用戶端位址。清單，或以逗號分隔。
+# trusted_proxies: [10.0.0.1, 192.168.0.0/16]
+
+## 帳號與登入
+
+# 第一次啟動時建立的管理員 admin 的密碼；不設時產生一次性密碼並印在 log。
+# admin_password: ""
+# 加密 Git 伺服器 token 的金鑰；不設時用資料目錄裡的 secret.key。升級時要沿用，換了 key，存下的 token 就解不開。
+# secret_key: ""
+# 登入多久後失效，至少 1m。
+# session_ttl: 720h
+
+## Chat 模型（問答與 Wiki）
+
+# openai 是 OpenAI 相容的 API；acp 讓本機的 agent 用它登入的訂閱回答，見下方 ACP。
+# chat_provider: openai
+chat_base_url: https://api.openai.com/v1
+chat_api_key: your-key
+# 不設時關閉問答與 Wiki。
+chat_model: your-chat-model
+# completions（Chat Completions）或 responses（Responses API）。
+# chat_api: completions
+# 要求 JSON 時 schema 放在哪裡。server 以 response_format 送出；prompt 寫進系統訊息，回覆會逐字串流，
+# 適合不接受 response_format，或要等整段 JSON 產生完才送出（例如 Strata）的伺服器。
+# 伺服器不必強制 schema：每個回覆都由 deepcode 自己檢查、要求修正一次，剩下的由程式補正。
+# chat_schema: server
+# none、minimal、low、medium、high 或 xhigh；不設時交給伺服器。
+# reasoning_effort: ""
+# 0 到 2；不設時交給伺服器。
+# temperature: 0.2
+# 回答的 token 上限；0 交給伺服器。
+# max_output_tokens: 0
+# 模型的 context（token 數）；0 表示等伺服器回報。要大於回答保留的 token（max_output_tokens，或它的預設）。
+# chat_context: 0
+# 請求佔到 chat_context 的這個比例時先縮小，大於 0、最多 1。
+# compact_ratio: 0.8
+# 模型的 tokenizer.json，用來計算 token；不設時以 OpenAI 的 o200k_base 估算。
+# chat_tokenizer: ""
+
+## Embedding（向量檢索）
+
+# 不設時關閉向量檢索，只用全文與 Symbol 檢索。
+# embed_model: ""
+# 不設時沿用 chat_base_url 與 chat_api_key；chat_provider: acp 時不沿用，要用 Embedding 就得自己設。
+# embed_base_url: ""
+# embed_api_key: ""
+
+## LLM 請求（Chat、ACP 與 Embedding 各自套用）
+
+# 單一請求的逾時。
+# llm_timeout: 5m
+# 每分鐘最多幾個請求，Chat（或 ACP）與 Embedding 分開計算；0 不限制。
+# llm_rpm: 0
+
+## ACP（用訂閱的 agent）
+#
+# 只能有一位使用者：訂閱人本人，見 README。下面的 acp_* 只有 chat_provider: acp 時才讀，其他時候設了會報錯。
+# 用 acp 時，上面的 chat_base_url、chat_api_key、chat_api、temperature、max_output_tokens 都要拿掉，
+# chat_schema 只能是 prompt 或不設；chat_model 與 reasoning_effort 改成 agent 的 model 與 thought level 選項。
+
+# chat_provider: acp
+# agent 的指令；Codex 用 npx -y @agentclientprotocol/codex-acp。
+# acp_command: npx -y @agentclientprotocol/claude-agent-acp
+# 同時進行的 prompt 數。
+# acp_sessions: 2
+# Codex 的 CODEX_HOME；不設時用你的 ~/.codex，其中的 AGENTS.md、MCP server、plugin 與 hook 都會加進每個請求。
+# acp_codex_home: /path/to/deepcode-codex
+# Claude：打開 claude.ai 的 connectors。從 session 的第二個 prompt 起，每次會多出一些 token，
+# 多少視帳號的 connectors 而定（實測一個帳號約 16k）。
+# acp_claude_connectors: false
+# 讓 Claude 載入你的設定、CLAUDE.md、自動記憶、MCP server 與 plugin，讓 Codex 帶回 ~/.agents 的 skills 與 apps 的指示。
+# Codex 的 shell 照樣關閉。
+# acp_user_config: false
+
+## Repository 匯入與同步
+
+# 多久檢查一次遠端有沒有新的 commit；0 不檢查，否則至少 1m。
+# sync_every: 0
+# Repository 的大小上限（MB）：匯入時檢查 Git 伺服器回報的大小，也是一次下載最多寫入的量。
+# max_repo_mb: 1024
+
+## 索引
+
+# 可索引的檔案數上限，超過時索引失敗。
+# max_files: 20000
+# 單一檔案的大小上限（KB），更大的檔案不索引。
+# max_file_kb: 512
+# 可索引文字的總量上限（MB），超過時索引失敗。
+# max_index_mb: 200
+
+## SCIP 語意引用（選用）
+
+# 各語言的 SCIP 索引映像，建法見 README；不設的語言不跑。
+# scip_go_image: deepcode-scip-go:0.2.10
+# scip_typescript_image: deepcode-scip-node:0.6.2-0.6.8
+# scip_python_image: deepcode-scip-node:0.6.2-0.6.8
+# scip_rust_image: deepcode-scip-rust:2026-11-16
+# scip_java_image: deepcode-scip-java:0.14.2
+# scip_csharp_image: deepcode-scip-dotnet:0.2.14
+
+## Wiki
+
+# Wiki 用的語言：寫進 prompt 的語言名稱，例如 English。
+# wiki_language: Traditional Chinese (Taiwan)
+# 同時規劃或撰寫的頁數。
+# wiki_parallel: 1
+# 一份 Wiki 最多幾頁。
+# wiki_max_pages: 64
+
+## 背景工作與快取
+
+# 同時執行的背景工作數（索引、Wiki 等）。
+# workers: 2
+# 單一背景工作的逾時。
+# job_timeout: 2h
+# 記憶體快取的上限（MB），用來加速重複的讀取。
+# cache_mb: 64

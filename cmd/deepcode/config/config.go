@@ -27,8 +27,12 @@ import (
 // missing. The extension picks the format: .yaml, .yml, .json, .toml, ...
 const File = "deepcode.yaml"
 
+// example is the sample config file in deepcode's source, every setting by
+// business area with its default.
+const example = "cmd/deepcode/config/deepcode.yaml.example"
+
 // defaults holds every setting, by its key in the config file; its
-// environment variable is DEEPCODE_ and the key in capitals. README.md lists
+// environment variable is DEEPCODE_ and the key in capitals; example lists
 // them. A key the file holds that is not here stops serve.
 var defaults = map[string]any{
 	"addr": "127.0.0.1:8080",
@@ -128,7 +132,7 @@ func Load() (cfg app.Config, addr string, err error) {
 	}
 	if len(unknown) > 0 {
 		slices.Sort(unknown)
-		return app.Config{}, "", fmt.Errorf("config file %s: unknown setting %s (README.md lists them)", v.ConfigFileUsed(), strings.Join(unknown, ", "))
+		return app.Config{}, "", fmt.Errorf("config file %s: unknown setting %s (%s lists them)", v.ConfigFileUsed(), strings.Join(unknown, ", "), example)
 	}
 	p := &parser{v: v}
 	provider := p.oneOf("chat_provider", providers)

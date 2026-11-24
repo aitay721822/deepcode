@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -292,5 +294,33 @@ func TestFrozenSettings(t *testing.T) {
 		if _, ok := defaults[k]; !ok {
 			t.Errorf("v2.0.0's setting %s (DEEPCODE_%s) is gone", k, strings.ToUpper(k))
 		}
+	}
+}
+
+// TestExample: the sample config lists every setting and no other, so a new
+// setting cannot ship undocumented, and it loads as it is.
+func TestExample(t *testing.T) {
+	body, err := os.ReadFile(filepath.Base(example))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^(?:# )?([a-z][a-z0-9_]*):`).FindAllSubmatch(body, -1) {
+		listed[string(m[1])] = true
+	}
+	for k := range defaults {
+		if !listed[k] {
+			t.Errorf("%s does not list %s", example, k)
+		}
+	}
+	for k := range listed {
+		if _, ok := defaults[k]; !ok {
+			t.Errorf("%s lists %s, which is no setting", example, k)
+		}
+	}
+	clean(t)
+	write(t, File, string(body))
+	if _, _, err := Load(); err != nil {
+		t.Errorf("%s as it is: %v", example, err)
 	}
 }
