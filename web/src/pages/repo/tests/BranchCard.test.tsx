@@ -15,12 +15,12 @@ afterEach(() => {
 
 it('switches directly to following the default when the tracked branch was deleted', async () => {
   const deleted = { ...repo, trackedBranch: 'deleted' }
-  vi.mocked(listBranches).mockResolvedValue({ ...deleted, branches: ['main'] })
+  vi.mocked(listBranches).mockResolvedValue({ ...deleted, branches: ['main', 'dev'] })
   vi.mocked(setBranch).mockResolvedValue({ upToDate: true })
   const onChanged = vi.fn()
   render(<BranchCard repo={deleted} onChanged={onChanged} />)
 
-  await screen.findByRole('option', { name: 'main' })
+  await screen.findByRole('option', { name: 'dev' })
   expect(screen.getByText(/目前跟隨/).textContent).toBe('目前跟隨 deleted')
   expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Branch' }).value).toBe('')
   const button = screen.getByRole<HTMLButtonElement>('button', { name: '切換' })
