@@ -117,6 +117,76 @@ func TestFTSTriggersAndBackupRestore(t *testing.T) {
 	}
 }
 
+func TestBackupAndRestoreAfterUncleanShutdown(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "live.db")
+	db, err := Open(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("CREATE TABLE backup_probe (value TEXT); INSERT INTO backup_probe VALUES ('before')"); err != nil {
+		t.Fatal(err)
+	}
+	rollback := filepath.Join(dir, "rollback.db")
+	if err := Backup(ctx, source, rollback); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE); UPDATE backup_probe SET value = 'after'"); err != nil {
+		t.Fatal(err)
+	}
+
+	read := func(path string) []byte {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	copyFile := func(src, dst string) {
+		t.Helper()
+		if err := os.WriteFile(dst, read(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Capture a stopped database with committed changes still in its WAL.
+	crashed := filepath.Join(dir, "deepcode.db")
+	copyFile(source, crashed)
+	copyFile(source+"-wal", crashed+"-wal")
+	recovery := filepath.Join(dir, "recovery.db")
+	if err := Backup(ctx, crashed, recovery); err != nil {
+		t.Fatal(err)
+	}
+	check := func(path, want string) {
+		t.Helper()
+		db, err := Open(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var got string
+		if err := db.QueryRow("SELECT value FROM backup_probe").Scan(&got); err != nil || got != want {
+			t.Fatalf("%s: got %q, want %q: %v", path, got, want, err)
+		}
+	}
+	check(recovery, "after")
+
+	// Move the crashed database and its sidecars aside before restoring.
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		from := crashed + suffix
+		if err := os.Rename(from, filepath.Join(dir, "crashed.db")+suffix); err != nil {
+			if suffix == "" || suffix == "-wal" || !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+		}
+	}
+	copyFile(rollback, crashed)
+	check(crashed, "before")
+}
+
 // TestOpenOddPath: a path holding # or % opens that very file. Written
 // unescaped into the file: URI, # would start a fragment and % an escape.
 func TestOpenOddPath(t *testing.T) {
