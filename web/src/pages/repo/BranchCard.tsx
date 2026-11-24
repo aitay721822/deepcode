@@ -22,7 +22,7 @@ export function BranchCard({ repo, onChanged }: { repo: Repo; onChanged: () => v
       .then((r) => {
         if (!live) return
         setBranches(r.branches)
-        setBranch(r.trackedBranch)
+        setBranch(r.branches.includes(r.trackedBranch) ? r.trackedBranch : '')
       })
       .catch((e) => live && setError(e instanceof Error ? e.message : String(e)))
     return () => {

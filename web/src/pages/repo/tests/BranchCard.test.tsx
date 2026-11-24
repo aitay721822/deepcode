@@ -13,6 +13,25 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+it('switches directly to following the default when the tracked branch was deleted', async () => {
+  const deleted = { ...repo, trackedBranch: 'deleted' }
+  vi.mocked(listBranches).mockResolvedValue({ ...deleted, branches: ['main'] })
+  vi.mocked(setBranch).mockResolvedValue({ upToDate: true })
+  const onChanged = vi.fn()
+  render(<BranchCard repo={deleted} onChanged={onChanged} />)
+
+  await screen.findByRole('option', { name: 'main' })
+  expect(screen.getByText(/目前跟隨/).textContent).toBe('目前跟隨 deleted')
+  expect(screen.getByRole<HTMLSelectElement>('combobox', { name: 'Branch' }).value).toBe('')
+  const button = screen.getByRole<HTMLButtonElement>('button', { name: '切換' })
+  expect(button.disabled).toBe(false)
+
+  fireEvent.click(button)
+  expect(setBranch).toHaveBeenCalledWith(repo.id, '')
+  expect((await screen.findByRole('status')).textContent).toBe('已是最新的 Commit')
+  expect(onChanged).toHaveBeenCalledTimes(1)
+})
+
 it('shows the saved branch when the sync after a branch switch fails', async () => {
   vi.mocked(listBranches).mockResolvedValue({ branches: ['main', 'dev'], trackedBranch: '', defaultBranch: 'main' })
   vi.mocked(setBranch).mockRejectedValue(Object.assign(new Error('Bad Gateway'), { status: 502 }))
