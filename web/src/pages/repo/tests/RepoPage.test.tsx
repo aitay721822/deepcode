@@ -220,6 +220,7 @@ it('reveals the same symbol again after the code pane was scrolled away', async 
   expect(code.scrollTop).toBe(0)
   fireEvent.click(symbol)
   expect(code.scrollTop).toBe(220)
+  expect(navigate).toHaveBeenCalledTimes(1)
   expect(getFile).toHaveBeenCalledTimes(1)
 })
 
