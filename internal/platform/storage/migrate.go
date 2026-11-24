@@ -33,8 +33,8 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}
 	for _, file := range files {
 		name := "migrations/" + path.Base(file)
-		// A plain read first: an up-to-date database (backup next to a busy
-		// server, say) never waits for the write lock.
+		// A plain read first: an up-to-date database never waits for the
+		// write lock here.
 		var done int
 		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE name = ?`, name).Scan(&done); err != nil {
 			return err
@@ -72,7 +72,7 @@ func migrationFiles(fsys fs.FS) ([]string, error) {
 
 // apply runs migration file, recorded as name, unless it ran before. The
 // check shares the migration's BEGIN IMMEDIATE transaction, so two processes
-// opening an old database (serve and backup, say) apply it once.
+// opening an old database apply it once.
 func apply(ctx context.Context, db *sql.DB, name, file string) error {
 	body, err := migrations.ReadFile(file)
 	if err != nil {

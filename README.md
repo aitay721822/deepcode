@@ -203,7 +203,7 @@ deepcode import-scip --data /path/to/deepcode-data manifest.json index.scip
 
 從 1.x 升到 2.0 沒有不相容的改動，照上面做即可：設定檔不必改，不設 `chat_provider` 時照舊使用 OpenAI 相容的 API；資料庫多一個 migration（026），用量表加上沒回報 token 的呼叫數、估算的 token 與耗時，舊的用量列這些欄位是 0；呼叫數從此也算失敗或被拒的請求。從 1.0.x 升級的，還會跑 1.1 的 024、025。要改用訂閱的 agent，見 [ACP](#用訂閱的-agentacp)。
 
-要退回舊版，換回舊的執行檔，並用升級前的備份取代資料庫：新版跑過的 migration 無法倒回。
+要退回舊版，先停止 Deepcode，再將資料目錄裡的 `deepcode.db` 和仍存在的 `deepcode.db-wal`、`deepcode.db-shm`、`deepcode.db-journal` 一起移到別處保存。將升級前的備份複製為原資料目錄裡的 `deepcode.db`，再用舊版執行檔啟動。只覆蓋 `deepcode.db` 可能讓 SQLite 把殘留日誌裡的變更套到備份上；新版跑過的 migration 也無法倒回。
 
 ## 相容性
 

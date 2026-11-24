@@ -83,7 +83,7 @@ func TestFTSTriggersAndBackupRestore(t *testing.T) {
 	}
 
 	backup := filepath.Join(dir, "backup.db")
-	if err := Backup(ctx, db, backup); err != nil {
+	if err := Backup(ctx, path, backup); err != nil {
 		t.Fatal(err)
 	}
 	if fi, err := os.Stat(backup); err != nil {
@@ -91,13 +91,13 @@ func TestFTSTriggersAndBackupRestore(t *testing.T) {
 	} else if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("backup file mode %v, want 0600", fi.Mode().Perm())
 	}
-	if err := Backup(ctx, db, backup); err == nil {
+	if err := Backup(ctx, path, backup); err == nil {
 		t.Fatal("backup overwrote an existing file")
 	}
 	stopped, stop := context.WithCancel(ctx) // as Ctrl+C on deepcode backup
 	stop()
 	cut := filepath.Join(dir, "cut.db")
-	if err := Backup(stopped, db, cut); err == nil {
+	if err := Backup(stopped, path, cut); err == nil {
 		t.Fatal("a stopped backup succeeded")
 	}
 	if _, err := os.Stat(cut); !errors.Is(err, os.ErrNotExist) {
@@ -115,6 +115,76 @@ func TestFTSTriggersAndBackupRestore(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("restored database lost its index: %d", n)
 	}
+}
+
+func TestBackupAndRestoreAfterUncleanShutdown(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "live.db")
+	db, err := Open(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("CREATE TABLE backup_probe (value TEXT); INSERT INTO backup_probe VALUES ('before')"); err != nil {
+		t.Fatal(err)
+	}
+	rollback := filepath.Join(dir, "rollback.db")
+	if err := Backup(ctx, source, rollback); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE); UPDATE backup_probe SET value = 'after'"); err != nil {
+		t.Fatal(err)
+	}
+
+	read := func(path string) []byte {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	copyFile := func(src, dst string) {
+		t.Helper()
+		if err := os.WriteFile(dst, read(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Capture a stopped database with committed changes still in its WAL.
+	crashed := filepath.Join(dir, "deepcode.db")
+	copyFile(source, crashed)
+	copyFile(source+"-wal", crashed+"-wal")
+	recovery := filepath.Join(dir, "recovery.db")
+	if err := Backup(ctx, crashed, recovery); err != nil {
+		t.Fatal(err)
+	}
+	check := func(path, want string) {
+		t.Helper()
+		db, err := Open(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var got string
+		if err := db.QueryRow("SELECT value FROM backup_probe").Scan(&got); err != nil || got != want {
+			t.Fatalf("%s: got %q, want %q: %v", path, got, want, err)
+		}
+	}
+	check(recovery, "after")
+
+	// Move the crashed database and its sidecars aside before restoring.
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		from := crashed + suffix
+		if err := os.Rename(from, filepath.Join(dir, "crashed.db")+suffix); err != nil {
+			if suffix == "" || suffix == "-wal" || !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+		}
+	}
+	copyFile(rollback, crashed)
+	check(crashed, "before")
 }
 
 // TestOpenOddPath: a path holding # or % opens that very file. Written

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -46,6 +47,61 @@ func TestFrozenCommands(t *testing.T) {
 				t.Errorf("v1.0.0's flag %s --%s is gone", name, f)
 			}
 		}
+	}
+}
+
+func TestBackupPreservesOldDatabase(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "test", "e2e", "testdata", "v0.1.0.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, scenario := range []string{"success", "output exists"} {
+		t.Run(scenario, func(t *testing.T) {
+			data := filepath.Join(t.TempDir(), "data #%")
+			if err := os.Mkdir(data, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			source, output := filepath.Join(data, "deepcode.db"), filepath.Join(data, "backup.db")
+			if err := os.WriteFile(source, fixture, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			const existing = "existing backup"
+			if scenario == "output exists" {
+				if err := os.WriteFile(output, []byte(existing), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			cmd := backupCmd()
+			cmd.SetArgs([]string{"--data", data, output})
+			err := cmd.Execute()
+			if scenario == "output exists" {
+				if !errors.Is(err, os.ErrExist) {
+					t.Fatalf("backup with existing output: %v, want file exists", err)
+				}
+				if got, err := os.ReadFile(output); err != nil || string(got) != existing {
+					t.Fatalf("existing output changed: %q, %v", got, err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+
+			if got, err := os.ReadFile(source); err != nil || !bytes.Equal(got, fixture) {
+				t.Errorf("backup changed source database: read error %v", err)
+			}
+			if scenario == "success" {
+				db, err := sql.Open("sqlite", output)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				var count int
+				if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil || count != 21 {
+					t.Errorf("backup has %d migrations, want 21: %v", count, err)
+				}
+			}
+		})
 	}
 }
 

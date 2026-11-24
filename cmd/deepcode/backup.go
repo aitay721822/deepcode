@@ -25,16 +25,15 @@ func backupCmd() *cobra.Command {
 
 // backup writes a consistent copy of the database to out.
 func backup(data, out string) error {
-	db, err := openData(data)
+	path, err := dataPath(data)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
 	// Ctrl+C or a stop interrupts VACUUM INTO, and Backup removes the unfinished
 	// file, which would otherwise wait at the backup's name looking like one.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := storage.Backup(ctx, db, out); err != nil {
+	if err := storage.Backup(ctx, path, out); err != nil {
 		return err
 	}
 	log.Printf("backup written to %s", out)
